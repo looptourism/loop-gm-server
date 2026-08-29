@@ -62,10 +62,11 @@ const DEPTS = {
   },
   strategy: {
     name: "الاستراتيجية", role: "رئيس قسم الاستراتيجية",
-    sheetUrl: null, sheetColumns: null,
+    sheetUrl: "https://docs.google.com/spreadsheets/d/1lOFhWpKIUd3kV7brNa-6BCJQmbKQ6iV6VHxR9ejTm3U/export?format=csv&gid=399480050",
+    sheetColumns: "الوجهة، تاريخ البداية، تاريخ النهاية، عدد الليالي، سعر شخصين، سعر 3 أشخاص، سعر 4 أشخاص، ملاحظات، Type، تاريخ التحديث",
     system: `أنت رئيس قسم الاستراتيجية في Loop Travel & Tourism. ${LOOP_CONTEXT}
 أنت عضو فعلي من فريق Loop، تتحدث بصيغة "نحن" لا "أنتم"، وتقدّم تقاريرك مباشرة للمدير العام.
-مسؤوليتك: خطط النمو والتوسع، الشراكات، تحليل المنافسين والسوق، وأولويات المشروع على المدى المتوسط والبعيد.
+مسؤوليتك: خطط النمو والتوسع، الشراكات، تحليل المنافسين والسوق، وأولويات المشروع على المدى المتوسط والبعيد. استخدم أسعار باقاتنا الفعلية (المرفقة أدناه) مقارنة ببيانات المنافسين الحية عند تقييم موقعنا التنافسي.
 أجب كرئيس استراتيجية فعلي، بخطوات واضحة الأولوية، بالعربية، بإيجاز تنفيذي (فقرة أو فقرتين).`,
   },
   communication: {
@@ -137,6 +138,89 @@ async function callClaude({ system, messages, tools }) {
   return res;
 }
 
+// ---------------------------------------------------------------------------
+// Meta (Instagram) Graph API — safe here because the token lives only on the
+// server, never in browser-visible code.
+// ---------------------------------------------------------------------------
+const META_TOKEN = process.env.META_ACCESS_TOKEN;
+const META_IG_USER_ID = process.env.META_IG_USER_ID;
+const GRAPH_VERSION = "v21.0";
+const COMPETITOR_USERNAMES = ["hejozati", "alsuwaidisons", "alkhalidiya_holidays"];
+
+async function metaGraph(path, params = {}) {
+  const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/${path}`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  url.searchParams.set("access_token", META_TOKEN);
+  const res = await fetch(url.toString());
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error?.message || `Graph API error (${res.status})`);
+  return data;
+}
+
+// Own recent posts + basic public engagement fields (no special insights
+// permission needed — just caption/like_count/comments_count on /media).
+async function fetchOwnRecentMedia() {
+  if (!META_TOKEN || !META_IG_USER_ID) return null;
+  try {
+    const data = await metaGraph(`${META_IG_USER_ID}/media`, {
+      fields: "caption,like_count,comments_count,media_type,timestamp,permalink",
+      limit: "8",
+    });
+    return data.data || [];
+  } catch {
+    return null;
+  }
+}
+
+// Public profile + recent posts of ANY Instagram Business/Creator account
+// (Business Discovery) — this is how we can see competitors without owning
+// their accounts.
+async function fetchCompetitorProfile(username) {
+  if (!META_TOKEN || !META_IG_USER_ID) return null;
+  try {
+    const data = await metaGraph(META_IG_USER_ID, {
+      fields: `business_discovery.username(${username}){username,followers_count,media_count,biography,media.limit(12){caption,timestamp,permalink,media_type,media_url}}`,
+    });
+    return data.business_discovery || null;
+  } catch {
+    return null;
+  }
+}
+
+const UMRAH_KEYWORDS = ["عمرة", "العمرة", "مكة", "المكرمة", "umrah", "makkah", "mecca"];
+function isUmrahPost(caption) {
+  const c = (caption || "").toLowerCase();
+  return UMRAH_KEYWORDS.some((k) => c.includes(k));
+}
+
+// Downloads a competitor's post image and asks Claude (vision) to read any
+// offer/price shown in it. This is the piece that was impossible from the
+// browser artifact (CORS) — the server has no such restriction.
+async function analyzeImageForPricing(imageUrl, caption) {
+  try {
+    const imgRes = await fetch(imageUrl);
+    if (!imgRes.ok) throw new Error();
+    const mediaType = imgRes.headers.get("content-type") || "image/jpeg";
+    const buffer = Buffer.from(await imgRes.arrayBuffer());
+    const base64 = buffer.toString("base64");
+    const res = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 300,
+      system: "أنت محلل بيانات تسويقية لوكالة سفريات. مهمتك: تلخيص أي عرض عمرة أو سعر ظاهر داخل الصورة المرفقة (الفنادق، عدد الليالي، السعر، تاريخ السفر) بجملة أو جملتين بالعربية فقط، بدون أي تعليق إضافي. إذا لم يكن هناك عرض أو سعر واضح بالصورة، قل حرفيًا: لا يوجد عرض واضح.",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+          { type: "text", text: `نص المنشور: ${caption || "بدون نص"}\nلخّص العرض/السعر الظاهر بالصورة.` },
+        ],
+      }],
+    });
+    return textOf(res.content) || "تعذر تحليل الصورة.";
+  } catch {
+    return null;
+  }
+}
+
 async function callDepartment(deptId, instruction) {
   const dept = DEPTS[deptId];
   let systemText = dept.system;
@@ -153,11 +237,51 @@ async function callDepartment(deptId, instruction) {
       systemText += `\n\n(تعذر الوصول لملف البيانات هذه المرة — وضّح ذلك إن احتاجه السؤال بدل التخمين.)`;
     }
   }
+
+  if (deptId === "marketing") {
+    const media = await fetchOwnRecentMedia();
+    if (media && media.length) {
+      const summary = media.map((m) => `- ${m.timestamp}: "${(m.caption || "").slice(0, 100)}" — ${m.like_count ?? "?"} إعجاب، ${m.comments_count ?? "?"} تعليق (${m.permalink})`).join("\n");
+      systemText += `\n\nآخر منشورات حساب Loop الفعلية على انستغرام (بيانات حية من Meta API):\n${summary}\n\nاستخدم هذه الأرقام الفعلية عند تقييم الأداء، ولا تخترع أرقامًا أخرى.`;
+    } else if (META_TOKEN) {
+      systemText += `\n\n(تعذر جلب بيانات انستغرام الحية هذه المرة — وضّح ذلك إن احتاجها السؤال.)`;
+    }
+  }
+
+  if (deptId === "strategy") {
+    const profiles = [];
+    for (const username of COMPETITOR_USERNAMES) {
+      const p = await fetchCompetitorProfile(username);
+      if (p) {
+        const allMedia = p.media?.data || [];
+        const posts = allMedia.slice(0, 5).map((m) => `  · ${m.timestamp}: "${(m.caption || "").slice(0, 90)}"`).join("\n");
+
+        // Prefer posts that actually mention Umrah (these accounts also post other
+        // travel types); fall back to the most recent images if none match.
+        const umrahMedia = allMedia.filter((m) => m.media_type === "IMAGE" && m.media_url && isUmrahPost(m.caption));
+        const candidates = (umrahMedia.length ? umrahMedia : allMedia.filter((m) => m.media_type === "IMAGE" && m.media_url)).slice(0, 3);
+
+        const reads = [];
+        for (const m of candidates) {
+          const analysis = await analyzeImageForPricing(m.media_url, m.caption);
+          if (analysis) reads.push(`  · (${m.timestamp}): ${analysis}`);
+        }
+        const priceBlock = reads.length ? `\nقراءة بصرية فعلية لآخر ${reads.length} منشور${umrahMedia.length ? " متعلق بالعمرة" : ""}:\n${reads.join("\n")}` : "";
+
+        profiles.push(`@${p.username} — ${p.followers_count} متابع، ${p.media_count} منشور\nآخر منشورات:\n${posts}${priceBlock}`);
+      }
+    }
+    if (profiles.length) {
+      systemText += `\n\nبيانات حية الآن من حسابات المنافسين على انستغرام (عبر Meta Business Discovery API، بما فيها قراءة بصرية فعلية لمنشورات العمرة تحديدًا حين توفرت):\n${profiles.join("\n\n")}\n\nهذه بيانات لحظية حقيقية — استخدمها بدل اللقطة الثابتة القديمة إن وُجد تعارض بينهما.`;
+    }
+  }
+
   try {
     const res = await callClaude({ system: systemText, messages: [{ role: "user", content: instruction }] });
     return textOf(res.content) || "لا يوجد رد.";
   } catch {
     return "تعذر الوصول للقسم حاليًا.";
+
   }
 }
 
@@ -229,6 +353,21 @@ app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
 app.use(express.json());
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// Cheap diagnostic — checks the Meta connection without spending on a Claude call.
+app.get("/api/meta/status", async (req, res) => {
+  if (!META_TOKEN || !META_IG_USER_ID) {
+    return res.json({ configured: false, message: "META_ACCESS_TOKEN أو META_IG_USER_ID غير مضافين بعد." });
+  }
+  try {
+    const own = await metaGraph(META_IG_USER_ID, { fields: "username,followers_count,media_count" });
+    let sample = null;
+    try { sample = await fetchCompetitorProfile(COMPETITOR_USERNAMES[0]); } catch {}
+    res.json({ configured: true, ownAccount: own, sampleCompetitor: sample });
+  } catch (e) {
+    res.status(500).json({ configured: true, error: e.message });
+  }
+});
 
 app.get("/api/state", (req, res) => {
   res.json({
