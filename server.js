@@ -86,23 +86,78 @@ ${LOOP_CONTEXT}
 لا تختلق أرقامًا أو حقائق عن الشركة؛ إن لم تكن المعلومة متوفرة، وضّح ذلك. تحدث بالعربية دائمًا.
 مهم جدًا: ردّك النهائي يجب أن يبدأ مباشرة بالمعلومة أو التوصية نفسها — بدون أي مقدمة تشرح خطواتك أو تسرد أنك استشرت قسمًا معينًا.`;
 
-const SECRETARY_SYSTEM = `أنت السكرتير الشخصي لنواف داخل منصة Loop. مهمتك الوحيدة صباح كل يوم: تجهيز إحاطة صباحية شخصية لا علاقة لها بأعمال الشركة.
-نفّذ الخطوات التالية باستخدام أداة البحث على الإنترنت (web_search):
-1. سعر البيتكوين الحالي (BTC/USD) ونسبة تغيره خلال 24 ساعة.
-2. سعر الذهب الحالي (XAU/USD للأونصة) وتغيره اليومي.
-3. سعر النفط الحالي (خام WTI، دولار للبرميل) وتغيره اليومي.
-4. محفظة نواف: ETH 0.1866579 (تكلفة 2319.68)، SOL 4.49919209 (84.2080)، ATOM 196.52547694 (1.3853)، XLM 1555.19247268 (0.17510)، FET 1839.18182198 (0.14800)، SUI 243.6238336 (1.0932)، DOGE 962.56531898 (0.10960). احسب نسبة ربح/خسارة إجمالية واحدة فقط، بدون تفاصيل كل عملة.
-5. اليوم في الخليج (UTC+4): سبت/أحد → رأس الخيمة، غير ذلك → أبوظبي.
-6. طقس تلك المدينة اليوم: أعلى/أقل حرارة، الحالة، احتمال الأمطار.
-7. أجب مباشرة بالشكل التالي بالضبط، بدون أي مقدمة أو سرد لخطوات البحث:
+// ---------------------------------------------------------------------------
+// Secretary — crypto/gold prices come straight from Kraken's live ticker
+// (a real exchange feed, not a cached news page) computed here in code for
+// accuracy; only WTI oil and weather are left to Claude's web_search.
+// ---------------------------------------------------------------------------
+const PORTFOLIO = [
+  { symbol: "ETH", match: ["ETH"], qty: 0.1866579, cost: 2319.68 },
+  { symbol: "SOL", match: ["SOL"], qty: 4.49919209, cost: 84.2080 },
+  { symbol: "ATOM", match: ["ATOM"], qty: 196.52547694, cost: 1.3853 },
+  { symbol: "XLM", match: ["XLM"], qty: 1555.19247268, cost: 0.17510 },
+  { symbol: "FET", match: ["FET"], qty: 1839.18182198, cost: 0.14800 },
+  { symbol: "SUI", match: ["SUI"], qty: 243.6238336, cost: 1.0932 },
+  { symbol: "DOGE", match: ["XDG", "DOGE"], qty: 962.56531898, cost: 0.10960 },
+];
+
+function findTicker(result, tokens) {
+  const key = Object.keys(result).find((k) => tokens.some((t) => k.toUpperCase().includes(t)) && k.toUpperCase().includes("USD"));
+  return key ? result[key] : null;
+}
+
+async function fetchKrakenData() {
+  const res = await fetch("https://api.kraken.com/0/public/Ticker?pair=XBTUSD,ETHUSD,SOLUSD,ATOMUSD,XLMUSD,DOGEUSD,SUIUSD,FETUSD,PAXGUSD");
+  const json = await res.json();
+  if (json.error?.length) throw new Error(json.error.join("; "));
+  const result = json.result;
+
+  const btc = findTicker(result, ["XBT", "BTC"]);
+  const gold = findTicker(result, ["PAXG"]);
+  if (!btc || !gold) throw new Error("تعذر إيجاد أسعار البيتكوين أو الذهب من Kraken");
+
+  const pct = (t) => {
+    const c = parseFloat(t.c[0]);
+    const o = parseFloat(t.o);
+    return { price: c, changePct: ((c - o) / o) * 100 };
+  };
+
+  let totalValue = 0, totalCost = 0;
+  for (const asset of PORTFOLIO) {
+    const t = findTicker(result, asset.match);
+    if (!t) throw new Error(`تعذر إيجاد سعر ${asset.symbol} من Kraken`);
+    const price = parseFloat(t.c[0]);
+    totalValue += asset.qty * price;
+    totalCost += asset.qty * asset.cost;
+  }
+  const portfolioPct = ((totalValue - totalCost) / totalCost) * 100;
+
+  return { btc: pct(btc), gold: pct(gold), portfolioPct };
+}
+
+function gulfCityToday() {
+  // UTC+4, no DST.
+  const now = new Date(Date.now() + 4 * 60 * 60 * 1000);
+  const day = now.getUTCDay(); // 0=Sun..6=Sat, computed against the shifted "Gulf" instant
+  const isWeekend = day === 0 || day === 6;
+  return isWeekend ? "رأس الخيمة" : "أبوظبي";
+}
+
+const SECRETARY_SYSTEM_BASE = `أنت السكرتير الشخصي لنواف داخل منصة Loop. مهمتك الوحيدة صباح كل يوم: تجهيز إحاطة صباحية شخصية لا علاقة لها بأعمال الشركة.
+عندك أدناه بيانات دقيقة ومحسوبة مسبقًا لبيتكوين والذهب والمحفظة — استخدمها كما هي، لا تعيد حسابها ولا تخترع أرقامًا بديلة.
+استخدم أداة البحث (web_search) للحصول على شيئين فقط:
+1. سعر النفط الخام WTI الحالي (دولار للبرميل) وتغيره اليومي.
+2. توقعات طقس اليوم للمدينة المحددة أدناه: أعلى/أقل حرارة بالمئوية، الحالة العامة، واحتمال الأمطار إن وجد.
+
+أجب مباشرة بالشكل التالي بالضبط، بدون أي مقدمة أو سرد لخطوات البحث:
 
 صباح الخير ☀️
 
-**بيتكوين:** $[السعر] ([+/-X.XX]% خلال 24 ساعة)
+**بيتكوين:** $[السعر] ([+/-X.XX]% خلال اليوم)
 
 **الذهب:** $[السعر]/أونصة ([+/-X.XX]%)
 
-**النفط (WTI):** $[السعر]/برميل ([+/-X.XX]%)
+**النفط الخام (WTI):** $[السعر]/برميل ([+/-X.XX]%)
 
 **محفظتك:** [+/-X.XX]%
 
@@ -334,8 +389,21 @@ async function generateDailyBriefing() {
 }
 
 async function generateSecretaryBriefing() {
+  let system = SECRETARY_SYSTEM_BASE;
+  try {
+    const k = await fetchKrakenData();
+    const city = gulfCityToday();
+    system += `\n\nبيانات محسوبة الآن (استخدمها حرفيًا):
+- سعر البيتكوين: $${k.btc.price.toLocaleString("en-US", { maximumFractionDigits: 2 })} (${k.btc.changePct >= 0 ? "+" : ""}${k.btc.changePct.toFixed(2)}% خلال اليوم)
+- سعر الذهب (عبر PAXG، وكيل حي دقيق لسعر الأونصة): $${k.gold.price.toLocaleString("en-US", { maximumFractionDigits: 2 })} (${k.gold.changePct >= 0 ? "+" : ""}${k.gold.changePct.toFixed(2)}%)
+- نسبة ربح/خسارة المحفظة الإجمالية: ${k.portfolioPct >= 0 ? "+" : ""}${k.portfolioPct.toFixed(2)}%
+- مدينة اليوم لتوقعات الطقس: ${city}`;
+  } catch (e) {
+    system += `\n\n(تعذر جلب بيانات Kraken هذه المرة: ${e.message} — وضّح بصراحة في الرد أن أسعار البيتكوين/الذهب/المحفظة غير متوفرة اليوم بدل اختلاقها، واكتفِ بالنفط والطقس.)`;
+  }
+
   const res = await callClaude({
-    system: SECRETARY_SYSTEM,
+    system,
     messages: [{ role: "user", content: "أعطني الإحاطة الصباحية" }],
     tools: [{ type: "web_search_20250305", name: "web_search" }],
   });
