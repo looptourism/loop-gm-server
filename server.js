@@ -422,7 +422,11 @@ app.use(cors({
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type"],
 }));
-app.use(express.json());
+// Accept the request body as JSON no matter what Content-Type header the
+// client sent (or omitted) — this lets the frontend send POST requests
+// without a "Content-Type: application/json" header, which avoids the CORS
+// preflight (OPTIONS) round-trip that some free hosting edges mishandle.
+app.use(express.json({ type: () => true }));
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
