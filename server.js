@@ -417,7 +417,11 @@ async function generateSecretaryBriefing() {
 // HTTP API
 // ---------------------------------------------------------------------------
 const app = express();
-app.use(cors({ origin: process.env.ALLOWED_ORIGIN || "*" }));
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGIN || "*",
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"],
+}));
 app.use(express.json());
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
