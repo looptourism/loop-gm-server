@@ -429,9 +429,16 @@ app.get("/api/meta/status", async (req, res) => {
   }
   try {
     const own = await metaGraph(META_IG_USER_ID, { fields: "username,followers_count,media_count" });
-    let sample = null;
-    try { sample = await fetchCompetitorProfile(COMPETITOR_USERNAMES[0]); } catch {}
-    res.json({ configured: true, ownAccount: own, sampleCompetitor: sample });
+    let sample = null, sampleError = null;
+    try {
+      const data = await metaGraph(META_IG_USER_ID, {
+        fields: `business_discovery.username(${COMPETITOR_USERNAMES[0]}){username,followers_count,media_count}`,
+      });
+      sample = data.business_discovery || null;
+    } catch (e) {
+      sampleError = e.message;
+    }
+    res.json({ configured: true, ownAccount: own, sampleCompetitor: sample, sampleCompetitorError: sampleError });
   } catch (e) {
     res.status(500).json({ configured: true, error: e.message });
   }
