@@ -430,6 +430,56 @@ app.use(express.json({ type: () => true }));
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
+// A real, live Privacy Policy page — Meta requires this URL before an app
+// can go Live and before App Review will accept a submission.
+app.get("/privacy", (req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>سياسة الخصوصية — Loop Travel & Tourism</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Tahoma, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; line-height: 1.8; color: #222; }
+  h1 { font-size: 22px; } h2 { font-size: 17px; margin-top: 28px; }
+  p, li { color: #333; }
+</style>
+</head>
+<body>
+<h1>سياسة الخصوصية — منصة Loop Travel & Tourism الداخلية</h1>
+<p>آخر تحديث: 2026</p>
+
+<p>هذه المنصة أداة إدارية داخلية تستخدمها شركة Loop Travel & Tourism (وكالة سفريات وسياحة، الإمارات العربية المتحدة) لتشغيل مساعد إداري ذكي يخدم فريق العمل الداخلي فقط. هذه الصفحة توضّح كيف تتعامل المنصة مع البيانات.
+
+<h2>البيانات التي تُعالَج</h2>
+<ul>
+  <li>بيانات عامة من حساب Loop على انستغرام (مثل عدد المتابعين وعدد المنشورات ونصوص المنشورات العامة) عبر واجهة Instagram Graph API الرسمية من Meta، لغرض تحليل أداء الحساب داخليًا.</li>
+  <li>بيانات أسعار وباقات السفر الخاصة بالشركة (من ملفات جداول بيانات داخلية).</li>
+  <li>محتوى المحادثات بين موظفي الشركة والمساعد الإداري الذكي، لغرض تقديم توصيات إدارية.</li>
+</ul>
+
+<h2>كيف تُستخدم البيانات</h2>
+<p>تُستخدم هذه البيانات حصريًا للأغراض الإدارية الداخلية لشركة Loop (تحليل الأداء، دعم القرار، خدمة العملاء). لا تُباع أو تُشارك هذه البيانات مع أي طرف ثالث لأغراض تسويقية أو إعلانية.</p>
+
+<h2>مشاركة البيانات مع خدمات خارجية</h2>
+<p>تعتمد المنصة على مزودي خدمة تقنيين لتشغيلها، وهم:</p>
+<ul>
+  <li><strong>Anthropic</strong> — لمعالجة اللغة الطبيعية عبر واجهة Claude API.</li>
+  <li><strong>Meta Platforms</strong> — عبر Instagram Graph API الرسمية، للوصول لبيانات حساب الشركة العامة.</li>
+  <li><strong>Google</strong> — لقراءة جداول بيانات الأسعار الداخلية عبر Google Sheets.</li>
+</ul>
+<p>هذه الخدمات تُستخدم فقط لتشغيل وظائف المنصة، ولا تُستخدم بياناتها لأي غرض آخر.</p>
+
+<h2>الاحتفاظ بالبيانات</h2>
+<p>تُخزَّن سجلات المحادثات والاستشارات على سيرفر المنصة الخاص بالشركة، ويمكن حذفها بالكامل في أي وقت من قبل مدير النظام.</p>
+
+<h2>التواصل</h2>
+<p>لأي استفسار متعلق بهذه السياسة، يُرجى التواصل عبر واتساب: +971 54 544 4003.</p>
+</body>
+</html>`);
+});
+
 // Cheap diagnostic — checks the Meta connection without spending on a Claude call.
 app.get("/api/meta/status", async (req, res) => {
   if (!META_TOKEN || !META_IG_USER_ID) {
