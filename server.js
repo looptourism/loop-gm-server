@@ -464,15 +464,40 @@ app.get("/api/state", (req, res) => {
 // All state-changing actions are exposed as GET with query params (not
 // conventional REST, but GET requests have proven reliable end-to-end while
 // POST consistently failed from the browser on this host — see chat-test).
+// ---------------------------------------------------------------------------
+// Async job pattern — every browser-facing request now returns *instantly*
+// with a job id; the slow work (Claude calls) runs in the background and the
+// frontend polls a fast status endpoint until it's done. This exists because
+// long-lived fetch() calls from the browser to this host were failing
+// outright, while instant requests and direct URL navigation both worked —
+// so we simply stop making the browser hold a connection open for a while.
+// ---------------------------------------------------------------------------
+const jobs = new Map(); // id -> { status: 'pending'|'done'|'error', result, error }
+let jobCounter = 0;
+
+function startJob(fn) {
+  const id = String(++jobCounter);
+  jobs.set(id, { status: "pending" });
+  fn()
+    .then((result) => jobs.set(id, { status: "done", result }))
+    .catch((e) => jobs.set(id, { status: "error", error: e.message || "internal error" }));
+  // Jobs are small and short-lived; drop them from memory after a while so
+  // this never grows unbounded.
+  setTimeout(() => jobs.delete(id), 10 * 60 * 1000);
+  return id;
+}
+
+app.get("/api/job/:id", (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ status: "error", error: "job not found or expired" });
+  res.json(job);
+});
+
 app.get("/api/chat", async (req, res) => {
   const message = (req.query.message || "").toString().trim();
   if (!message) return res.status(400).json({ error: "message is required" });
-  try {
-    const result = await runGM(message);
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message || "internal error" });
-  }
+  const id = startJob(() => runGM(message));
+  res.json({ jobId: id });
 });
 
 app.get("/api/department/:id", async (req, res) => {
@@ -480,13 +505,12 @@ app.get("/api/department/:id", async (req, res) => {
   const message = (req.query.message || "").toString().trim();
   if (!DEPTS[id]) return res.status(404).json({ error: "unknown department" });
   if (!message) return res.status(400).json({ error: "message is required" });
-  try {
+  const jobId = startJob(async () => {
     const responseText = await callDepartment(id, message);
     appendDeptLog(id, message, responseText);
-    res.json({ reply: responseText });
-  } catch (e) {
-    res.status(500).json({ error: e.message || "internal error" });
-  }
+    return { reply: responseText };
+  });
+  res.json({ jobId });
 });
 
 app.get("/api/briefing/daily", async (req, res) => {
@@ -499,12 +523,9 @@ app.get("/api/briefing/daily", async (req, res) => {
   }
 });
 
-app.get("/api/briefing/daily/refresh", async (req, res) => {
-  try {
-    res.json(await generateDailyBriefing());
-  } catch (e) {
-    res.status(500).json({ error: e.message || "internal error" });
-  }
+app.get("/api/briefing/daily/refresh", (req, res) => {
+  const jobId = startJob(() => generateDailyBriefing());
+  res.json({ jobId });
 });
 
 app.get("/api/briefing/secretary", async (req, res) => {
@@ -517,12 +538,9 @@ app.get("/api/briefing/secretary", async (req, res) => {
   }
 });
 
-app.get("/api/briefing/secretary/refresh", async (req, res) => {
-  try {
-    res.json(await generateSecretaryBriefing());
-  } catch (e) {
-    res.status(500).json({ error: e.message || "internal error" });
-  }
+app.get("/api/briefing/secretary/refresh", (req, res) => {
+  const jobId = startJob(() => generateSecretaryBriefing());
+  res.json({ jobId });
 });
 
 app.get("/api/reset", (req, res) => {
