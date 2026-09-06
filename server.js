@@ -461,8 +461,11 @@ app.get("/api/state", (req, res) => {
   });
 });
 
-app.post("/api/chat", async (req, res) => {
-  const message = (req.body?.message || "").trim();
+// All state-changing actions are exposed as GET with query params (not
+// conventional REST, but GET requests have proven reliable end-to-end while
+// POST consistently failed from the browser on this host — see chat-test).
+app.get("/api/chat", async (req, res) => {
+  const message = (req.query.message || "").toString().trim();
   if (!message) return res.status(400).json({ error: "message is required" });
   try {
     const result = await runGM(message);
@@ -472,22 +475,9 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// Diagnostic-only: same logic as POST /api/chat but reachable by typing a URL
-// directly into the browser (no fetch(), no CORS at all) — lets us tell
-// whether a failure is a browser/CORS issue or a server-side one.
-app.get("/api/chat-test", async (req, res) => {
-  const message = (req.query.message || "مرحبا").toString().trim();
-  try {
-    const result = await runGM(message);
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message || "internal error" });
-  }
-});
-
-app.post("/api/department/:id", async (req, res) => {
+app.get("/api/department/:id", async (req, res) => {
   const { id } = req.params;
-  const message = (req.body?.message || "").trim();
+  const message = (req.query.message || "").toString().trim();
   if (!DEPTS[id]) return res.status(404).json({ error: "unknown department" });
   if (!message) return res.status(400).json({ error: "message is required" });
   try {
@@ -509,7 +499,7 @@ app.get("/api/briefing/daily", async (req, res) => {
   }
 });
 
-app.post("/api/briefing/daily/refresh", async (req, res) => {
+app.get("/api/briefing/daily/refresh", async (req, res) => {
   try {
     res.json(await generateDailyBriefing());
   } catch (e) {
@@ -527,7 +517,7 @@ app.get("/api/briefing/secretary", async (req, res) => {
   }
 });
 
-app.post("/api/briefing/secretary/refresh", async (req, res) => {
+app.get("/api/briefing/secretary/refresh", async (req, res) => {
   try {
     res.json(await generateSecretaryBriefing());
   } catch (e) {
@@ -535,7 +525,7 @@ app.post("/api/briefing/secretary/refresh", async (req, res) => {
   }
 });
 
-app.post("/api/reset", (req, res) => {
+app.get("/api/reset", (req, res) => {
   store = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null };
   saveStore(store);
   res.json({ ok: true });
