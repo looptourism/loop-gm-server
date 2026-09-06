@@ -472,6 +472,19 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
+// Diagnostic-only: same logic as POST /api/chat but reachable by typing a URL
+// directly into the browser (no fetch(), no CORS at all) — lets us tell
+// whether a failure is a browser/CORS issue or a server-side one.
+app.get("/api/chat-test", async (req, res) => {
+  const message = (req.query.message || "مرحبا").toString().trim();
+  try {
+    const result = await runGM(message);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message || "internal error" });
+  }
+});
+
 app.post("/api/department/:id", async (req, res) => {
   const { id } = req.params;
   const message = (req.body?.message || "").trim();
