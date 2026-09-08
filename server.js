@@ -339,10 +339,14 @@ async function callDepartment(deptId, instruction) {
   }
 
   if (deptId === "strategy") {
-    const profiles = [];
-    for (const username of COMPETITOR_USERNAMES) {
-      const p = await fetchCompetitorProfile(username);
-      if (p) {
+    // Fetch all competitors in parallel, and analyse each one's candidate
+    // images in parallel too — sequential runs pushed this past the browser's
+    // patience since every Apify call takes ~30-60s on its own.
+    const profiles = (await Promise.all(
+      COMPETITOR_USERNAMES.map(async (username) => {
+        const p = await fetchCompetitorProfile(username);
+        if (!p) return null;
+
         const allMedia = p.media?.data || [];
         const posts = allMedia.slice(0, 5).map((m) => `  · ${m.timestamp}: "${(m.caption || "").slice(0, 90)}"`).join("\n");
 
@@ -351,18 +355,21 @@ async function callDepartment(deptId, instruction) {
         const umrahMedia = allMedia.filter((m) => m.media_type === "IMAGE" && m.media_url && isUmrahPost(m.caption));
         const candidates = (umrahMedia.length ? umrahMedia : allMedia.filter((m) => m.media_type === "IMAGE" && m.media_url)).slice(0, 3);
 
-        const reads = [];
-        for (const m of candidates) {
-          const analysis = await analyzeImageForPricing(m.media_url, m.caption);
-          if (analysis) reads.push(`  · (${m.timestamp}): ${analysis}`);
-        }
+        const analyses = await Promise.all(
+          candidates.map(async (m) => {
+            const analysis = await analyzeImageForPricing(m.media_url, m.caption);
+            return analysis ? `  · (${m.timestamp}): ${analysis}` : null;
+          })
+        );
+        const reads = analyses.filter(Boolean);
         const priceBlock = reads.length ? `\nقراءة بصرية فعلية لآخر ${reads.length} منشور${umrahMedia.length ? " متعلق بالعمرة" : ""}:\n${reads.join("\n")}` : "";
 
-        profiles.push(`@${p.username} — ${p.followers_count} متابع، ${p.media_count} منشور\nآخر منشورات:\n${posts}${priceBlock}`);
-      }
-    }
+        return `@${p.username} — ${p.followers_count ?? "؟"} متابع، ${p.media_count ?? "؟"} منشور\nآخر منشورات:\n${posts}${priceBlock}`;
+      })
+    )).filter(Boolean);
+
     if (profiles.length) {
-      systemText += `\n\nبيانات حية الآن من حسابات المنافسين على انستغرام (عبر Meta Business Discovery API، بما فيها قراءة بصرية فعلية لمنشورات العمرة تحديدًا حين توفرت):\n${profiles.join("\n\n")}\n\nهذه بيانات لحظية حقيقية — استخدمها بدل اللقطة الثابتة القديمة إن وُجد تعارض بينهما.`;
+      systemText += `\n\nبيانات حية الآن من حسابات المنافسين على انستغرام، بما فيها قراءة بصرية فعلية لمنشورات العمرة تحديدًا حين توفرت:\n${profiles.join("\n\n")}\n\nهذه بيانات لحظية حقيقية — استخدمها بدل اللقطة الثابتة القديمة إن وُجد تعارض بينهما.`;
     }
   }
 
@@ -421,6 +428,19 @@ async function generateDailyBriefing() {
   store.dailyBriefing = { text: result.reply, depts: result.depts, ts: Date.now(), day: todayKey() };
   saveStore(store);
   return store.dailyBriefing;
+}
+
+// Competitor report — the heavy Apify + vision work runs on a schedule so the
+// result is already waiting when Nawaf opens it, instead of making him sit
+// through a multi-minute request.
+async function generateCompetitorReport() {
+  const reply = await callDepartment(
+    "strategy",
+    "أعدّ تقريرًا تنافسيًا اليوم: قارن أسعار باقات العمرة لدينا بأسعار المنافسين الظاهرة في منشوراتهم الحالية. اذكر الأسعار المرصودة لكل منافس، ثم وضّح موقعنا السعري مقابلهم، واختم بتوصية عملية واحدة."
+  );
+  store.competitorReport = { text: reply, ts: Date.now(), day: todayKey() };
+  saveStore(store);
+  return store.competitorReport;
 }
 
 async function generateSecretaryBriefing() {
@@ -555,6 +575,7 @@ app.get("/api/state", (req, res) => {
     deptLogs: store.deptLogs,
     dailyBriefing: store.dailyBriefing,
     secretaryBriefing: store.secretaryBriefing,
+    competitorReport: store.competitorReport,
   });
 });
 
@@ -640,8 +661,17 @@ app.get("/api/briefing/secretary/refresh", (req, res) => {
   res.json({ jobId });
 });
 
+app.get("/api/competitor-report", (req, res) => {
+  res.json(store.competitorReport || null);
+});
+
+app.get("/api/competitor-report/refresh", (req, res) => {
+  const jobId = startJob(() => generateCompetitorReport());
+  res.json({ jobId });
+});
+
 app.get("/api/reset", (req, res) => {
-  store = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null };
+  store = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null, competitorReport: null };
   saveStore(store);
   res.json({ ok: true });
 });
@@ -650,11 +680,15 @@ app.get("/api/reset", (req, res) => {
 // Scheduled jobs — this is the actual "runs while you're asleep" part.
 // 3:00 UTC = 7:00 AM Gulf Standard Time (UTC+4).
 // ---------------------------------------------------------------------------
-cron.schedule("0 3 * * *", async () => {
+// 04:00 UTC = 8:00 AM Gulf Standard Time (UTC+4). Everything Nawaf reads in
+// the morning is prepared in one pass so it's all ready at the same moment.
+cron.schedule("0 4 * * *", async () => {
   console.log("[cron] generating daily briefing…");
   try { await generateDailyBriefing(); } catch (e) { console.error("[cron] daily briefing failed:", e.message); }
   console.log("[cron] generating secretary briefing…");
   try { await generateSecretaryBriefing(); } catch (e) { console.error("[cron] secretary briefing failed:", e.message); }
+  console.log("[cron] generating competitor report…");
+  try { await generateCompetitorReport(); } catch (e) { console.error("[cron] competitor report failed:", e.message); }
 });
 
 const PORT = process.env.PORT || 3000;
