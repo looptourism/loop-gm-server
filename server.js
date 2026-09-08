@@ -230,13 +230,48 @@ async function fetchOwnRecentMedia() {
 // Public profile + recent posts of ANY Instagram Business/Creator account
 // (Business Discovery) — this is how we can see competitors without owning
 // their accounts.
+// Competitor data comes from Apify's Instagram scraper rather than Meta's
+// Business Discovery API — Meta restricts that endpoint's Advanced Access to
+// Tech Providers managing other businesses' accounts, which doesn't apply to
+// us. Apify reads the same publicly visible profile pages.
+const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+
 async function fetchCompetitorProfile(username) {
-  if (!META_TOKEN || !META_IG_USER_ID) return null;
+  if (!APIFY_TOKEN) return null;
   try {
-    const data = await metaGraph(META_IG_USER_ID, {
-      fields: `business_discovery.username(${username}){username,followers_count,media_count,biography,media.limit(12){caption,timestamp,permalink,media_type,media_url}}`,
-    });
-    return data.business_discovery || null;
+    const res = await fetch(
+      `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directUrls: [`https://www.instagram.com/${username}/`],
+          resultsType: "posts",
+          resultsLimit: 12,
+          addParentData: true,
+        }),
+      }
+    );
+    if (!res.ok) throw new Error(`Apify ${res.status}`);
+    const items = await res.json();
+    if (!Array.isArray(items) || items.length === 0) return null;
+
+    // Apify returns one item per post, each carrying the owner's profile info.
+    const first = items[0];
+    return {
+      username,
+      followers_count: first.ownerFollowersCount ?? first.followersCount ?? null,
+      media_count: first.ownerPostsCount ?? first.postsCount ?? null,
+      media: {
+        data: items.map((p) => ({
+          caption: p.caption || "",
+          timestamp: p.timestamp || "",
+          permalink: p.url || "",
+          media_type: p.type === "Video" ? "VIDEO" : "IMAGE",
+          media_url: p.displayUrl || (p.images && p.images[0]) || null,
+        })),
+      },
+    };
   } catch {
     return null;
   }
@@ -482,24 +517,36 @@ app.get("/privacy", (req, res) => {
 
 // Cheap diagnostic — checks the Meta connection without spending on a Claude call.
 app.get("/api/meta/status", async (req, res) => {
-  if (!META_TOKEN || !META_IG_USER_ID) {
-    return res.json({ configured: false, message: "META_ACCESS_TOKEN أو META_IG_USER_ID غير مضافين بعد." });
-  }
-  try {
-    const own = await metaGraph(META_IG_USER_ID, { fields: "username,followers_count,media_count" });
-    let sample = null, sampleError = null;
+  const result = { metaConfigured: !!(META_TOKEN && META_IG_USER_ID), apifyConfigured: !!APIFY_TOKEN };
+
+  if (result.metaConfigured) {
     try {
-      const data = await metaGraph(META_IG_USER_ID, {
-        fields: `business_discovery.username(${COMPETITOR_USERNAMES[0]}){username,followers_count,media_count}`,
-      });
-      sample = data.business_discovery || null;
+      result.ownAccount = await metaGraph(META_IG_USER_ID, { fields: "username,followers_count,media_count" });
     } catch (e) {
-      sampleError = e.message;
+      result.ownAccountError = e.message;
     }
-    res.json({ configured: true, ownAccount: own, sampleCompetitor: sample, sampleCompetitorError: sampleError });
-  } catch (e) {
-    res.status(500).json({ configured: true, error: e.message });
   }
+
+  if (APIFY_TOKEN) {
+    try {
+      const sample = await fetchCompetitorProfile(COMPETITOR_USERNAMES[0]);
+      result.sampleCompetitor = sample
+        ? {
+            username: sample.username,
+            followers_count: sample.followers_count,
+            postsFetched: sample.media?.data?.length || 0,
+            latestCaption: (sample.media?.data?.[0]?.caption || "").slice(0, 120),
+          }
+        : null;
+      if (!sample) result.sampleCompetitorError = "لم تُرجع Apify أي نتائج";
+    } catch (e) {
+      result.sampleCompetitorError = e.message;
+    }
+  } else {
+    result.sampleCompetitorError = "APIFY_API_TOKEN غير مضاف بعد";
+  }
+
+  res.json(result);
 });
 
 app.get("/api/state", (req, res) => {
