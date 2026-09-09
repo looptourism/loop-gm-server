@@ -78,11 +78,32 @@ ${COMM_CONTEXT}
 مسؤوليتك: التواصل مع العملاء عبر انستغرام وواتساب، صياغة الردود والرسائل، وتحسين تجربة العميل في المحادثات — بما ينسجم مع آلية الأتمتة الفعلية الموضحة أعلاه.
 أجب كرئيس اتصال فعلي، بالعربية، بإيجاز تنفيذي (فقرة أو فقرتين).`,
   },
+  accounting: {
+    name: "المحاسبة", role: "رئيس المحاسبة والرقابة المالية",
+    sheetUrl: "https://docs.google.com/spreadsheets/d/1lOFhWpKIUd3kV7brNa-6BCJQmbKQ6iV6VHxR9ejTm3U/export?format=csv&gid=399480050",
+    sheetColumns: "الوجهة، تاريخ البداية، تاريخ النهاية، عدد الليالي، سعر شخصين، سعر 3 أشخاص، سعر 4 أشخاص، ملاحظات، Type، تاريخ التحديث",
+    system: `أنت رئيس المحاسبة والرقابة المالية في Loop Travel & Tourism. ${LOOP_CONTEXT}
+أنت عضو فعلي من فريق Loop، تتحدث بصيغة "نحن" لا "أنتم"، وتقدّم تقاريرك مباشرة للمدير العام.
+مسؤوليتك: ضبط الإيرادات والتكاليف لكل باقة على حدة، مطابقة المقبوضات بالحجوزات، رصد أي فروقات أو تسريب مالي (باقة تُباع بأقل من تكلفتها، خصم غير مبرر، مصروف بلا سند)، والتأكد من سلامة هوامش الربح فعليًا لا نظريًا.
+دورك رقابي لا تسويقي: تشير للأرقام التي لا تتطابق وتطلب تفسيرها بدل تمريرها. إن لم تتوفر لديك بيانات التكاليف الفعلية، وضّح ذلك واطلبها صراحة بدل افتراضها.
+أجب كرئيس محاسبة فعلي، بأرقام محددة حين تتوفر، بالعربية، بإيجاز تنفيذي (فقرة أو فقرتين).`,
+  },
+  sales: {
+    name: "المبيعات", role: "رئيس المبيعات وتطوير الأعمال",
+    sheetUrl: "https://docs.google.com/spreadsheets/d/1lOFhWpKIUd3kV7brNa-6BCJQmbKQ6iV6VHxR9ejTm3U/export?format=csv&gid=399480050",
+    sheetColumns: "الوجهة، تاريخ البداية، تاريخ النهاية، عدد الليالي، سعر شخصين، سعر 3 أشخاص، سعر 4 أشخاص، ملاحظات، Type، تاريخ التحديث",
+    system: `أنت رئيس المبيعات وتطوير الأعمال في Loop Travel & Tourism. ${LOOP_CONTEXT}
+أنت عضو فعلي من فريق Loop، تتحدث بصيغة "نحن" لا "أنتم"، وتقدّم تقاريرك مباشرة للمدير العام.
+${COMM_CONTEXT}
+مسؤوليتك: تحويل الاستفسارات القادمة عبر الأتمتة (انستغرام وواتساب) إلى مبيعات فعلية ومهيكلة — متابعة العملاء المهتمين حتى الحجز، تقليل التسرّب بين الاستفسار والحجز، بناء عروض وحزم تزيد قيمة الطلب، وفتح قنوات بيع وشراكات جديدة.
+ركّز على الخطوة العملية التالية لكل فرصة، لا على الوصف العام.
+أجب كرئيس مبيعات فعلي، بخطوات قابلة للتنفيذ، بالعربية، بإيجاز تنفيذي (فقرة أو فقرتين).`,
+  },
 };
 
 const GM_SYSTEM = `أنت المدير العام لشركة Loop Travel & Tourism — عضو فعلي من فريق قيادة الشركة، ورئيس نواف المباشر في هرمها الإداري، وليس مستشارًا خارجيًا أو طرفًا ثالثًا. أنت جزء من الشركة، فتحدّث عنها دائمًا بصيغة "نحن" — ممنوع منعًا باتًا استخدام "أنتم". أنت أيضًا مساعد نواف الشخصي — تجاوبه على أي سؤال عام مباشرة بمعرفتك العامة دون استخدام أي أداة.
 ${LOOP_CONTEXT}
-عندما يطلب منك نواف تحديثًا أو استشارة تخص الشركة وتحتاج خبرة قسم معين (المالية، التسويق، الاستراتيجية، الاتصال)، استخدم أداة الاستشارة الخاصة بذلك القسم، ويمكنك استشارة أكثر من قسم بنفس الرسالة. بعد استلام ردود الأقسام، لخّصها بأسلوب تنفيذي واضح ومباشر، وادمجها في توصية واحدة متماسكة — وأنت من يملك القرار النهائي بصفتك المدير العام.
+عندما يطلب منك نواف تحديثًا أو استشارة تخص الشركة وتحتاج خبرة قسم معين (المالية، التسويق، الاستراتيجية، الاتصال، المحاسبة والرقابة المالية، المبيعات وتطوير الأعمال)، استخدم أداة الاستشارة الخاصة بذلك القسم، ويمكنك استشارة أكثر من قسم بنفس الرسالة. بعد استلام ردود الأقسام، لخّصها بأسلوب تنفيذي واضح ومباشر، وادمجها في توصية واحدة متماسكة — وأنت من يملك القرار النهائي بصفتك المدير العام.
 لا تختلق أرقامًا أو حقائق عن الشركة؛ إن لم تكن المعلومة متوفرة، وضّح ذلك. تحدث بالعربية دائمًا.
 مهم جدًا: ردّك النهائي يجب أن يبدأ مباشرة بالمعلومة أو التوصية نفسها — بدون أي مقدمة تشرح خطواتك أو تسرد أنك استشرت قسمًا معينًا.`;
 
@@ -388,7 +409,7 @@ function appendDeptLog(deptId, instruction, response) {
   saveStore(store);
 }
 
-async function runGM(userText) {
+async function runGM(userText, displayText) {
   let messages = [...store.gmMessages.slice(-16), { role: "user", content: userText }];
   let finalText = null;
   let consultedAll = [];
@@ -416,7 +437,7 @@ async function runGM(userText) {
   store.gmMessages = messages.slice(-16);
   const reply = finalText || "تم تنفيذ طلبك.";
   const depts = [...new Set(consultedAll)];
-  store.gmDisplayLog.push({ role: "user", text: userText, ts: Date.now() });
+  store.gmDisplayLog.push({ role: "user", text: displayText || userText, ts: Date.now() });
   store.gmDisplayLog.push({ role: "gm", text: reply, depts, ts: Date.now() });
   store.gmDisplayLog = store.gmDisplayLog.slice(-100);
   saveStore(store);
@@ -424,7 +445,14 @@ async function runGM(userText) {
 }
 
 async function generateDailyBriefing() {
-  const result = await runGM("قدّم لي إحاطة صباحية تنفيذية عن وضع الشركة اليوم، بالتنسيق مع الأقسام الأربعة حسب الحاجة، وأبرز ما يستحق انتباهي الآن.");
+  // The GM writes the briefing itself (so it lands in the GM conversation and
+  // stays in its memory), grounded in the competitor report the strategy
+  // department produced earlier in the same morning run.
+  let prompt = "اكتب لنواف إحاطته الصباحية التنفيذية عن وضع الشركة اليوم. نسّق مع الأقسام حسب الحاجة، وأبرز ما يستحق انتباهه الآن.";
+  if (store.competitorReport?.day === todayKey()) {
+    prompt += `\n\nهذا تقرير المنافسين الذي أعدّه قسم الاستراتيجية صباح اليوم — ادمج أهم ما فيه في إحاطتك بصفتك مطّلعًا عليه، ولا تكرره حرفيًا:\n${store.competitorReport.text}`;
+  }
+  const result = await runGM(prompt, "إحاطة الصباح");
   store.dailyBriefing = { text: result.reply, depts: result.depts, ts: Date.now(), day: todayKey() };
   saveStore(store);
   return store.dailyBriefing;
@@ -680,15 +708,17 @@ app.get("/api/reset", (req, res) => {
 // Scheduled jobs — this is the actual "runs while you're asleep" part.
 // 3:00 UTC = 7:00 AM Gulf Standard Time (UTC+4).
 // ---------------------------------------------------------------------------
-// 04:00 UTC = 8:00 AM Gulf Standard Time (UTC+4). Everything Nawaf reads in
-// the morning is prepared in one pass so it's all ready at the same moment.
+// 04:00 UTC = 8:00 AM Gulf Standard Time (UTC+4). Order matters: the strategy
+// department's competitor report is produced first, then the GM writes the
+// morning briefing on top of it (which also puts the briefing into the GM's
+// own conversation history, so it can discuss it later in the day).
 cron.schedule("0 4 * * *", async () => {
+  console.log("[cron] generating competitor report…");
+  try { await generateCompetitorReport(); } catch (e) { console.error("[cron] competitor report failed:", e.message); }
   console.log("[cron] generating daily briefing…");
   try { await generateDailyBriefing(); } catch (e) { console.error("[cron] daily briefing failed:", e.message); }
   console.log("[cron] generating secretary briefing…");
   try { await generateSecretaryBriefing(); } catch (e) { console.error("[cron] secretary briefing failed:", e.message); }
-  console.log("[cron] generating competitor report…");
-  try { await generateCompetitorReport(); } catch (e) { console.error("[cron] competitor report failed:", e.message); }
 });
 
 const PORT = process.env.PORT || 3000;
