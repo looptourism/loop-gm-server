@@ -10,25 +10,61 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = "claude-sonnet-4-6";
 
 // ---------------------------------------------------------------------------
-// Storage — simple JSON file on disk. Good enough for one company's data.
-// On some free hosts the disk resets on redeploy; swap this for a real DB
-// (e.g. a free Supabase/Postgres instance) once this proves itself out.
+// Storage — persisted to Upstash Redis (a free, permanent, external key-value
+// store) instead of the local disk. Render's free tier wipes local files
+// every time the service spins down from inactivity — which happens several
+// times a day — so anything written only to disk disappears constantly.
+// A local JSON file is still kept as a same-request cache/fallback so the
+// rest of the code can read/write `store` synchronously as before.
 // ---------------------------------------------------------------------------
 const DATA_DIR = path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-function loadStore() {
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const STORE_KEY = "loop-gm-store";
+const EMPTY_STORE = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null, competitorReport: null };
+
+async function loadStoreRemote() {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return null;
+  try {
+    const res = await fetch(`${UPSTASH_URL}/get/${STORE_KEY}`, { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } });
+    const data = await res.json();
+    return data.result ? JSON.parse(data.result) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoreRemote(storeObj) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(storeObj, null, 2), "utf8"); // local fallback
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
+  fetch(`${UPSTASH_URL}/set/${STORE_KEY}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+    body: JSON.stringify(storeObj),
+  }).catch(() => {}); // best-effort; a dropped save just means next call retries with a fuller diff
+}
+
+function loadStoreLocal() {
   try {
     return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
   } catch {
-    return { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null };
+    return { ...EMPTY_STORE };
   }
 }
-function saveStore(store) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(store, null, 2), "utf8");
+
+function saveStore(storeObj) {
+  saveStoreRemote(storeObj);
 }
-let store = loadStore();
+
+// Start with whatever's on local disk (instant), then replace with Upstash's
+// copy once it arrives (the source of truth across spin-downs).
+let store = loadStoreLocal();
+loadStoreRemote().then((remote) => {
+  if (remote) store = remote;
+});
 
 function todayKey() {
   const d = new Date();
@@ -414,8 +450,23 @@ async function runGM(userText, displayText) {
   let finalText = null;
   let consultedAll = [];
 
+  // Today's already-prepared material, so asking "what's the briefing?" from a
+  // second device returns what was actually sent this morning instead of
+  // silently regenerating a different one.
+  let system = GM_SYSTEM;
+  const ready = [];
+  if (store.dailyBriefing?.day === todayKey()) {
+    ready.push(`إحاطة اليوم الصباحية التي كتبتَها بالفعل هذا الصباح:\n${store.dailyBriefing.text}`);
+  }
+  if (store.competitorReport?.day === todayKey()) {
+    ready.push(`تقرير المنافسين الذي أعدّه قسم الاستراتيجية هذا الصباح:\n${store.competitorReport.text}`);
+  }
+  if (ready.length) {
+    system += `\n\n${ready.join("\n\n")}\n\nإن سألك نواف عن إحاطة اليوم أو عن تقرير المنافسين، أعطه ما هو مذكور أعلاه كما هو (فهو ما استلمه فعلًا هذا الصباح) بدل توليد نسخة جديدة مختلفة، إلا إن طلب صراحة تحديثها أو إعادة توليدها.`;
+  }
+
   for (let round = 0; round < 3 && finalText === null; round++) {
-    const res = await callClaude({ system: GM_SYSTEM, messages, tools: TOOLS });
+    const res = await callClaude({ system, messages, tools: TOOLS });
     const content = res.content || [];
     const toolUses = content.filter((b) => b.type === "tool_use");
     messages = [...messages, { role: "assistant", content }];
