@@ -24,7 +24,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const STORE_KEY = "loop-gm-store";
-const EMPTY_STORE = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null, competitorReport: null };
+const EMPTY_STORE = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null, competitorReport: null, archive: {}, priceHistory: [] };
 
 async function loadStoreRemote() {
   if (!UPSTASH_URL || !UPSTASH_TOKEN) return null;
@@ -220,15 +220,28 @@ const SECRETARY_SYSTEM_BASE = `أنت السكرتير الشخصي لنواف �
 
 **الطقس — [المدينة]:** [الحالة]، أعلى درجة حرارة حوالي [X]°م، أقل درجة حرارة حوالي [X]°م، [احتمال الأمطار]`;
 
-const TOOLS = Object.entries(DEPTS).map(([id, d]) => ({
-  name: `consult_${id}`,
-  description: `تكليف ${d.role} في Loop Travel بمهمة أو سؤال يقع ضمن مسؤولياته.`,
-  input_schema: {
-    type: "object",
-    properties: { instruction: { type: "string", description: "الأمر أو السؤال الموجّه لرئيس هذا القسم." } },
-    required: ["instruction"],
+const TOOLS = [
+  ...Object.entries(DEPTS).map(([id, d]) => ({
+    name: `consult_${id}`,
+    description: `تكليف ${d.role} في Loop Travel بمهمة أو سؤال يقع ضمن مسؤولياته.`,
+    input_schema: {
+      type: "object",
+      properties: { instruction: { type: "string", description: "الأمر أو السؤال الموجّه لرئيس هذا القسم." } },
+      required: ["instruction"],
+    },
+  })),
+  {
+    name: "get_archived_day",
+    description: "استرجاع إحاطة الصباح و/أو تقرير المنافسين و/أو إحاطة السكرتير الشخصية ليوم سابق محدد بالتاريخ، عندما يسأل نواف عن يوم معيّن قبل اليوم الحالي.",
+    input_schema: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "التاريخ المطلوب بصيغة YYYY-M-D (مثال: 2026-9-5 ليوم 5 سبتمبر 2026)." },
+      },
+      required: ["date"],
+    },
   },
-}));
+];
 
 // ---------------------------------------------------------------------------
 // Claude call helpers
@@ -454,6 +467,7 @@ async function runGM(userText, displayText) {
   // second device returns what was actually sent this morning instead of
   // silently regenerating a different one.
   let system = GM_SYSTEM;
+  system += `\n\nتاريخ اليوم بصيغة YYYY-M-D هو: ${todayKey()}. إذا سألك نواف عن يوم سابق (أمس، الأسبوع اللي فات، أو تاريخ محدد)، احسب التاريخ المطلوب بصيغة YYYY-M-D واستخدم أداة get_archived_day لجلبه — لا تعتمد على ذاكرتك من المحادثة الحالية وحدها لأيام سابقة.`;
   const ready = [];
   if (store.dailyBriefing?.day === todayKey()) {
     ready.push(`إحاطة اليوم الصباحية التي كتبتَها بالفعل هذا الصباح:\n${store.dailyBriefing.text}`);
@@ -475,11 +489,26 @@ async function runGM(userText, displayText) {
 
     const toolResults = [];
     for (const tu of toolUses) {
-      const deptId = tu.name.replace("consult_", "");
-      const instruction = tu.input?.instruction || "";
-      const responseText = await callDepartment(deptId, instruction);
-      appendDeptLog(deptId, instruction, responseText);
-      consultedAll.push(deptId);
+      let responseText;
+      if (tu.name === "get_archived_day") {
+        const date = (tu.input?.date || "").trim();
+        const day = store.archive?.[date];
+        if (!day) {
+          responseText = `لا يوجد أرشيف محفوظ لتاريخ ${date}. الأرشيف يبدأ من اليوم الذي فُعّل فيه هذا النظام؛ أي تاريخ قبل ذلك غير متاح.`;
+        } else {
+          const parts = [];
+          if (day.dailyBriefing) parts.push(`إحاطة الصباح (${date}):\n${day.dailyBriefing.text}`);
+          if (day.competitorReport) parts.push(`تقرير المنافسين (${date}):\n${day.competitorReport.text}`);
+          if (day.secretaryBriefing) parts.push(`الإحاطة الشخصية (${date}):\n${day.secretaryBriefing.text}`);
+          responseText = parts.join("\n\n---\n\n");
+        }
+      } else {
+        const deptId = tu.name.replace("consult_", "");
+        const instruction = tu.input?.instruction || "";
+        responseText = await callDepartment(deptId, instruction);
+        appendDeptLog(deptId, instruction, responseText);
+        consultedAll.push(deptId);
+      }
       toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: responseText });
     }
     messages = [...messages, { role: "user", content: toolResults }];
@@ -495,6 +524,87 @@ async function runGM(userText, displayText) {
   return { reply, depts };
 }
 
+// ---------------------------------------------------------------------------
+// Monthly price-comparison chart — one data point per month: our average
+// Umrah package price (computed directly from the pricing sheet) vs the
+// average competitor Umrah price (asked from the strategy department, based
+// on whatever competitor data it currently has).
+// ---------------------------------------------------------------------------
+function parseCsvLine(line) {
+  const cells = [];
+  let cur = "", inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+    if (ch === "," && !inQuotes) { cells.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  cells.push(cur);
+  return cells;
+}
+
+async function computeOwnUmrahAveragePrice() {
+  const res = await fetch(DEPTS.finance.sheetUrl);
+  if (!res.ok) throw new Error("تعذر قراءة شيت الأسعار");
+  const lines = (await res.text()).split("\n").filter((l) => l.trim());
+  if (lines.length < 2) throw new Error("الشيت فارغ");
+  const header = parseCsvLine(lines[0]).map((h) => h.trim());
+  const typeIdx = header.findIndex((h) => h === "Type");
+  const priceIdx = header.findIndex((h) => h.includes("سعر شخصين"));
+  if (typeIdx === -1 || priceIdx === -1) throw new Error("تعذر إيجاد أعمدة النوع أو السعر بالشيت");
+
+  const prices = [];
+  for (const line of lines.slice(1)) {
+    const cells = parseCsvLine(line);
+    const type = (cells[typeIdx] || "").trim();
+    if (!type.includes("عمرة")) continue;
+    const price = parseFloat((cells[priceIdx] || "").replace(/[^\d.]/g, ""));
+    if (!isNaN(price) && price > 0) prices.push(price);
+  }
+  if (!prices.length) throw new Error("لا توجد باقات عمرة مسعّرة بالشيت حاليًا");
+  return prices.reduce((a, b) => a + b, 0) / prices.length;
+}
+
+async function computeCompetitorUmrahAveragePrice() {
+  const reply = await callDepartment(
+    "strategy",
+    "بناءً على أحدث بيانات المنافسين المتوفرة لديك (منشوراتهم وقراءة الأسعار من صورهم)، ما هو متوسط سعر باقة عمرة للشخص الواحد بالدرهم الإماراتي عند المنافسين حاليًا؟ أجب برقم واحد فقط بدون أي نص أو رمز عملة أو شرح، مثال: 2150"
+  );
+  const match = (reply || "").match(/[\d,]+(\.\d+)?/);
+  if (!match) return null;
+  const num = parseFloat(match[0].replace(/,/g, ""));
+  return isNaN(num) ? null : num;
+}
+
+function monthKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+async function generateMonthlyPricePoint() {
+  if (!store.priceHistory) store.priceHistory = [];
+  const key = monthKey();
+  const [ourAvg, competitorAvg] = await Promise.all([
+    computeOwnUmrahAveragePrice().catch((e) => { console.error("[price-history] own avg failed:", e.message); return null; }),
+    computeCompetitorUmrahAveragePrice().catch((e) => { console.error("[price-history] competitor avg failed:", e.message); return null; }),
+  ]);
+  const point = { month: key, ourAvg, competitorAvg, ts: Date.now() };
+  const existingIdx = store.priceHistory.findIndex((p) => p.month === key);
+  if (existingIdx >= 0) store.priceHistory[existingIdx] = point;
+  else store.priceHistory.push(point);
+  store.priceHistory.sort((a, b) => a.month.localeCompare(b.month));
+  saveStore(store);
+  return point;
+}
+
+// Archive — each day's briefing/report is kept under its own dated key
+// instead of overwriting the previous day's, so the GM can actually look
+// back at a specific past date instead of only ever seeing "today".
+function archiveEntry(kind, entry) {
+  if (!store.archive) store.archive = {};
+  if (!store.archive[entry.day]) store.archive[entry.day] = {};
+  store.archive[entry.day][kind] = entry;
+}
+
 async function generateDailyBriefing() {
   // The GM writes the briefing itself (so it lands in the GM conversation and
   // stays in its memory), grounded in the competitor report the strategy
@@ -505,6 +615,7 @@ async function generateDailyBriefing() {
   }
   const result = await runGM(prompt, "إحاطة الصباح");
   store.dailyBriefing = { text: result.reply, depts: result.depts, ts: Date.now(), day: todayKey() };
+  archiveEntry("dailyBriefing", store.dailyBriefing);
   saveStore(store);
   return store.dailyBriefing;
 }
@@ -518,6 +629,7 @@ async function generateCompetitorReport() {
     "أعدّ تقريرًا تنافسيًا اليوم: قارن أسعار باقات العمرة لدينا بأسعار المنافسين الظاهرة في منشوراتهم الحالية. اذكر الأسعار المرصودة لكل منافس، ثم وضّح موقعنا السعري مقابلهم، واختم بتوصية عملية واحدة."
   );
   store.competitorReport = { text: reply, ts: Date.now(), day: todayKey() };
+  archiveEntry("competitorReport", store.competitorReport);
   saveStore(store);
   return store.competitorReport;
 }
@@ -543,6 +655,7 @@ async function generateSecretaryBriefing() {
   });
   const text = finalTextOf(res.content) || "تعذر تجهيز الإحاطة الشخصية اليوم.";
   store.secretaryBriefing = { text, ts: Date.now(), day: todayKey() };
+  archiveEntry("secretaryBriefing", store.secretaryBriefing);
   saveStore(store);
   return store.secretaryBriefing;
 }
@@ -655,6 +768,7 @@ app.get("/api/state", (req, res) => {
     dailyBriefing: store.dailyBriefing,
     secretaryBriefing: store.secretaryBriefing,
     competitorReport: store.competitorReport,
+    priceHistory: store.priceHistory || [],
   });
 });
 
@@ -749,8 +863,13 @@ app.get("/api/competitor-report/refresh", (req, res) => {
   res.json({ jobId });
 });
 
+app.get("/api/price-history/refresh", (req, res) => {
+  const jobId = startJob(() => generateMonthlyPricePoint());
+  res.json({ jobId });
+});
+
 app.get("/api/reset", (req, res) => {
-  store = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null, competitorReport: null };
+  store = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null, competitorReport: null, archive: {}, priceHistory: [] };
   saveStore(store);
   res.json({ ok: true });
 });
@@ -770,6 +889,10 @@ cron.schedule("0 4 * * *", async () => {
   try { await generateDailyBriefing(); } catch (e) { console.error("[cron] daily briefing failed:", e.message); }
   console.log("[cron] generating secretary briefing…");
   try { await generateSecretaryBriefing(); } catch (e) { console.error("[cron] secretary briefing failed:", e.message); }
+  if (new Date().getDate() === 1) {
+    console.log("[cron] generating monthly price point…");
+    try { await generateMonthlyPricePoint(); } catch (e) { console.error("[cron] price point failed:", e.message); }
+  }
 });
 
 const PORT = process.env.PORT || 3000;
