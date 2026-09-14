@@ -122,7 +122,29 @@ ${COMM_CONTEXT}
 أنت عضو فعلي من فريق Loop، تتحدث بصيغة "نحن" لا "أنتم"، وتقدّم تقاريرك مباشرة للمدير العام.
 مسؤوليتك: ضبط الإيرادات والتكاليف لكل باقة على حدة، مطابقة المقبوضات بالحجوزات، رصد أي فروقات أو تسريب مالي (باقة تُباع بأقل من تكلفتها، خصم غير مبرر، مصروف بلا سند)، والتأكد من سلامة هوامش الربح فعليًا لا نظريًا.
 دورك رقابي لا تسويقي: تشير للأرقام التي لا تتطابق وتطلب تفسيرها بدل تمريرها. إن لم تتوفر لديك بيانات التكاليف الفعلية، وضّح ذلك واطلبها صراحة بدل افتراضها.
-أجب كرئيس محاسبة فعلي، بأرقام محددة حين تتوفر، بالعربية، بإيجاز تنفيذي (فقرة أو فقرتين).`,
+عند الطلب منك صياغة فاتورة رسمية، أخرجها كنص منظم جاهز للنسخ مباشرة، بالتنسيق التالي بالضبط (املأ الحقول المتاحة لديك من السياق، واترك أي حقل غير متوفر بوضوح كـ"[يُستكمل]" بدل اختلاقه):
+
+فاتورة — Loop Travel & Tourism
+رقم الفاتورة: [يُستكمل]
+التاريخ: [يُستكمل]
+------------------------------
+بيانات العميل:
+الاسم:
+جهة الاتصال:
+------------------------------
+البنود:
+الوصف | الكمية | سعر الوحدة | الإجمالي
+------------------------------
+الإجمالي الفرعي:
+الضريبة/الرسوم (إن وجدت):
+الإجمالي الكلي:
+------------------------------
+طريقة الدفع:
+ملاحظات:
+------------------------------
+Loop Travel & Tourism | واتساب: +971 54 544 4003
+
+أجب كرئيس محاسبة فعلي، بأرقام محددة حين تتوفر، بالعربية، بإيجاز تنفيذي (فقرة أو فقرتين) في الردود العادية، وبالتنسيق الكامل أعلاه فقط عند طلب فاتورة تحديدًا.`,
   },
   sales: {
     name: "المبيعات", role: "رئيس المبيعات وتطوير الأعمال",
@@ -239,6 +261,18 @@ const TOOLS = [
         date: { type: "string", description: "التاريخ المطلوب بصيغة YYYY-M-D (مثال: 2026-9-5 ليوم 5 سبتمبر 2026)." },
       },
       required: ["date"],
+    },
+  },
+  {
+    name: "record_price_point",
+    description: "تسجيل نقطة بيانات هذا الشهر برسم مقارنة أسعار العمرة (متوسط سعرنا ومتوسط سعر المنافسين). استخدمها فقط بعد استشارة القسم المالي وقسم الاستراتيجية فعليًا للحصول على الرقمين، لا تستخدمها برقم مخمّن.",
+    input_schema: {
+      type: "object",
+      properties: {
+        ourAvg: { type: "number", description: "متوسط سعر باقاتنا للعمرة للشخص الواحد هذا الشهر بالدرهم، كما أفاد به القسم المالي." },
+        competitorAvg: { type: "number", description: "متوسط سعر باقات العمرة عند المنافسين للشخص الواحد هذا الشهر بالدرهم، كما أفاد به قسم الاستراتيجية." },
+      },
+      required: ["ourAvg", "competitorAvg"],
     },
   },
 ];
@@ -381,7 +415,7 @@ async function analyzeImageForPricing(imageUrl, caption) {
   }
 }
 
-async function callDepartment(deptId, instruction) {
+async function callDepartment(deptId, instruction, image) {
   const dept = DEPTS[deptId];
   let systemText = dept.system;
   if (dept.sheetUrl) {
@@ -444,7 +478,13 @@ async function callDepartment(deptId, instruction) {
   }
 
   try {
-    const res = await callClaude({ system: systemText, messages: [{ role: "user", content: instruction }] });
+    const content = image
+      ? [
+          { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
+          { type: "text", text: instruction || "افحص هذه الصورة (فاتورة أو مستند) واستخرج ما تحتاجه لعملك منها." },
+        ]
+      : instruction;
+    const res = await callClaude({ system: systemText, messages: [{ role: "user", content }] });
     return textOf(res.content) || "لا يوجد رد.";
   } catch {
     return "تعذر الوصول للقسم حاليًا.";
@@ -458,8 +498,14 @@ function appendDeptLog(deptId, instruction, response) {
   saveStore(store);
 }
 
-async function runGM(userText, displayText) {
-  let messages = [...store.gmMessages.slice(-16), { role: "user", content: userText }];
+async function runGM(userText, displayText, image) {
+  const userContent = image
+    ? [
+        { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
+        { type: "text", text: userText || "صف هذه الصورة ووضّح لي ما تفهمه منها، واسألني إن احتجت توضيحًا." },
+      ]
+    : userText;
+  let messages = [...store.gmMessages.slice(-16), { role: "user", content: userContent }];
   let finalText = null;
   let consultedAll = [];
 
@@ -502,6 +548,20 @@ async function runGM(userText, displayText) {
           if (day.secretaryBriefing) parts.push(`الإحاطة الشخصية (${date}):\n${day.secretaryBriefing.text}`);
           responseText = parts.join("\n\n---\n\n");
         }
+      } else if (tu.name === "record_price_point") {
+        const { ourAvg, competitorAvg } = tu.input || {};
+        if (typeof ourAvg !== "number" || typeof competitorAvg !== "number") {
+          responseText = "لم يتم التسجيل — يلزم تمرير ourAvg و competitorAvg كأرقام صالحة.";
+        } else {
+          if (!store.priceHistory) store.priceHistory = [];
+          const key = monthKey();
+          const point = { month: key, ourAvg, competitorAvg, ts: Date.now() };
+          const idx = store.priceHistory.findIndex((p) => p.month === key);
+          if (idx >= 0) store.priceHistory[idx] = point; else store.priceHistory.push(point);
+          store.priceHistory.sort((a, b) => a.month.localeCompare(b.month));
+          saveStore(store);
+          responseText = `تم تسجيل نقطة شهر ${key}: سعرنا ${ourAvg}، متوسط المنافسين ${competitorAvg}.`;
+        }
       } else {
         const deptId = tu.name.replace("consult_", "");
         const instruction = tu.input?.instruction || "";
@@ -514,10 +574,16 @@ async function runGM(userText, displayText) {
     messages = [...messages, { role: "user", content: toolResults }];
   }
 
-  store.gmMessages = messages.slice(-16);
+  // Keep the image out of persisted history — it already did its job this
+  // turn, and re-sending it on every future request would bloat storage and
+  // the context sent to Claude for no benefit.
+  store.gmMessages = messages.slice(-16).map((m) => {
+    if (!Array.isArray(m.content)) return m;
+    return { ...m, content: m.content.map((b) => (b.type === "image" ? { type: "text", text: "[صورة أرسلها نواف سابقًا]" } : b)) };
+  });
   const reply = finalText || "تم تنفيذ طلبك.";
   const depts = [...new Set(consultedAll)];
-  store.gmDisplayLog.push({ role: "user", text: displayText || userText, ts: Date.now() });
+  store.gmDisplayLog.push({ role: "user", text: displayText || userText || "📎 صورة", ts: Date.now() });
   store.gmDisplayLog.push({ role: "gm", text: reply, depts, ts: Date.now() });
   store.gmDisplayLog = store.gmDisplayLog.slice(-100);
   saveStore(store);
@@ -581,19 +647,17 @@ function monthKey(date = new Date()) {
 }
 
 async function generateMonthlyPricePoint() {
+  // The GM performs this itself — consults finance and strategy for real
+  // numbers, then records them via the record_price_point tool — instead of
+  // the server silently computing it behind the scenes.
+  const result = await runGM(
+    "سجّل نقطة بيانات هذا الشهر لرسم مقارنة أسعار العمرة. استشر القسم المالي ليعطيك متوسط سعر باقاتنا للعمرة للشخص الواحد هذا الشهر، واستشر قسم الاستراتيجية ليعطيك متوسط سعر باقات العمرة عند المنافسين للشخص الواحد هذا الشهر. بعد استلام الرقمين الفعليين من القسمين، استخدم أداة record_price_point لتسجيلهما. لا تسجّل أي رقم لم يصلك من القسمين فعليًا.",
+    "تحديث رسم أسعار العمرة الشهري"
+  );
   if (!store.priceHistory) store.priceHistory = [];
   const key = monthKey();
-  const [ourAvg, competitorAvg] = await Promise.all([
-    computeOwnUmrahAveragePrice().catch((e) => { console.error("[price-history] own avg failed:", e.message); return null; }),
-    computeCompetitorUmrahAveragePrice().catch((e) => { console.error("[price-history] competitor avg failed:", e.message); return null; }),
-  ]);
-  const point = { month: key, ourAvg, competitorAvg, ts: Date.now() };
-  const existingIdx = store.priceHistory.findIndex((p) => p.month === key);
-  if (existingIdx >= 0) store.priceHistory[existingIdx] = point;
-  else store.priceHistory.push(point);
-  store.priceHistory.sort((a, b) => a.month.localeCompare(b.month));
-  saveStore(store);
-  return point;
+  const point = store.priceHistory.find((p) => p.month === key) || null;
+  return point || { month: key, ourAvg: null, competitorAvg: null, ts: Date.now(), note: result.reply };
 }
 
 // Archive — each day's briefing/report is kept under its own dated key
@@ -811,6 +875,16 @@ app.get("/api/chat", async (req, res) => {
   res.json({ jobId: id });
 });
 
+// POST variant that carries an image — GET/query-string can't hold a base64
+// photo, so this exists alongside the plain-text GET route above.
+app.post("/api/chat-image", async (req, res) => {
+  const message = (req.body?.message || "").toString().trim();
+  const image = req.body?.image;
+  if (!image?.data || !image?.mediaType) return res.status(400).json({ error: "image is required" });
+  const id = startJob(() => runGM(message, message || "📎 صورة", image));
+  res.json({ jobId: id });
+});
+
 app.get("/api/department/:id", async (req, res) => {
   const { id } = req.params;
   const message = (req.query.message || "").toString().trim();
@@ -819,6 +893,22 @@ app.get("/api/department/:id", async (req, res) => {
   const jobId = startJob(async () => {
     const responseText = await callDepartment(id, message);
     appendDeptLog(id, message, responseText);
+    return { reply: responseText };
+  });
+  res.json({ jobId });
+});
+
+// POST variant that carries an image (e.g. an invoice or ID card) to a
+// specific department.
+app.post("/api/department/:id/image", async (req, res) => {
+  const { id } = req.params;
+  const message = (req.body?.message || "").toString().trim();
+  const image = req.body?.image;
+  if (!DEPTS[id]) return res.status(404).json({ error: "unknown department" });
+  if (!image?.data || !image?.mediaType) return res.status(400).json({ error: "image is required" });
+  const jobId = startJob(async () => {
+    const responseText = await callDepartment(id, message, image);
+    appendDeptLog(id, message || "📎 صورة", responseText);
     return { reply: responseText };
   });
   res.json({ jobId });
