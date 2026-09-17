@@ -163,6 +163,8 @@ const GM_SYSTEM = `أنت المدير العام لشركة Loop Travel & Touri
 ${LOOP_CONTEXT}
 عندما يطلب منك نواف تحديثًا أو استشارة تخص الشركة وتحتاج خبرة قسم معين (المالية، التسويق، الاستراتيجية، الاتصال، المحاسبة والرقابة المالية، المبيعات وتطوير الأعمال)، استخدم أداة الاستشارة الخاصة بذلك القسم، ويمكنك استشارة أكثر من قسم بنفس الرسالة. بعد استلام ردود الأقسام، لخّصها بأسلوب تنفيذي واضح ومباشر، وادمجها في توصية واحدة متماسكة — وأنت من يملك القرار النهائي بصفتك المدير العام.
 لا تختلق أرقامًا أو حقائق عن الشركة؛ إن لم تكن المعلومة متوفرة، وضّح ذلك. تحدث بالعربية دائمًا.
+تقدر ترسل بريدًا إلكترونيًا فعليًا نيابة عن نواف باستخدام أداة send_email — استخدمها فقط عندما يطلب صراحة إرسال بريد، وبعنوان بريد ذكره هو بوضوح؛ لا ترسل بريدًا من تلقاء نفسك ولا لعنوان لم يُذكر لك.
+تقدر أيضًا تطّلع على بريده الإلكتروني (Outlook) باستخدام أداة check_email — استخدمها عندما يسألك عن بريده، أو عن عروض/إعلانات جديدة من شركات نتعامل معها، وأبرز له أي عرض يستحق الانتباه.
 مهم جدًا: ردّك النهائي يجب أن يبدأ مباشرة بالمعلومة أو التوصية نفسها — بدون أي مقدمة تشرح خطواتك أو تسرد أنك استشرت قسمًا معينًا.`;
 
 // ---------------------------------------------------------------------------
@@ -275,7 +277,31 @@ const TOOLS = [
       required: ["ourAvg", "competitorAvg"],
     },
   },
+  {
+    name: "send_email",
+    description: "إرسال بريد إلكتروني فعلي نيابة عن نواف لشخص محدد. استخدمها فقط عندما يطلب نواف صراحة إرسال بريد، وبعنوان بريد صريح ذكره هو — لا ترسل بريدًا لعنوان لم يُذكر لك صراحة، ولا ترسله بدون طلب واضح.",
+    input_schema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "عنوان البريد الإلكتروني للمستلم، كما ذكره نواف صراحة." },
+        subject: { type: "string", description: "عنوان الرسالة." },
+        body: { type: "string", description: "نص الرسالة الكامل." },
+      },
+      required: ["to", "subject", "body"],
+    },
+  },
+  {
+    name: "check_email",
+    description: "الاطلاع على أحدث رسائل بريد نواف الإلكتروني (Outlook) — خصوصًا للبحث عن عروض أو إعلانات من الشركات التي نتعامل معها. استخدمها عندما يسألك نواف عن بريده أو عن عروض جديدة من موردين/شركاء، أو ضمن الإحاطة الصباحية.",
+    input_schema: {
+      type: "object",
+      properties: {
+        count: { type: "number", description: "عدد أحدث الرسائل المطلوب استعراضها. افتراضيًا 10." },
+      },
+    },
+  },
 ];
+
 
 // ---------------------------------------------------------------------------
 // Claude call helpers
@@ -415,7 +441,124 @@ async function analyzeImageForPricing(imageUrl, caption) {
   }
 }
 
-async function callDepartment(deptId, instruction, image) {
+// ---------------------------------------------------------------------------
+// Outlook email reading — OAuth2 with Microsoft Graph, so the GM can check
+// Nawaf's inbox for supplier/partner announcements. A one-time login grants
+// a refresh token, stored persistently, used to fetch new access tokens
+// without asking him to log in again.
+// ---------------------------------------------------------------------------
+const OUTLOOK_CLIENT_ID = process.env.OUTLOOK_CLIENT_ID;
+const OUTLOOK_CLIENT_SECRET = process.env.OUTLOOK_CLIENT_SECRET;
+const OUTLOOK_REDIRECT_URI = process.env.OUTLOOK_REDIRECT_URI || "https://loop-gm-server-1.onrender.com/auth/outlook/callback";
+const OUTLOOK_SCOPES = "offline_access Mail.Read Mail.Send User.Read";
+
+async function outlookTokenRequest(params) {
+  const res = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.error || "OAuth token request failed");
+  return data;
+}
+
+async function getOutlookAccessToken() {
+  if (!store.outlookRefreshToken) throw new Error("Outlook غير مربوط بعد — لازم تسجّل دخول من الرابط أولًا.");
+  const data = await outlookTokenRequest({
+    client_id: OUTLOOK_CLIENT_ID,
+    client_secret: OUTLOOK_CLIENT_SECRET,
+    grant_type: "refresh_token",
+    refresh_token: store.outlookRefreshToken,
+    scope: OUTLOOK_SCOPES,
+  });
+  if (data.refresh_token) {
+    store.outlookRefreshToken = data.refresh_token; // Microsoft sometimes rotates it
+    saveStore(store);
+  }
+  return data.access_token;
+}
+
+async function fetchRecentEmails(count = 10) {
+  const accessToken = await getOutlookAccessToken();
+  const url = `https://graph.microsoft.com/v1.0/me/messages?$top=${count}&$select=subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || "تعذر جلب البريد");
+  return (data.value || []).map((m) => ({
+    from: m.from?.emailAddress?.name || m.from?.emailAddress?.address || "غير معروف",
+    subject: m.subject || "(بدون عنوان)",
+    preview: (m.bodyPreview || "").slice(0, 200),
+    receivedAt: m.receivedDateTime,
+  }));
+}
+
+async function sendOutlookEmail({ to, subject, body }) {
+  const accessToken = await getOutlookAccessToken();
+  const res = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: {
+        subject,
+        body: { contentType: "Text", content: body },
+        toRecipients: [{ emailAddress: { address: to } }],
+      },
+      saveToSentItems: true,
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`(${res.status}) ${detail.slice(0, 200)}`);
+  }
+}
+
+
+// Real email sending via Resend — a free transactional email API (no
+// credit card, 3,000/month). Without RESEND_API_KEY set, the tool reports
+// that email isn't configured yet instead of silently failing.
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const RESEND_FROM = process.env.RESEND_FROM || "Loop Travel <onboarding@resend.dev>";
+
+async function sendEmail({ to, subject, body }) {
+  // Prefer Outlook — sends from Nawaf's real connected address instead of a
+  // generic/unverified one. Falls back to Resend only if Outlook isn't
+  // connected or its send attempt fails.
+  if (store.outlookRefreshToken) {
+    try {
+      await sendOutlookEmail({ to, subject, body });
+      return { ok: true, message: `تم إرسال البريد إلى ${to} بنجاح عبر Outlook.` };
+    } catch (e) {
+      if (!RESEND_API_KEY) return { ok: false, message: `فشل الإرسال عبر Outlook: ${e.message}` };
+      // fall through to Resend below
+    }
+  }
+
+  if (!RESEND_API_KEY) {
+    return { ok: false, message: "البريد الإلكتروني غير مفعّل بعد — اربط Outlook أو أضف RESEND_API_KEY." };
+  }
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: RESEND_FROM,
+        to: [to],
+        subject,
+        text: body,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return { ok: false, message: `فشل الإرسال (${res.status}): ${detail.slice(0, 200)}` };
+    }
+    return { ok: true, message: `تم إرسال البريد إلى ${to} بنجاح عبر Resend.` };
+  } catch (e) {
+    return { ok: false, message: `تعذر الإرسال: ${e.message}` };
+  }
+}
+
+async function callDepartment(deptId, instruction, images) {
   const dept = DEPTS[deptId];
   let systemText = dept.system;
   if (dept.sheetUrl) {
@@ -478,10 +621,11 @@ async function callDepartment(deptId, instruction, image) {
   }
 
   try {
-    const content = image
+    const imgList = images ? (Array.isArray(images) ? images : [images]) : [];
+    const content = imgList.length
       ? [
-          { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
-          { type: "text", text: instruction || "افحص هذه الصورة (فاتورة أو مستند) واستخرج ما تحتاجه لعملك منها." },
+          ...imgList.map((img) => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } })),
+          { type: "text", text: instruction || "افحص هذه الصور (فاتورة أو مستند) واستخرج ما تحتاجه لعملك منها." },
         ]
       : instruction;
     const res = await callClaude({ system: systemText, messages: [{ role: "user", content }] });
@@ -498,11 +642,12 @@ function appendDeptLog(deptId, instruction, response) {
   saveStore(store);
 }
 
-async function runGM(userText, displayText, image) {
-  const userContent = image
+async function runGM(userText, displayText, images) {
+  const imgList = images ? (Array.isArray(images) ? images : [images]) : [];
+  const userContent = imgList.length
     ? [
-        { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
-        { type: "text", text: userText || "صف هذه الصورة ووضّح لي ما تفهمه منها، واسألني إن احتجت توضيحًا." },
+        ...imgList.map((img) => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } })),
+        { type: "text", text: userText || "صف هذه الصور ووضّح لي ما تفهمه منها، واسألني إن احتجت توضيحًا." },
       ]
     : userText;
   let messages = [...store.gmMessages.slice(-16), { role: "user", content: userContent }];
@@ -561,6 +706,23 @@ async function runGM(userText, displayText, image) {
           store.priceHistory.sort((a, b) => a.month.localeCompare(b.month));
           saveStore(store);
           responseText = `تم تسجيل نقطة شهر ${key}: سعرنا ${ourAvg}، متوسط المنافسين ${competitorAvg}.`;
+        }
+      } else if (tu.name === "send_email") {
+        const { to, subject, body } = tu.input || {};
+        if (!to || !subject || !body) {
+          responseText = "لم يُرسل البريد — الحقول to وsubject وbody مطلوبة كلها.";
+        } else {
+          const result = await sendEmail({ to, subject, body });
+          responseText = result.message;
+        }
+      } else if (tu.name === "check_email") {
+        try {
+          const emails = await fetchRecentEmails(tu.input?.count || 10);
+          responseText = emails.length
+            ? emails.map((m) => `- من: ${m.from} | الموضوع: ${m.subject} | ${new Date(m.receivedAt).toLocaleString("ar-AE")}\n  ${m.preview}`).join("\n\n")
+            : "لا توجد رسائل حديثة.";
+        } catch (e) {
+          responseText = `تعذر الوصول للبريد: ${e.message}`;
         }
       } else {
         const deptId = tu.name.replace("consult_", "");
@@ -673,7 +835,7 @@ async function generateDailyBriefing() {
   // The GM writes the briefing itself (so it lands in the GM conversation and
   // stays in its memory), grounded in the competitor report the strategy
   // department produced earlier in the same morning run.
-  let prompt = "اكتب لنواف إحاطته الصباحية التنفيذية عن وضع الشركة اليوم. نسّق مع الأقسام حسب الحاجة، وأبرز ما يستحق انتباهه الآن.";
+  let prompt = "اكتب لنواف إحاطته الصباحية التنفيذية عن وضع الشركة اليوم. نسّق مع الأقسام حسب الحاجة، وأبرز ما يستحق انتباهه الآن. إن كان بريده الإلكتروني مربوطًا، تحقق منه بأداة check_email وأبرز أي عرض أو إعلان مهم وصل من شركات نتعامل معها.";
   if (store.competitorReport?.day === todayKey()) {
     prompt += `\n\nهذا تقرير المنافسين الذي أعدّه قسم الاستراتيجية صباح اليوم — ادمج أهم ما فيه في إحاطتك بصفتك مطّلعًا عليه، ولا تكرره حرفيًا:\n${store.competitorReport.text}`;
   }
@@ -740,6 +902,40 @@ app.use(cors({
 app.use(express.json({ type: () => true }));
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// One-time Outlook login flow. Nawaf visits /auth/outlook/start once, signs
+// in with Microsoft, and this callback exchanges the resulting code for a
+// refresh token stored persistently — no further logins needed after that.
+app.get("/auth/outlook/start", (req, res) => {
+  if (!OUTLOOK_CLIENT_ID) return res.status(500).send("OUTLOOK_CLIENT_ID غير مضاف بعد على السيرفر.");
+  const url = new URL("https://login.microsoftonline.com/common/oauth2/v2.0/authorize");
+  url.searchParams.set("client_id", OUTLOOK_CLIENT_ID);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("redirect_uri", OUTLOOK_REDIRECT_URI);
+  url.searchParams.set("scope", OUTLOOK_SCOPES);
+  url.searchParams.set("response_mode", "query");
+  res.redirect(url.toString());
+});
+
+app.get("/auth/outlook/callback", async (req, res) => {
+  const { code, error, error_description } = req.query;
+  if (error) return res.status(400).send(`<div dir="rtl" style="font-family:sans-serif;padding:40px;">تعذر الربط: ${error_description || error}</div>`);
+  try {
+    const data = await outlookTokenRequest({
+      client_id: OUTLOOK_CLIENT_ID,
+      client_secret: OUTLOOK_CLIENT_SECRET,
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: OUTLOOK_REDIRECT_URI,
+      scope: OUTLOOK_SCOPES,
+    });
+    store.outlookRefreshToken = data.refresh_token;
+    saveStore(store);
+    res.send(`<div dir="rtl" style="font-family:sans-serif;padding:40px;text-align:center;">✅ تم ربط بريدك بنجاح. ارجع للمنصة وجرّب تسأل المدير العام عن بريدك.</div>`);
+  } catch (e) {
+    res.status(500).send(`<div dir="rtl" style="font-family:sans-serif;padding:40px;">فشل الربط: ${e.message}</div>`);
+  }
+});
 
 // A real, live Privacy Policy page — Meta requires this URL before an app
 // can go Live and before App Review will accept a submission.
@@ -879,9 +1075,11 @@ app.get("/api/chat", async (req, res) => {
 // photo, so this exists alongside the plain-text GET route above.
 app.post("/api/chat-image", async (req, res) => {
   const message = (req.body?.message || "").toString().trim();
-  const image = req.body?.image;
-  if (!image?.data || !image?.mediaType) return res.status(400).json({ error: "image is required" });
-  const id = startJob(() => runGM(message, message || "📎 صورة", image));
+  const images = req.body?.images || (req.body?.image ? [req.body.image] : []);
+  if (!images.length || images.some((img) => !img?.data || !img?.mediaType)) {
+    return res.status(400).json({ error: "at least one valid image is required" });
+  }
+  const id = startJob(() => runGM(message, message || `📎 ${images.length > 1 ? images.length + " صور" : "صورة"}`, images));
   res.json({ jobId: id });
 });
 
@@ -903,12 +1101,14 @@ app.get("/api/department/:id", async (req, res) => {
 app.post("/api/department/:id/image", async (req, res) => {
   const { id } = req.params;
   const message = (req.body?.message || "").toString().trim();
-  const image = req.body?.image;
+  const images = req.body?.images || (req.body?.image ? [req.body.image] : []);
   if (!DEPTS[id]) return res.status(404).json({ error: "unknown department" });
-  if (!image?.data || !image?.mediaType) return res.status(400).json({ error: "image is required" });
+  if (!images.length || images.some((img) => !img?.data || !img?.mediaType)) {
+    return res.status(400).json({ error: "at least one valid image is required" });
+  }
   const jobId = startJob(async () => {
-    const responseText = await callDepartment(id, message, image);
-    appendDeptLog(id, message || "📎 صورة", responseText);
+    const responseText = await callDepartment(id, message, images);
+    appendDeptLog(id, message || `📎 ${images.length > 1 ? images.length + " صور" : "صورة"}`, responseText);
     return { reply: responseText };
   });
   res.json({ jobId });
