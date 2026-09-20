@@ -302,7 +302,7 @@ const TOOLS = [
       properties: {
         to: { type: "string", description: "عنوان البريد الإلكتروني للمستلم، كما ذكره نواف صراحة." },
         subject: { type: "string", description: "عنوان الرسالة." },
-        body: { type: "string", description: "نص الرسالة الكامل." },
+        body: { type: "string", description: "نص الرسالة الكامل. اكتبه بفقرات منظمة، وافصل بين كل فقرة والتي بعدها بسطر فارغ تمامًا (سطرين جديدين متتاليين)، بحيث تظهر مرتبة وسهلة القراءة — لا تكتبها كتلة نص واحدة متصلة." },
       },
       required: ["to", "subject", "body"],
     },
@@ -544,13 +544,22 @@ const EMAIL_SIGNATURE_HTML = `
   <img src="${LOGO_PUBLIC_URL}" alt="Loop Travel & Tourism" style="height:40px;display:block;margin-bottom:8px;" />
   <div style="font-size:13px;color:#333;font-weight:bold;">Nawaf Alzaabi</div>
   <div style="font-size:12px;color:#666;">Founder</div>
-  <div style="font-size:12px;color:#666;margin-top:4px;">وكالة سفريات وسياحة — الإمارات العربية المتحدة</div>
-  <div style="font-size:12px;color:#666;">واتساب: +971 54 544 4003</div>
+  <div style="font-size:12px;color:#666;margin-top:4px;">Travel & Tourism Agency — United Arab Emirates</div>
+  <div style="font-size:12px;color:#666;">WhatsApp: +971 54 544 4003</div>
 </div>`;
 
 function toEmailHtml(bodyText) {
-  const escaped = String(bodyText || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;white-space:pre-wrap;">${escaped}</div>${EMAIL_SIGNATURE_HTML}`;
+  // Real <p>/<br> tags instead of relying on CSS white-space — some webmail
+  // clients (Outlook.com's reader included) don't reliably honor pre-wrap,
+  // but literal paragraph/line-break tags always render correctly.
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const paragraphs = String(bodyText || "")
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `<p style="margin:0 0 14px;">${esc(p).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+  return `<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6;">${paragraphs}</div>${EMAIL_SIGNATURE_HTML}`;
 }
 
 async function sendEmail({ to, subject, body }) {
