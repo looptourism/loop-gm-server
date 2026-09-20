@@ -660,6 +660,18 @@ function appendDeptLog(deptId, instruction, response) {
   saveStore(store);
 }
 
+// Trimming to the last N messages can accidentally cut right between an
+// assistant's tool_use and the user-role tool_result that must immediately
+// follow it — Claude rejects a tool_result with no matching tool_use before
+// it. Drop any such orphaned leading tool_result after slicing.
+function trimMessages(messages, maxCount) {
+  let trimmed = messages.slice(-maxCount);
+  while (trimmed.length && Array.isArray(trimmed[0].content) && trimmed[0].content.some((b) => b.type === "tool_result")) {
+    trimmed = trimmed.slice(1);
+  }
+  return trimmed;
+}
+
 async function runGM(userText, displayText, images) {
   const imgList = images ? (Array.isArray(images) ? images : [images]) : [];
   const userContent = imgList.length
@@ -668,7 +680,7 @@ async function runGM(userText, displayText, images) {
         { type: "text", text: userText || "صف هذه الصور ووضّح لي ما تفهمه منها، واسألني إن احتجت توضيحًا." },
       ]
     : userText;
-  let messages = [...store.gmMessages.slice(-16), { role: "user", content: userContent }];
+  let messages = [...trimMessages(store.gmMessages, 16), { role: "user", content: userContent }];
   let finalText = null;
   let consultedAll = [];
 
@@ -757,7 +769,7 @@ async function runGM(userText, displayText, images) {
   // Keep the image out of persisted history — it already did its job this
   // turn, and re-sending it on every future request would bloat storage and
   // the context sent to Claude for no benefit.
-  store.gmMessages = messages.slice(-16).map((m) => {
+  store.gmMessages = trimMessages(messages, 16).map((m) => {
     if (!Array.isArray(m.content)) return m;
     return { ...m, content: m.content.map((b) => (b.type === "image" ? { type: "text", text: "[صورة أرسلها نواف سابقًا]" } : b)) };
   });
