@@ -9,6 +9,23 @@ const Anthropic = require("@anthropic-ai/sdk");
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = "claude-sonnet-4-6";
 
+// Every external network call in this file goes through this — without it,
+// a single stalled connection (Outlook, Meta, Apify, Resend, Sheets — any of
+// them) can hang a job forever with no way to recover, which is exactly what
+// "the GM keeps thinking" looks like from the browser.
+async function fetchWithTimeout(url, opts = {}, ms = 20000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error(`انتهت المهلة (${ms / 1000}ث) بدون رد من ${new URL(url).hostname}`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Storage — persisted to Upstash Redis (a free, permanent, external key-value
 // store) instead of the local disk. Render's free tier wipes local files
@@ -29,7 +46,7 @@ const EMPTY_STORE = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBrief
 async function loadStoreRemote() {
   if (!UPSTASH_URL || !UPSTASH_TOKEN) return null;
   try {
-    const res = await fetch(`${UPSTASH_URL}/get/${STORE_KEY}`, { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } });
+    const res = await fetchWithTimeout(`${UPSTASH_URL}/get/${STORE_KEY}`, { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } });
     const data = await res.json();
     return data.result ? JSON.parse(data.result) : null;
   } catch {
@@ -40,7 +57,7 @@ async function loadStoreRemote() {
 function saveStoreRemote(storeObj) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(storeObj, null, 2), "utf8"); // local fallback
   if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
-  fetch(`${UPSTASH_URL}/set/${STORE_KEY}`, {
+  fetchWithTimeout(`${UPSTASH_URL}/set/${STORE_KEY}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
     body: JSON.stringify(storeObj),
@@ -188,7 +205,7 @@ function findTicker(result, tokens) {
 }
 
 async function fetchKrakenData() {
-  const res = await fetch("https://api.kraken.com/0/public/Ticker?pair=XBTUSD,ETHUSD,SOLUSD,ATOMUSD,XLMUSD,DOGEUSD,SUIUSD,FETUSD,PAXGUSD");
+  const res = await fetchWithTimeout("https://api.kraken.com/0/public/Ticker?pair=XBTUSD,ETHUSD,SOLUSD,ATOMUSD,XLMUSD,DOGEUSD,SUIUSD,FETUSD,PAXGUSD");
   const json = await res.json();
   if (json.error?.length) throw new Error(json.error.join("; "));
   const result = json.result;
@@ -317,9 +334,10 @@ function finalTextOf(content) {
 }
 
 async function callClaude({ system, messages, tools }) {
-  const res = await anthropic.messages.create({
-    model: MODEL, max_tokens: 1000, system, messages, ...(tools ? { tools } : {}),
-  });
+  const res = await anthropic.messages.create(
+    { model: MODEL, max_tokens: 1000, system, messages, ...(tools ? { tools } : {}) },
+    { timeout: 60000 }
+  );
   return res;
 }
 
@@ -336,7 +354,7 @@ async function metaGraph(path, params = {}) {
   const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   url.searchParams.set("access_token", META_TOKEN);
-  const res = await fetch(url.toString());
+  const res = await fetchWithTimeout(url.toString());
   const data = await res.json();
   if (!res.ok || data.error) throw new Error(data.error?.message || `Graph API error (${res.status})`);
   return data;
@@ -369,7 +387,7 @@ const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
 async function fetchCompetitorProfile(username) {
   if (!APIFY_TOKEN) return null;
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
       {
         method: "POST",
@@ -418,7 +436,7 @@ function isUmrahPost(caption) {
 // browser artifact (CORS) — the server has no such restriction.
 async function analyzeImageForPricing(imageUrl, caption) {
   try {
-    const imgRes = await fetch(imageUrl);
+    const imgRes = await fetchWithTimeout(imageUrl);
     if (!imgRes.ok) throw new Error();
     const mediaType = imgRes.headers.get("content-type") || "image/jpeg";
     const buffer = Buffer.from(await imgRes.arrayBuffer());
@@ -453,7 +471,7 @@ const OUTLOOK_REDIRECT_URI = process.env.OUTLOOK_REDIRECT_URI || "https://loop-g
 const OUTLOOK_SCOPES = "offline_access Mail.Read Mail.Send User.Read";
 
 async function outlookTokenRequest(params) {
-  const res = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+  const res = await fetchWithTimeout("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(params),
@@ -482,7 +500,7 @@ async function getOutlookAccessToken() {
 async function fetchRecentEmails(count = 10) {
   const accessToken = await getOutlookAccessToken();
   const url = `https://graph.microsoft.com/v1.0/me/messages?$top=${count}&$select=subject,from,receivedDateTime,bodyPreview&$orderby=receivedDateTime desc`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || "تعذر جلب البريد");
   return (data.value || []).map((m) => ({
@@ -495,7 +513,7 @@ async function fetchRecentEmails(count = 10) {
 
 async function sendOutlookEmail({ to, subject, body }) {
   const accessToken = await getOutlookAccessToken();
-  const res = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+  const res = await fetchWithTimeout("https://graph.microsoft.com/v1.0/me/sendMail", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -538,7 +556,7 @@ async function sendEmail({ to, subject, body }) {
     return { ok: false, message: "البريد الإلكتروني غير مفعّل بعد — اربط Outlook أو أضف RESEND_API_KEY." };
   }
   try {
-    const res = await fetch("https://api.resend.com/emails", {
+    const res = await fetchWithTimeout("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -563,7 +581,7 @@ async function callDepartment(deptId, instruction, images) {
   let systemText = dept.system;
   if (dept.sheetUrl) {
     try {
-      const res = await fetch(dept.sheetUrl);
+      const res = await fetchWithTimeout(dept.sheetUrl);
       if (res.ok) {
         const csv = (await res.text()).split("\n").slice(0, 80).join("\n");
         systemText += `\n\nبيانات فعلية حديثة من ملف Loop (تنسيق CSV، الأعمدة: ${dept.sheetColumns}):\n${csv}\n\nاستخدم هذه الأرقام الفعلية متى كانت ذات صلة، ولا تخترع أرقامًا أخرى تخالفها.`;
@@ -772,7 +790,7 @@ function parseCsvLine(line) {
 }
 
 async function computeOwnUmrahAveragePrice() {
-  const res = await fetch(DEPTS.finance.sheetUrl);
+  const res = await fetchWithTimeout(DEPTS.finance.sheetUrl);
   if (!res.ok) throw new Error("تعذر قراءة شيت الأسعار");
   const lines = (await res.text()).split("\n").filter((l) => l.trim());
   if (lines.length < 2) throw new Error("الشيت فارغ");
@@ -1039,7 +1057,7 @@ app.get("/api/state", (req, res) => {
 // Async job pattern — every browser-facing request now returns *instantly*
 // with a job id; the slow work (Claude calls) runs in the background and the
 // frontend polls a fast status endpoint until it's done. This exists because
-// long-lived fetch() calls from the browser to this host were failing
+// long-lived fetchWithTimeout() calls from the browser to this host were failing
 // outright, while instant requests and direct URL navigation both worked —
 // so we simply stop making the browser hold a connection open for a while.
 // ---------------------------------------------------------------------------
