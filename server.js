@@ -7,6 +7,38 @@ const path = require("path");
 const Anthropic = require("@anthropic-ai/sdk");
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ---------------------------------------------------------------------------
+// Push notifications (Web Push + VAPID) — lets the server push a real device
+// notification (e.g. "قرار جديد ينتظر موافقتك") without the app being open.
+// ---------------------------------------------------------------------------
+const webpush = require("web-push");
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:info@loop.ae";
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
+
+async function sendPushToAll(title, body) {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return;
+  const subs = store.pushSubscriptions || [];
+  if (!subs.length) return;
+  const payload = JSON.stringify({ title, body });
+  const stillValid = [];
+  for (const sub of subs) {
+    try {
+      await webpush.sendNotification(sub, payload);
+      stillValid.push(sub);
+    } catch (e) {
+      if (e.statusCode !== 410 && e.statusCode !== 404) stillValid.push(sub); // keep unless expired/gone
+    }
+  }
+  if (stillValid.length !== subs.length) {
+    store.pushSubscriptions = stillValid;
+    saveStore(store);
+  }
+}
 const MODEL = "claude-sonnet-4-6";
 
 // Every external network call in this file goes through this — without it,
@@ -41,7 +73,16 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const STORE_KEY = "loop-gm-store";
-const EMPTY_STORE = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null, competitorReport: null, archive: {}, priceHistory: [] };
+const DEFAULT_SETTINGS = { budget: { used: 0, limit: 0 }, briefTime: "08:00", alerts: { fail: true, approval: true, report: false }, enabled: {}, defaultMargin: 20 };
+const DEFAULT_COMPETITORS = ["hejozati", "alsuwaidisons", "alkhalidiya_holidays"];
+const EMPTY_STORE = {
+  gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null,
+  competitorReport: null, archive: {}, priceHistory: [], payments: [], approvals: [], decided: [],
+  settings: { ...DEFAULT_SETTINGS },
+  customers: [], recurringPayments: [], bookings: [],
+  periodicReports: { weekly: null, monthly: null }, seasonalForecast: null, marketingContent: null,
+  pushSubscriptions: [], competitors: [...DEFAULT_COMPETITORS],
+};
 
 async function loadStoreRemote() {
   if (!UPSTASH_URL || !UPSTASH_TOKEN) return null;
@@ -79,13 +120,26 @@ function saveStore(storeObj) {
 // Start with whatever's on local disk (instant), then replace with Upstash's
 // copy once it arrives (the source of truth across spin-downs).
 let store = loadStoreLocal();
+// Backfill any fields missing from data saved before they existed (older
+// stores on disk/Upstash won't have payments/approvals/settings etc.).
+function normalizeStore(s) {
+  const base = JSON.parse(JSON.stringify(EMPTY_STORE));
+  return { ...base, ...s, settings: { ...base.settings, ...(s.settings || {}) } };
+}
+store = normalizeStore(store);
 loadStoreRemote().then((remote) => {
-  if (remote) store = remote;
+  if (remote) store = normalizeStore(remote);
 });
 
 function todayKey() {
   const d = new Date();
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+// Zero-padded YYYY-MM-DD — unlike todayKey() above, this is what HTML date
+// inputs and the payments/invoices UI expect.
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +165,12 @@ const DEPTS = {
     system: `أنت رئيس قسم التسويق في Loop Travel & Tourism. ${LOOP_CONTEXT}
 أنت عضو فعلي من فريق Loop، تتحدث بصيغة "نحن" لا "أنتم"، وتقدّم تقاريرك مباشرة للمدير العام.
 مسؤوليتك: حملات انستغرام، المحتوى، الإعلانات الممولة، هوية العلامة، وتحسين معدلات التحويل من المتابعين إلى حجوزات.
-أجب كرئيس تسويق فعلي، مقترحات عملية وقابلة للتنفيذ، بالعربية، بإيجاز تنفيذي (فقرة أو فقرتين).`,
+عند الطلب منك اقتراح محتوى جاهز للنشر، أخرج ٢-٣ أفكار منشورات بالتنسيق التالي لكل فكرة:
+فكرة المنشور: [وصف الصورة/الفيديو المقترح]
+الكابشن: [نص كابشن جاهز للنسخ المباشر بالعربية، بأسلوب Loop]
+هاشتاقات مقترحة: [٣-٥ هاشتاقات]
+التوقيت الأنسب: [سبب التوقيت إن كان مرتبطًا بموسم أو مناسبة]
+أجب كرئيس تسويق فعلي، مقترحات عملية وقابلة للتنفيذ، بالعربية، بإيجاز تنفيذي (فقرة أو فقرتين) في الردود العادية، وبالتنسيق أعلاه فقط عند طلب محتوى جاهز تحديدًا.`,
   },
   strategy: {
     name: "الاستراتيجية", role: "رئيس قسم الاستراتيجية",
@@ -182,6 +241,8 @@ ${LOOP_CONTEXT}
 لا تختلق أرقامًا أو حقائق عن الشركة؛ إن لم تكن المعلومة متوفرة، وضّح ذلك. تحدث بالعربية دائمًا.
 تقدر ترسل بريدًا إلكترونيًا فعليًا نيابة عن نواف باستخدام أداة send_email — استخدمها فقط عندما يطلب صراحة إرسال بريد، وبعنوان بريد ذكره هو بوضوح؛ لا ترسل بريدًا من تلقاء نفسك ولا لعنوان لم يُذكر لك.
 تقدر أيضًا تطّلع على بريده الإلكتروني (Outlook) باستخدام أداة check_email — استخدمها عندما يسألك عن بريده، أو عن عروض/إعلانات جديدة من شركات نتعامل معها، وأبرز له أي عرض يستحق الانتباه.
+تقدر أيضًا تفحص مجلد مستندات الموردين (عروض، فواتير، نشرات) باستخدام أداة check_supplier_offers — استخدمها عندما يسألك عن عروض موردين أو يطلب مقارنة عرض معين.
+عندما يطلب نواف رسالة متابعة لعميل، استخدم أداة get_customer أولًا لجلب بياناته الفعلية، ثم اكتب رسالة واتساب جاهزة للنسخ المباشر بأسلوب ودّي ومهني بصيغة "نحن"، مبنية على بياناته الحقيقية لا بيانات مختلقة.
 مهم جدًا: ردّك النهائي يجب أن يبدأ مباشرة بالمعلومة أو التوصية نفسها — بدون أي مقدمة تشرح خطواتك أو تسرد أنك استشرت قسمًا معينًا.`;
 
 // ---------------------------------------------------------------------------
@@ -317,6 +378,115 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: "check_supplier_offers",
+    description: "فحص مجلد مستندات الموردين (عروض أسعار، نشرات، فواتير محفوظة بمجلد Google Drive) وتلخيص أهم ما فيها. استخدمها عندما يسألك نواف عن عروض موردين، أو يطلب مقارنة عرض معين، أو ضمن الإحاطة الصباحية.",
+    input_schema: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "سؤال محدد عن المستندات إن وُجد (مثلاً: هل فيه عرض جديد على فنادق مكة؟). اتركه فارغًا لملخص عام." },
+      },
+    },
+  },
+  {
+    name: "propose_approval",
+    description: "اقتراح قرار يحتاج موافقة صريحة من نواف (مثل خصم، حملة، أو أي خطوة لها أثر مالي أو تسويقي) بدل تنفيذه مباشرة. استخدمها عندما يطلب نواف صراحة اقتراح قرار ينتظر موافقته، أو عندما يستحق قرار معيّن موافقته قبل أي تنفيذ.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "عنوان مختصر للقرار المقترح." },
+        why: { type: "string", description: "التبرير: لماذا هذا القرار مقترح الآن، بالاستناد لبيانات فعلية إن وُجدت." },
+        meta: { type: "string", description: "تفاصيل رقمية مختصرة (نسبة خصم، ميزانية مقترحة، إلخ)." },
+        from: { type: "string", description: "الجهة المقترحة (مثلاً: المدير العام، أو اسم القسم). افتراضيًا المدير العام." },
+      },
+      required: ["title", "why"],
+    },
+  },
+  {
+    name: "upsert_customer",
+    description: "إضافة عميل محتمل جديد، أو تحديث حالة عميل موجود (بعد أي تواصل معه، أو تغيّر مرحلته). استخدمها عندما يذكر نواف عميلًا جديدًا أو تطورًا بخصوص عميل قائم.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "معرّف العميل إن كان موجودًا مسبقًا (للتحديث). اتركه فارغًا لعميل جديد." },
+        name: { type: "string", description: "اسم العميل." },
+        source: { type: "string", description: "مصدر الاستفسار: instagram أو whatsapp أو other." },
+        stage: { type: "string", description: "المرحلة الحالية: new (جديد)، quoted (أُرسل له عرض سعر)، booked (حجز)، lost (خسرناه)." },
+        notes: { type: "string", description: "ملاحظات عن العميل أو آخر تواصل." },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "list_stale_customers",
+    description: "استعراض العملاء المحتملين الذين لم يُتواصل معهم منذ عدة أيام ولم تُحسم حالتهم بعد (ما زالوا new أو quoted). استخدمها عندما يسألك نواف عن متابعة العملاء، أو ضمن الإحاطة الصباحية.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: { type: "number", description: "عدد الأيام منذ آخر تواصل لاعتبار العميل متأخرًا. افتراضيًا 3." },
+      },
+    },
+  },
+  {
+    name: "get_customer",
+    description: "جلب بيانات عميل محدد (الاسم، المصدر، المرحلة، آخر تواصل، الملاحظات) بالاسم أو المعرّف. استخدمها قبل صياغة رسالة متابعة له، لتبني الرسالة على بياناته الفعلية.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "معرّف العميل إن توفر." },
+        name: { type: "string", description: "اسم العميل إن لم يتوفر معرّف." },
+      },
+    },
+  },
+  {
+    name: "record_booking",
+    description: "تسجيل حجز فعلي (إيراد حقيقي) بعد إتمام صفقة مع عميل. استخدمها عندما يخبرك نواف أن عميلًا حجز فعليًا.",
+    input_schema: {
+      type: "object",
+      properties: {
+        customerName: { type: "string", description: "اسم العميل." },
+        customerId: { type: "string", description: "معرّف العميل إن كان مسجّلًا، لتحديث حالته تلقائيًا إلى booked." },
+        package: { type: "string", description: "اسم الباقة أو الوجهة." },
+        amount: { type: "number", description: "قيمة الحجز بالدرهم." },
+        tripStartDate: { type: "string", description: "تاريخ بداية الرحلة (السفر) بصيغة YYYY-MM-DD إن ذُكر، للتذكير بالمستندات الناقصة قبلها." },
+        tripEndDate: { type: "string", description: "تاريخ انتهاء الرحلة بصيغة YYYY-MM-DD إن ذُكر، لمتابعة طلب التقييم بعدها." },
+      },
+      required: ["customerName", "amount"],
+    },
+  },
+  {
+    name: "update_booking_docs",
+    description: "تحديث حالة مستندات حجز معيّن (جواز سفر، صورة، تأشيرة). استخدمها عندما يخبرك نواف أن مستندًا معينًا وصل أو ناقص لحجز.",
+    input_schema: {
+      type: "object",
+      properties: {
+        bookingId: { type: "string", description: "معرّف الحجز." },
+        passport: { type: "boolean", description: "هل جواز السفر متوفر." },
+        photo: { type: "boolean", description: "هل الصورة الشخصية متوفرة." },
+        visa: { type: "boolean", description: "هل التأشيرة متوفرة." },
+      },
+      required: ["bookingId"],
+    },
+  },
+  {
+    name: "check_bookings_status",
+    description: "استعراض الحجوزات اللي تحتاج انتباه: مستندات ناقصة لرحلات قريبة، وحجوزات انتهت رحلتها حديثًا وتحتاج طلب تقييم. استخدمها عندما يسألك نواف عن حالة الحجوزات أو المستندات.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "build_custom_package",
+    description: "بناء عرض سعر لباقة مخصصة غير موجودة بقائمة باقاتنا الجاهزة (وجهة أو تركيبة ليالي خاصة). يبحث عن سعر الفندق تلقائيًا في مستندات الموردين، ويحتاج سعر الطيران من نواف مباشرة إن لم يُذكر (لا يوجد مصدر آلي لأسعار الطيران).",
+    input_schema: {
+      type: "object",
+      properties: {
+        destination: { type: "string", description: "الوجهة." },
+        nights: { type: "number", description: "عدد الليالي." },
+        hotelName: { type: "string", description: "اسم الفندق أو فئته إن ذُكر." },
+        flightCost: { type: "number", description: "سعر الطيران للشخص بالدرهم، إن ذكره نواف. اتركه فارغًا إن لم يُذكر." },
+      },
+      required: ["destination", "nights"],
+    },
+  },
 ];
 
 
@@ -348,7 +518,11 @@ async function callClaude({ system, messages, tools }) {
 const META_TOKEN = process.env.META_ACCESS_TOKEN;
 const META_IG_USER_ID = process.env.META_IG_USER_ID;
 const GRAPH_VERSION = "v21.0";
-const COMPETITOR_USERNAMES = ["hejozati", "alsuwaidisons", "alkhalidiya_holidays"];
+// Editable at runtime via store.competitors (see /api/competitors) — this is
+// just the fallback for a brand-new store that hasn't customized it yet.
+function getCompetitorUsernames() {
+  return store.competitors && store.competitors.length ? store.competitors : DEFAULT_COMPETITORS;
+}
 
 async function metaGraph(path, params = {}) {
   const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/${path}`);
@@ -465,6 +639,150 @@ async function analyzeImageForPricing(imageUrl, caption) {
 // a refresh token, stored persistently, used to fetch new access tokens
 // without asking him to log in again.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Supplier offers folder — a public Google Drive folder Nawaf keeps supplier
+// documents (offers, price lists — images or PDFs) in. Read-only, via a
+// simple API key (no OAuth needed since the folder is shared publicly).
+// ---------------------------------------------------------------------------
+const DRIVE_API_KEY = process.env.GOOGLE_DRIVE_API_KEY;
+const DRIVE_FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
+const SUPPORTED_DRIVE_MIME = { "application/pdf": "application/pdf", "image/jpeg": "image/jpeg", "image/png": "image/png", "image/webp": "image/webp" };
+
+async function listSupplierFiles() {
+  if (!DRIVE_API_KEY || !DRIVE_FOLDER_ID) throw new Error("مجلد الموردين غير مربوط بعد.");
+  const url = `https://www.googleapis.com/drive/v3/files?q='${DRIVE_FOLDER_ID}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name,mimeType,modifiedTime)&pageSize=20`;
+  const res = await fetchWithTimeout(url);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || "تعذر الوصول لمجلد Drive");
+  return (data.files || []).filter((f) => SUPPORTED_DRIVE_MIME[f.mimeType]);
+}
+
+async function fetchSupplierFileContent(fileId) {
+  const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${DRIVE_API_KEY}`;
+  const res = await fetchWithTimeout(url, {}, 30000);
+  if (!res.ok) throw new Error(`تعذر تحميل الملف (${res.status})`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  return buf.toString("base64");
+}
+
+async function checkSupplierOffers(question) {
+  const files = await listSupplierFiles();
+  if (!files.length) return "لا توجد مستندات موردين بالمجلد حاليًا.";
+
+  // Cap to the 6 most recently modified files to keep this fast and within
+  // reasonable size/token limits.
+  const recent = files.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime)).slice(0, 6);
+  const contentBlocks = [];
+  for (const f of recent) {
+    try {
+      const data = await fetchSupplierFileContent(f.id);
+      const mediaType = SUPPORTED_DRIVE_MIME[f.mimeType];
+      contentBlocks.push(
+        mediaType === "application/pdf"
+          ? { type: "document", source: { type: "base64", media_type: mediaType, data } }
+          : { type: "image", source: { type: "base64", media_type: mediaType, data } }
+      );
+    } catch {
+      // skip files that fail to download rather than aborting the whole check
+    }
+  }
+  if (!contentBlocks.length) return "تعذر تحميل أي من مستندات الموردين حاليًا.";
+
+  contentBlocks.push({
+    type: "text",
+    text: question || "هذه مستندات وعروض من الموردين الذين نتعامل معهم. لخّص أهم ما فيها (نوع العرض، السعر، أي شروط أو تواريخ مهمة) بإيجاز تنفيذي بالعربية.",
+  });
+  const res = await callClaude({
+    system: "أنت محلل عروض موردين لوكالة سفريات. تفحص المستندات المرفقة (قد تكون فواتير، عروض أسعار، أو نشرات) وتلخّص المهم منها بدقة، بالعربية.",
+    messages: [{ role: "user", content: contentBlocks }],
+  });
+  return textOf(res.content) || "تعذر تحليل المستندات.";
+}
+
+// Builds a custom (non-catalog) package quote: looks up the real per-night
+// hotel rate from the same Drive folder used for supplier offers, combines
+// it with a flight cost Nawaf supplies himself (no reliable automated source
+// for live flight pricing exists without a real GDS/airline partnership —
+// see the ATM/DMC conversation), and applies the standard profit margin.
+async function buildCustomPackage({ destination, nights, hotelName, flightCost }) {
+  let hotelContext = "لا تتوفر مستندات فنادق حاليًا بمجلد الموردين — اطلب من نواف تزويدك بسعر الليلة يدويًا بدل التخمين.";
+  try {
+    const files = await listSupplierFiles();
+    if (files.length) {
+      const recent = files.sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime)).slice(0, 6);
+      const contentBlocks = [];
+      for (const f of recent) {
+        try {
+          const data = await fetchSupplierFileContent(f.id);
+          const mediaType = SUPPORTED_DRIVE_MIME[f.mimeType];
+          contentBlocks.push(
+            mediaType === "application/pdf"
+              ? { type: "document", source: { type: "base64", media_type: mediaType, data } }
+              : { type: "image", source: { type: "base64", media_type: mediaType, data } }
+          );
+        } catch {}
+      }
+      if (contentBlocks.length) {
+        contentBlocks.push({
+          type: "text",
+          text: `ابحث في هذه المستندات عن سعر الليلة الواحدة لفندق "${hotelName || destination}". أجب بالسعر فقط إن وجدته (رقم بالدرهم)، أو بعبارة "غير موجود" إن لم يظهر فندق مطابق — لا تخترع رقمًا.`,
+        });
+        const res = await callClaude({
+          system: "أنت تبحث عن سعر ليلة فندق محدد ضمن مستندات مرفقة. أجب بإيجاز شديد: إما رقم السعر، أو \"غير موجود\".",
+          messages: [{ role: "user", content: contentBlocks }],
+        });
+        hotelContext = `نتيجة البحث في مستندات الفنادق عن "${hotelName || destination}": ${textOf(res.content) || "غير موجود"}`;
+      }
+    }
+  } catch (e) {
+    hotelContext = `تعذر الوصول لمستندات الفنادق: ${e.message}`;
+  }
+
+  const margin = store.settings?.defaultMargin ?? 20;
+  const flightText = flightCost
+    ? `سعر الطيران الذي أدخله نواف: ${flightCost} د.إ للشخص.`
+    : "لم يُدخل نواف سعر طيران — اطلب منه ذلك صراحة بدل تخمينه، فلا يوجد مصدر آلي موثوق لأسعار الطيران الحية.";
+
+  const prompt = `ابنِ عرض سعر لباقة مخصصة غير موجودة بقائمة باقاتنا الجاهزة.
+الوجهة: ${destination}. عدد الليالي: ${nights}.
+${hotelContext}
+${flightText}
+إن توفر سعر الفندق وسعر الطيران، احسب: (سعر الليلة × عدد الليالي) + سعر الطيران، ثم أضف هامش ربح ${margin}%، وأعطِ تفصيلًا واضحًا لكل بند والإجمالي النهائي للشخص الواحد. إن كان أحد الرقمين ناقصًا، وضّح ذلك واطلبه بدل افتراضه.`;
+
+  return callDepartment("finance", prompt);
+}
+
+// Reads an invoice photo and extracts structured fields the accounting UI
+// can drop straight into a payment record — reuses the same vision-call
+// pattern as competitor price reading and supplier-offer analysis.
+async function scanInvoiceImage(image) {
+  const res = await callClaude({
+    system: `أنت محاسب يقرأ صور الفواتير ويستخرج منها بيانات منظمة. أجب حصرًا بكائن JSON صالح وبدون أي نص أو شرح أو علامات markdown حوله، بالضبط بهذا الشكل:
+{"title": "وصف مختصر للفاتورة", "payee": "اسم الجهة المستفيدة إن ظهر، وإلا نص فارغ", "amount": رقم_المبلغ_الإجمالي_فقط_بدون_رمز_عملة, "date": "YYYY-MM-DD إن ظهر تاريخ، وإلا تاريخ اليوم", "method": "طريقة الدفع إن ظهرت من بين: تحويل بنكي, نقداً, بطاقة, شيك - وإلا نص فارغ", "invoice": "رقم الفاتورة إن ظهر، وإلا نص فارغ", "cat": "واحدة من: sup, lic, mkt, cloud, other حسب نوع المصروف", "flags": ["أسماء الحقول غير الواضحة بالصورة من بين: amount, method, date, payee"]}`,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
+        { type: "text", text: "استخرج بيانات هذه الفاتورة بصيغة JSON كما هو محدد." },
+      ],
+    }],
+  });
+  const text = (textOf(res.content) || "").trim();
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("تعذرت قراءة بيانات الفاتورة");
+  const parsed = JSON.parse(jsonMatch[0]);
+  return {
+    cat: parsed.cat || "other",
+    title: parsed.title || "",
+    payee: parsed.payee || "",
+    amount: Number(parsed.amount) || 0,
+    date: parsed.date || todayISO(),
+    method: parsed.method || "",
+    invoice: parsed.invoice || "",
+    flags: Array.isArray(parsed.flags) ? parsed.flags : [],
+  };
+}
+
 const OUTLOOK_CLIENT_ID = process.env.OUTLOOK_CLIENT_ID;
 const OUTLOOK_CLIENT_SECRET = process.env.OUTLOOK_CLIENT_SECRET;
 const OUTLOOK_REDIRECT_URI = process.env.OUTLOOK_REDIRECT_URI || "https://loop-gm-server-1.onrender.com/auth/outlook/callback";
@@ -531,6 +849,69 @@ async function sendOutlookEmail({ to, subject, body }) {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// EchoNova text-to-speech — native Emirati voices for the GM's spoken
+// replies (replaces the iPad's built-in voice). Docs: POST /v1/text-to-speech/
+// sync returns a signed WAV link (data.audioUrl) that the browser can play
+// directly, no auth needed. Billed per character, so text is cleaned and
+// capped before sending.
+// ---------------------------------------------------------------------------
+const ECHONOVA_API_KEY = process.env.ECHONOVA_API_KEY;
+const ECHONOVA_BASE = "https://api.echonova.ai";
+const DEFAULT_TTS_VOICE = "Abdulla";
+let echonovaVoicesCache = { at: 0, items: [] };
+
+async function listEchoNovaVoices() {
+  if (!ECHONOVA_API_KEY) throw new Error("ECHONOVA_API_KEY غير مضاف بعد.");
+  if (Date.now() - echonovaVoicesCache.at < 6 * 3600000 && echonovaVoicesCache.items.length) return echonovaVoicesCache.items;
+  const res = await fetchWithTimeout(`${ECHONOVA_BASE}/v1/text-to-speech/voices`, {
+    headers: { Authorization: `Bearer ${ECHONOVA_API_KEY}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.success === false) throw new Error(data.errorMessage || `EchoNova voices (${res.status})`);
+  const items = data.data?.items || [];
+  echonovaVoicesCache = { at: Date.now(), items };
+  return items;
+}
+
+async function resolveVoiceId() {
+  const wanted = (store.settings?.ttsVoice || DEFAULT_TTS_VOICE).toLowerCase();
+  const voices = await listEchoNovaVoices();
+  const arabic = voices.filter((v) => (v.language || "").toLowerCase() === "ar");
+  const match =
+    voices.find((v) => v.id === store.settings?.ttsVoice) ||
+    arabic.find((v) => (v.displayName || "").toLowerCase() === wanted || (v.name || "").toLowerCase() === wanted) ||
+    arabic.find((v) => (v.name || "").toLowerCase().startsWith("ae_")) ||
+    arabic[0] || voices[0];
+  if (!match) throw new Error("لا توجد أصوات متاحة في حساب EchoNova.");
+  return match.id;
+}
+
+function cleanForSpeech(text) {
+  return String(text || "")
+    .replace(/[*_#`>|]/g, "")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\n{2,}/g, "\n")
+    .trim()
+    .slice(0, 1200); // per-character billing — keep spoken replies bounded
+}
+
+async function synthesizeSpeech(text) {
+  const clean = cleanForSpeech(text);
+  if (!clean) throw new Error("نص فارغ");
+  const voiceId = await resolveVoiceId();
+  const res = await fetchWithTimeout(`${ECHONOVA_BASE}/v1/text-to-speech/sync`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ECHONOVA_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ text: clean, voiceId }),
+  }, 60000);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.success === false || !data.data?.audioUrl) {
+    throw new Error(data.errorMessage || `EchoNova TTS (${res.status})`);
+  }
+  return { audioUrl: data.data.audioUrl, durationSeconds: data.data.durationSeconds, credits: data.data.creditsConsumed };
+}
 
 // Real email sending via Resend — a free transactional email API (no
 // credit card, 3,000/month). Without RESEND_API_KEY set, the tool reports
@@ -633,7 +1014,7 @@ async function callDepartment(deptId, instruction, images) {
     // images in parallel too — sequential runs pushed this past the browser's
     // patience since every Apify call takes ~30-60s on its own.
     const profiles = (await Promise.all(
-      COMPETITOR_USERNAMES.map(async (username) => {
+      getCompetitorUsernames().map(async (username) => {
         const p = await fetchCompetitorProfile(username);
         if (!p) return null;
 
@@ -725,8 +1106,16 @@ async function runGM(userText, displayText, images) {
     system += `\n\n${ready.join("\n\n")}\n\nإن سألك نواف عن إحاطة اليوم أو عن تقرير المنافسين، أعطه ما هو مذكور أعلاه كما هو (فهو ما استلمه فعلًا هذا الصباح) بدل توليد نسخة جديدة مختلفة، إلا إن طلب صراحة تحديثها أو إعادة توليدها.`;
   }
 
+  // Respect the "enabled" toggles from Settings — a department switched off
+  // there simply isn't offered to the GM as a tool this turn.
+  const enabled = store.settings?.enabled || {};
+  const activeTools = TOOLS.filter((t) => {
+    const deptId = t.name.startsWith("consult_") ? t.name.replace("consult_", "") : null;
+    return !deptId || enabled[deptId] !== false;
+  });
+
   for (let round = 0; round < 3 && finalText === null; round++) {
-    const res = await callClaude({ system, messages, tools: TOOLS });
+    const res = await callClaude({ system, messages, tools: activeTools });
     const content = res.content || [];
     const toolUses = content.filter((b) => b.type === "tool_use");
     messages = [...messages, { role: "assistant", content }];
@@ -778,6 +1167,114 @@ async function runGM(userText, displayText, images) {
             : "لا توجد رسائل حديثة.";
         } catch (e) {
           responseText = `تعذر الوصول للبريد: ${e.message}`;
+        }
+      } else if (tu.name === "check_supplier_offers") {
+        try {
+          responseText = await checkSupplierOffers(tu.input?.question);
+        } catch (e) {
+          responseText = `تعذر الوصول لمجلد الموردين: ${e.message}`;
+        }
+      } else if (tu.name === "propose_approval") {
+        const { title, why, meta, from } = tu.input || {};
+        if (!title || !why) {
+          responseText = "لم يُسجّل الاقتراح — title وwhy مطلوبان.";
+        } else {
+          if (!store.approvals) store.approvals = [];
+          const approval = {
+            id: "a" + Date.now(),
+            from: from || "المدير العام",
+            icon: from && from !== "المدير العام" ? "dept" : "gm",
+            title, why, meta: meta || "",
+            at: new Date().toLocaleString("ar-AE", { hour: "numeric", minute: "2-digit" }),
+          };
+          store.approvals.push(approval);
+          saveStore(store);
+          if (store.settings?.alerts?.approval !== false) {
+            sendPushToAll("قرار ينتظر موافقتك", title).catch(() => {});
+          }
+          responseText = `تم تسجيل الاقتراح وهو بانتظار موافقتك الآن: "${title}".`;
+        }
+      } else if (tu.name === "upsert_customer") {
+        const { id, name, source, stage, notes } = tu.input || {};
+        if (!store.customers) store.customers = [];
+        if (id) {
+          const c = store.customers.find((x) => x.id === id);
+          if (!c) {
+            responseText = `لم يُعثر على عميل بمعرّف ${id}.`;
+          } else {
+            if (name) c.name = name;
+            if (source) c.source = source;
+            if (stage) c.stage = stage;
+            if (notes) c.notes = notes;
+            c.lastContact = todayISO();
+            saveStore(store);
+            responseText = `تم تحديث بيانات ${c.name} (المرحلة: ${c.stage}).`;
+          }
+        } else if (!name) {
+          responseText = "لم يُسجَّل — اسم العميل مطلوب.";
+        } else {
+          const customer = { id: "c" + Date.now(), name, source: source || "", stage: stage || "new", lastContact: todayISO(), notes: notes || "", createdAt: todayISO() };
+          store.customers.unshift(customer);
+          saveStore(store);
+          responseText = `تم تسجيل عميل جديد: ${name} (${customer.stage}). المعرّف: ${customer.id}`;
+        }
+      } else if (tu.name === "list_stale_customers") {
+        const stale = getStaleCustomers(tu.input?.days || 3);
+        responseText = stale.length
+          ? stale.map((c) => `- ${c.name} (${c.stage === "quoted" ? "أُرسل له عرض" : "جديد"}) — آخر تواصل: ${c.lastContact}${c.notes ? ` — ${c.notes}` : ""}`).join("\n")
+          : "لا يوجد عملاء متأخرو المتابعة حاليًا.";
+      } else if (tu.name === "get_customer") {
+        const { id, name } = tu.input || {};
+        const c = (store.customers || []).find((x) => (id && x.id === id) || (name && x.name === name));
+        responseText = c
+          ? `الاسم: ${c.name}\nالمصدر: ${c.source || "غير محدد"}\nالمرحلة: ${c.stage}\nآخر تواصل: ${c.lastContact}\nملاحظات: ${c.notes || "لا يوجد"}\nالمعرّف: ${c.id}`
+          : "لم يُعثر على عميل بهذا الاسم أو المعرّف.";
+      } else if (tu.name === "record_booking") {
+        const { customerName, customerId, package: pkg, amount, tripStartDate, tripEndDate } = tu.input || {};
+        if (!customerName || !amount) {
+          responseText = "لم يُسجَّل الحجز — customerName وamount مطلوبان.";
+        } else {
+          if (!store.bookings) store.bookings = [];
+          const booking = {
+            id: "bk" + Date.now(), customerName, customerId: customerId || null, package: pkg || "",
+            amount: Number(amount), date: todayISO(), notes: "",
+            tripStartDate: tripStartDate || null, tripEndDate: tripEndDate || null,
+            feedbackRequested: false, docs: { passport: false, photo: false, visa: false },
+          };
+          store.bookings.unshift(booking);
+          if (customerId) {
+            const c = store.customers?.find((x) => x.id === customerId);
+            if (c) { c.stage = "booked"; c.lastContact = todayISO(); }
+          }
+          saveStore(store);
+          responseText = `تم تسجيل حجز بقيمة ${amount} د.إ لـ${customerName}.${tripEndDate ? ` تاريخ انتهاء الرحلة: ${tripEndDate}.` : ""}`;
+        }
+      } else if (tu.name === "update_booking_docs") {
+        const { bookingId, passport, photo, visa } = tu.input || {};
+        const bk = (store.bookings || []).find((b) => b.id === bookingId);
+        if (!bk) {
+          responseText = "لم يُعثر على حجز بهذا المعرّف.";
+        } else {
+          if (!bk.docs) bk.docs = { passport: false, photo: false, visa: false };
+          if (passport !== undefined) bk.docs.passport = !!passport;
+          if (photo !== undefined) bk.docs.photo = !!photo;
+          if (visa !== undefined) bk.docs.visa = !!visa;
+          saveStore(store);
+          const missing = Object.entries(bk.docs).filter(([, v]) => !v).map(([k]) => k);
+          responseText = `تم التحديث. ${bk.customerName}: ${missing.length ? "ناقص — " + missing.join("، ") : "كل المستندات مكتملة ✅"}`;
+        }
+      } else if (tu.name === "check_bookings_status") {
+        const missing = getBookingsMissingDocs();
+        const followups = getPostTripFollowups();
+        const parts = [];
+        if (missing.length) parts.push("مستندات ناقصة قبل السفر:\n" + missing.map((b) => `- ${b.customerName} (سفر ${b.tripStartDate}): ناقص ${Object.entries(b.docs).filter(([, v]) => !v).map(([k]) => k).join("، ")}`).join("\n"));
+        if (followups.length) parts.push("عملاء يُقترح طلب تقييمهم:\n" + followups.map((b) => `- ${b.customerName} (${b.package || "—"})`).join("\n"));
+        responseText = parts.length ? parts.join("\n\n") : "لا يوجد شي يحتاج انتباه بالحجوزات حاليًا.";
+      } else if (tu.name === "build_custom_package") {
+        try {
+          responseText = await buildCustomPackage(tu.input || {});
+        } catch (e) {
+          responseText = `تعذر بناء العرض: ${e.message}`;
         }
       } else {
         const deptId = tu.name.replace("consult_", "");
@@ -863,6 +1360,119 @@ function monthKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// ---------------------------------------------------------------------------
+// Periodic financial reports — grounded in the one dataset we actually track
+// as structured numbers (store.payments, real recorded expenses), combined
+// with the finance/sales/accounting departments' qualitative read on revenue
+// and the most profitable package, since we don't have a hard bookings/
+// revenue ledger to compute that part deterministically.
+// ---------------------------------------------------------------------------
+const EXPENSE_CAT_LABELS = { sup: "رسوم موردين", lic: "تراخيص", mkt: "إعلانات", cloud: "اشتراكات", other: "أخرى" };
+
+function computeExpenseSummary(periodDays) {
+  const cutoff = Date.now() - periodDays * 86400000;
+  const inPeriod = (store.payments || []).filter((p) => new Date(p.date).getTime() >= cutoff);
+  const total = inPeriod.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const byCat = {};
+  inPeriod.forEach((p) => { byCat[p.cat] = (byCat[p.cat] || 0) + Number(p.amount || 0); });
+  const topCats = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  return { total, count: inPeriod.length, topCats };
+}
+
+// Recomputes this calendar month's spend against the configured limit and
+// alerts once per month when it's crossed (not on every payment after that).
+function checkBudgetAfterPayment() {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const used = (store.payments || [])
+    .filter((p) => new Date(p.date).getTime() >= monthStart)
+    .reduce((s, p) => s + Number(p.amount || 0), 0);
+  if (!store.settings) store.settings = { ...DEFAULT_SETTINGS };
+  store.settings.budget = { ...store.settings.budget, used };
+  const limit = store.settings.budget?.limit || 0;
+  const monthKeyNow = `${now.getFullYear()}-${now.getMonth() + 1}`;
+  if (limit > 0 && used >= limit && store.settings.budgetAlertSentForMonth !== monthKeyNow) {
+    store.settings.budgetAlertSentForMonth = monthKeyNow;
+    sendPushToAll("⚠️ تجاوزنا حد الميزانية الشهري", `المصروف حتى الآن: ${used} د.إ من أصل ${limit} د.إ`).catch(() => {});
+  }
+}
+
+function computeRangeTotals(startDaysAgo, endDaysAgo) {
+  const start = Date.now() - startDaysAgo * 86400000;
+  const end = Date.now() - endDaysAgo * 86400000;
+  const inRange = (arr) => (arr || []).filter((x) => { const t = new Date(x.date).getTime(); return t >= start && t < end; });
+  const expenses = inRange(store.payments).reduce((s, p) => s + Number(p.amount || 0), 0);
+  const revenue = inRange(store.bookings).reduce((s, b) => s + Number(b.amount || 0), 0);
+  return { expenses, revenue };
+}
+
+async function generatePeriodicReport(period) {
+  const isWeekly = period === "weekly";
+  const days = isWeekly ? 7 : 30;
+  const summary = computeExpenseSummary(days);
+  const revenue = computeRevenueSummary(days);
+  const expenseText = summary.count
+    ? `إجمالي المصاريف المسجّلة فعليًا بسجل المدفوعات خلال ${isWeekly ? "الأسبوع" : "الشهر"} الماضي: ${summary.total} د.إ عبر ${summary.count} دفعة. أكبر الفئات: ${summary.topCats.map(([k, v]) => `${EXPENSE_CAT_LABELS[k] || k} (${v} د.إ)`).join("، ")}.`
+    : "لا توجد مصاريف مسجّلة بسجل المدفوعات خلال هذه الفترة.";
+  const revenueText = revenue.count
+    ? `إجمالي الإيرادات المسجّلة فعليًا بسجل الحجوزات لنفس الفترة: ${revenue.total} د.إ عبر ${revenue.count} حجز. صافي الربح التقريبي (إيرادات - مصاريف): ${revenue.total - summary.total} د.إ.`
+    : "لا توجد حجوزات مسجّلة بسجل الإيرادات خلال هذه الفترة — إن وُجدت حجوزات فعلية لم تُسجَّل بعد، وضّح ذلك بدل افتراض عدم وجودها.";
+
+  // Month-over-month (or week-over-week) comparison against the prior period.
+  const prev = computeRangeTotals(days * 2, days);
+  const comparisonText = `للمقارنة، الفترة السابقة مباشرة (${isWeekly ? "الأسبوع" : "الشهر"} الذي قبله): مصاريف ${prev.expenses} د.إ، إيرادات ${prev.revenue} د.إ. التغيّر بالمصاريف: ${summary.total - prev.expenses >= 0 ? "+" : ""}${summary.total - prev.expenses} د.إ. التغيّر بالإيرادات: ${revenue.total - prev.revenue >= 0 ? "+" : ""}${revenue.total - prev.revenue} د.إ.`;
+
+  const prompt = `أعدّ تقريرًا ${isWeekly ? "أسبوعيًا" : "شهريًا"} ماليًا تنفيذيًا لنواف. استشر القسم المالي والمبيعات والمحاسبة حسب الحاجة لتقييم الباقة الأكثر ربحية خلال هذه الفترة. هذه الأرقام الفعلية المسجّلة لدينا — استخدمها كما هي حرفيًا، لا تخترع أرقامًا أخرى:\n${expenseText}\n${revenueText}\n${comparisonText}\nعلّق على اتجاه الأداء (تحسّن أم تراجع) بناءً على المقارنة، واختم بتوصية عملية واحدة.`;
+
+  const result = await runGM(prompt, isWeekly ? "التقرير المالي الأسبوعي" : "التقرير المالي الشهري");
+  const report = {
+    text: result.reply, depts: result.depts,
+    expenseSummary: { total: summary.total, count: summary.count },
+    revenueSummary: { total: revenue.total, count: revenue.count },
+    previousPeriod: prev,
+    ts: Date.now(), day: todayKey(),
+  };
+  if (!store.periodicReports) store.periodicReports = { weekly: null, monthly: null };
+  store.periodicReports[period] = report;
+  archiveEntry(isWeekly ? "weeklyReport" : "monthlyReport", report);
+  saveStore(store);
+  return report;
+}
+
+// Seasonal/demand forecast — asks Strategy to look ahead at upcoming travel
+// seasons (Ramadan, Hajj, school holidays, UAE holidays) and recommend when
+// to push campaigns or offers.
+async function generateSeasonalForecast() {
+  const reply = await callDepartment(
+    "strategy",
+    "أعدّ توقعًا موسميًا للأشهر الثلاثة القادمة: اذكر أي مواسم أو مناسبات مهمة قادمة تؤثر على سوق السفر والعمرة في الإمارات (رمضان، الحج، الإجازات المدرسية، الأعياد، إلخ)، ومتى الأنسب نبدأ حملات تسويقية أو نطلق عروضًا لكل مناسبة. كن عمليًا ومحددًا بالتوقيت."
+  );
+  const forecast = { text: reply, ts: Date.now(), day: todayKey() };
+  store.seasonalForecast = forecast;
+  archiveEntry("seasonalForecast", forecast);
+  saveStore(store);
+  return forecast;
+}
+
+// Ready-to-post Instagram content — grounded in whatever seasonal and
+// competitor context is already on hand from the same week's other reports,
+// so suggestions aren't made in a vacuum.
+async function generateMarketingContent() {
+  let instruction = "اقترح ٢-٣ أفكار منشورات انستغرام جاهزة للنشر هذا الأسبوع، بالتنسيق المحدد (فكرة المنشور، الكابشن، الهاشتاقات، التوقيت الأنسب).";
+  if (store.seasonalForecast) {
+    instruction += `\n\nهذا التوقع الموسمي الحالي من قسم الاستراتيجية، استخدمه لاختيار مواضيع مناسبة للتوقيت:\n${store.seasonalForecast.text}`;
+  }
+  if (store.competitorReport?.day === todayKey()) {
+    instruction += `\n\nوهذا تقرير المنافسين لهذا الصباح، للمقارنة إن كان مفيدًا:\n${store.competitorReport.text}`;
+  }
+  const reply = await callDepartment("marketing", instruction);
+  const content = { text: reply, ts: Date.now(), day: todayKey() };
+  store.marketingContent = content;
+  archiveEntry("marketingContent", content);
+  saveStore(store);
+  return content;
+}
+
 async function generateMonthlyPricePoint() {
   // The GM performs this itself — consults finance and strategy for real
   // numbers, then records them via the record_price_point tool — instead of
@@ -890,14 +1500,41 @@ async function generateDailyBriefing() {
   // The GM writes the briefing itself (so it lands in the GM conversation and
   // stays in its memory), grounded in the competitor report the strategy
   // department produced earlier in the same morning run.
-  let prompt = "اكتب لنواف إحاطته الصباحية التنفيذية عن وضع الشركة اليوم. نسّق مع الأقسام حسب الحاجة، وأبرز ما يستحق انتباهه الآن. إن كان بريده الإلكتروني مربوطًا، تحقق منه بأداة check_email وأبرز أي عرض أو إعلان مهم وصل من شركات نتعامل معها.";
+  let prompt = "اكتب لنواف إحاطته الصباحية التنفيذية عن وضع الشركة اليوم. نسّق مع الأقسام حسب الحاجة، وأبرز ما يستحق انتباهه الآن. إن كان بريده الإلكتروني مربوطًا، تحقق منه بأداة check_email وأبرز أي عرض أو إعلان مهم وصل من شركات نتعامل معها. تحقق أيضًا من مجلد مستندات الموردين بأداة check_supplier_offers إن كان متاحًا، وأبرز أي عرض جديد يستحق الانتباه.";
   if (store.competitorReport?.day === todayKey()) {
     prompt += `\n\nهذا تقرير المنافسين الذي أعدّه قسم الاستراتيجية صباح اليوم — ادمج أهم ما فيه في إحاطتك بصفتك مطّلعًا عليه، ولا تكرره حرفيًا:\n${store.competitorReport.text}`;
   }
+
+  const staleCustomers = getStaleCustomers(3);
+  if (staleCustomers.length) {
+    prompt += `\n\nهؤلاء عملاء محتملون لم يُتابَعوا منذ 3 أيام أو أكثر — نبّه نواف إليهم في الإحاطة:\n${staleCustomers.map((c) => `- ${c.name} (${c.stage})، آخر تواصل: ${c.lastContact}`).join("\n")}`;
+  }
+
+  const dueReminders = getUpcomingPaymentReminders();
+  if (dueReminders.length) {
+    prompt += `\n\nهذه دفعات دورية مستحقة خلال الأيام القادمة — نبّه نواف إليها في الإحاطة:\n${dueReminders.map((r) => `- ${r.title} (${r.payee || "—"}): ${r.amount} د.إ، يوم ${r.dueDayOfMonth} من الشهر`).join("\n")}`;
+    markPaymentsReminded(dueReminders);
+  }
+
+  const followups = getPostTripFollowups();
+  if (followups.length) {
+    prompt += `\n\nهؤلاء عملاء انتهت رحلتهم مؤخرًا — اقترح لنواف طلب تقييم أو رأيهم بالتجربة:\n${followups.map((b) => `- ${b.customerName} (${b.package || "—"})، انتهت الرحلة: ${b.tripEndDate}`).join("\n")}`;
+    followups.forEach((b) => { b.feedbackRequested = true; });
+    saveStore(store);
+  }
+
+  const missingDocs = getBookingsMissingDocs();
+  if (missingDocs.length) {
+    prompt += `\n\nهؤلاء عملاء يسافرون خلال أسبوع ولديهم مستندات ناقصة — نبّه نواف إليها:\n${missingDocs.map((b) => `- ${b.customerName} (سفر ${b.tripStartDate}): ناقص ${Object.entries(b.docs).filter(([, v]) => !v).map(([k]) => k).join("، ")}`).join("\n")}`;
+  }
+
   const result = await runGM(prompt, "إحاطة الصباح");
   store.dailyBriefing = { text: result.reply, depts: result.depts, ts: Date.now(), day: todayKey() };
   archiveEntry("dailyBriefing", store.dailyBriefing);
   saveStore(store);
+  if (store.settings?.alerts?.report) {
+    sendPushToAll("إحاطة الصباح جاهزة", "اطّلع عليها من المنصة").catch(() => {});
+  }
   return store.dailyBriefing;
 }
 
@@ -912,6 +1549,21 @@ async function generateCompetitorReport() {
   store.competitorReport = { text: reply, ts: Date.now(), day: todayKey() };
   archiveEntry("competitorReport", store.competitorReport);
   saveStore(store);
+
+  // Real-time undercut alert — compare numeric averages (already computed
+  // for the monthly price-history point) instead of waiting for the weekly
+  // report to surface a meaningful drop.
+  try {
+    const [ourAvg, competitorAvg] = await Promise.all([
+      computeOwnUmrahAveragePrice().catch(() => null),
+      computeCompetitorUmrahAveragePrice().catch(() => null),
+    ]);
+    if (ourAvg && competitorAvg && competitorAvg < ourAvg) {
+      const dropPct = Math.round((1 - competitorAvg / ourAvg) * 100);
+      sendPushToAll("⚠️ منافس خفّض سعره", `متوسط أسعار المنافسين أقل من أسعارنا بنسبة ${dropPct}% تقريبًا`).catch(() => {});
+    }
+  } catch {}
+
   return store.competitorReport;
 }
 
@@ -947,7 +1599,7 @@ async function generateSecretaryBriefing() {
 const app = express();
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || "*",
-  methods: ["GET", "POST", "OPTIONS"],
+  methods: ["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type"],
 }));
 // Accept the request body as JSON no matter what Content-Type header the
@@ -957,6 +1609,45 @@ app.use(cors({
 app.use(express.json({ type: () => true }));
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// Consolidated connectivity flags for the "system status" panel.
+app.get("/api/status", (req, res) => {
+  res.json({
+    server: true,
+    claude: !!process.env.ANTHROPIC_API_KEY,
+    apify: !!APIFY_TOKEN,
+    sheets: true,
+    outlook: !!store.outlookRefreshToken,
+    drive: !!(DRIVE_API_KEY && DRIVE_FOLDER_ID),
+    meta: !!(META_TOKEN && META_IG_USER_ID),
+    push: !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
+    echonova: !!ECHONOVA_API_KEY,
+    lastUpdate: new Date().toISOString(),
+  });
+});
+
+app.get("/api/push/vapid-public-key", (req, res) => {
+  if (!VAPID_PUBLIC_KEY) return res.status(404).json({ error: "push not configured" });
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+app.post("/api/push/subscribe", (req, res) => {
+  const sub = req.body;
+  if (!sub?.endpoint) return res.status(400).json({ error: "invalid subscription" });
+  if (!store.pushSubscriptions) store.pushSubscriptions = [];
+  if (!store.pushSubscriptions.some((s) => s.endpoint === sub.endpoint)) {
+    store.pushSubscriptions.push(sub);
+    saveStore(store);
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/push/unsubscribe", (req, res) => {
+  const { endpoint } = req.body || {};
+  store.pushSubscriptions = (store.pushSubscriptions || []).filter((s) => s.endpoint !== endpoint);
+  saveStore(store);
+  res.json({ ok: true });
+});
 
 // One-time Outlook login flow. Nawaf visits /auth/outlook/start once, signs
 // in with Microsoft, and this callback exchanges the resulting code for a
@@ -1065,7 +1756,7 @@ app.get("/api/meta/status", async (req, res) => {
 
   if (APIFY_TOKEN) {
     try {
-      const sample = await fetchCompetitorProfile(COMPETITOR_USERNAMES[0]);
+      const sample = await fetchCompetitorProfile(getCompetitorUsernames()[0]);
       result.sampleCompetitor = sample
         ? {
             username: sample.username,
@@ -1093,8 +1784,310 @@ app.get("/api/state", (req, res) => {
     secretaryBriefing: store.secretaryBriefing,
     competitorReport: store.competitorReport,
     priceHistory: store.priceHistory || [],
+    payments: store.payments || [],
+    approvals: store.approvals || [],
+    decided: store.decided || [],
+    settings: store.settings || DEFAULT_SETTINGS,
+    customers: store.customers || [],
+    recurringPayments: store.recurringPayments || [],
+    bookings: store.bookings || [],
+    competitors: store.competitors && store.competitors.length ? store.competitors : DEFAULT_COMPETITORS,
+    periodicReports: store.periodicReports || { weekly: null, monthly: null },
+    seasonalForecast: store.seasonalForecast || null,
+    marketingContent: store.marketingContent || null,
   });
 });
+
+app.post("/api/payments", (req, res) => {
+  const p = req.body || {};
+  if (!p.amount || !p.title) return res.status(400).json({ error: "amount and title are required" });
+  const payment = {
+    id: "p" + Date.now(),
+    cat: p.cat || "other",
+    title: p.title,
+    payee: p.payee || "",
+    amount: Number(p.amount) || 0,
+    date: p.date || todayISO(),
+    method: p.method || "",
+    invoice: p.invoice || "",
+    notes: p.notes || "",
+    image: p.image || null,
+  };
+  if (!store.payments) store.payments = [];
+  store.payments.unshift(payment);
+  checkBudgetAfterPayment();
+  saveStore(store);
+  res.json(payment);
+});
+
+app.delete("/api/payments/:id", (req, res) => {
+  store.payments = (store.payments || []).filter((p) => p.id !== req.params.id);
+  saveStore(store);
+  res.json({ ok: true });
+});
+
+// A printable invoice page — opens in the browser, which Safari on iPad can
+// turn into a real PDF via Share → Print → Save to Files. Real server-side
+// PDF generation with correct Arabic letter shaping is a much bigger, riskier
+// undertaking (needs a headless-browser dependency too heavy for the free
+// tier); this gets the same end result using the browser's own native,
+// already-correct Arabic text rendering.
+app.get("/api/payments/:id/invoice", (req, res) => {
+  const p = (store.payments || []).find((x) => x.id === req.params.id);
+  if (!p) return res.status(404).send("الفاتورة غير موجودة.");
+  const catLabel = EXPENSE_CAT_LABELS[p.cat] || p.cat;
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>فاتورة — ${p.title}</title>
+<style>
+  @media print { @page { margin: 18mm; } }
+  body { font-family: -apple-system, 'Segoe UI', Tahoma, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 24px; color: #1a1a1a; }
+  .head { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #1a1a1a; padding-bottom: 16px; margin-bottom: 24px; }
+  .head img { height: 48px; }
+  h1 { font-size: 20px; margin: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+  td { padding: 10px 4px; border-bottom: 1px solid #e5e0dc; font-size: 14px; }
+  td:first-child { color: #666; width: 40%; }
+  .total { font-size: 18px; font-weight: bold; text-align: left; margin-top: 10px; }
+  .foot { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e0dc; font-size: 12px; color: #666; }
+  .print-btn { position: fixed; top: 16px; left: 16px; padding: 10px 18px; background: #1a1a1a; color: #fff; border: none; border-radius: 10px; font-size: 14px; }
+  @media print { .print-btn { display: none; } }
+</style>
+</head>
+<body>
+<button class="print-btn" onclick="window.print()">طباعة / حفظ PDF</button>
+<div class="head">
+  <img src="${LOGO_PUBLIC_URL}" alt="Loop" />
+  <h1>فاتورة</h1>
+</div>
+<table>
+  <tr><td>الوصف</td><td>${p.title}</td></tr>
+  <tr><td>الجهة المستفيدة</td><td>${p.payee || "—"}</td></tr>
+  <tr><td>الفئة</td><td>${catLabel}</td></tr>
+  <tr><td>تاريخ الدفع</td><td>${p.date}</td></tr>
+  <tr><td>طريقة الدفع</td><td>${p.method || "—"}</td></tr>
+  <tr><td>رقم الفاتورة</td><td>${p.invoice || "—"}</td></tr>
+  ${p.notes ? `<tr><td>ملاحظات</td><td>${p.notes}</td></tr>` : ""}
+</table>
+<div class="total">الإجمالي: ${p.amount} د.إ</div>
+<div class="foot">Loop Travel &amp; Tourism — الإمارات العربية المتحدة | WhatsApp: +971 54 544 4003</div>
+</body>
+</html>`);
+});
+
+app.post("/api/approvals/:id/decide", (req, res) => {
+  const { decision } = req.body || {};
+  const approval = (store.approvals || []).find((a) => a.id === req.params.id);
+  if (!approval) return res.status(404).json({ error: "not found" });
+  store.approvals = store.approvals.filter((a) => a.id !== req.params.id);
+  if (!store.decided) store.decided = [];
+  store.decided.unshift({ title: approval.title, ok: decision === "approve", ts: Date.now() });
+  store.decided = store.decided.slice(0, 20);
+  saveStore(store);
+  res.json({ ok: true });
+});
+
+app.patch("/api/settings", (req, res) => {
+  store.settings = { ...DEFAULT_SETTINGS, ...store.settings, ...(req.body || {}) };
+  saveStore(store);
+  res.json(store.settings);
+});
+
+// ---------------------------------------------------------------------------
+// CRM — a lightweight customer/lead tracker: name, inquiry source, stage,
+// last-contact date. Lets the GM flag leads nobody has followed up with.
+// ---------------------------------------------------------------------------
+app.post("/api/customers", (req, res) => {
+  const c = req.body || {};
+  if (!c.name) return res.status(400).json({ error: "name is required" });
+  const customer = {
+    id: "c" + Date.now(),
+    name: c.name,
+    source: c.source || "", // instagram | whatsapp | other
+    stage: c.stage || "new", // new | quoted | booked | lost
+    lastContact: c.lastContact || todayISO(),
+    notes: c.notes || "",
+    createdAt: todayISO(),
+  };
+  if (!store.customers) store.customers = [];
+  store.customers.unshift(customer);
+  saveStore(store);
+  res.json(customer);
+});
+
+app.patch("/api/customers/:id", (req, res) => {
+  const c = (store.customers || []).find((x) => x.id === req.params.id);
+  if (!c) return res.status(404).json({ error: "not found" });
+  Object.assign(c, req.body || {});
+  saveStore(store);
+  res.json(c);
+});
+
+app.delete("/api/customers/:id", (req, res) => {
+  store.customers = (store.customers || []).filter((c) => c.id !== req.params.id);
+  saveStore(store);
+  res.json({ ok: true });
+});
+
+function getStaleCustomers(days = 3) {
+  const cutoff = Date.now() - days * 86400000;
+  return (store.customers || []).filter(
+    (c) => !["booked", "lost"].includes(c.stage) && new Date(c.lastContact).getTime() < cutoff
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Recurring payments — supplier fees, licenses, subscriptions that repeat
+// monthly. The daily cron checks what's due soon and surfaces it in the
+// morning briefing instead of Nawaf discovering it late.
+// ---------------------------------------------------------------------------
+app.post("/api/recurring-payments", (req, res) => {
+  const r = req.body || {};
+  if (!r.title || !r.dueDayOfMonth) return res.status(400).json({ error: "title and dueDayOfMonth are required" });
+  const rp = {
+    id: "r" + Date.now(),
+    title: r.title,
+    payee: r.payee || "",
+    amount: Number(r.amount) || 0,
+    cat: r.cat || "other",
+    dueDayOfMonth: Math.min(28, Math.max(1, Number(r.dueDayOfMonth) || 1)),
+    notes: r.notes || "",
+    lastRemindedMonth: null,
+  };
+  if (!store.recurringPayments) store.recurringPayments = [];
+  store.recurringPayments.push(rp);
+  saveStore(store);
+  res.json(rp);
+});
+
+app.delete("/api/recurring-payments/:id", (req, res) => {
+  store.recurringPayments = (store.recurringPayments || []).filter((r) => r.id !== req.params.id);
+  saveStore(store);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Bookings — the real revenue ledger. Separate from `payments` (expenses),
+// so periodic reports can compute actual profit instead of only expenses.
+// ---------------------------------------------------------------------------
+app.post("/api/bookings", (req, res) => {
+  const b = req.body || {};
+  if (!b.amount || !b.customerName) return res.status(400).json({ error: "customerName and amount are required" });
+  const booking = {
+    id: "bk" + Date.now(),
+    customerName: b.customerName,
+    customerId: b.customerId || null,
+    package: b.package || "",
+    amount: Number(b.amount) || 0,
+    date: b.date || todayISO(),
+    notes: b.notes || "",
+    tripStartDate: b.tripStartDate || null,
+    tripEndDate: b.tripEndDate || null,
+    feedbackRequested: false,
+    docs: b.docs || { passport: false, photo: false, visa: false },
+  };
+  if (!store.bookings) store.bookings = [];
+  store.bookings.unshift(booking);
+  saveStore(store);
+  res.json(booking);
+});
+
+app.patch("/api/bookings/:id", (req, res) => {
+  const bk = (store.bookings || []).find((b) => b.id === req.params.id);
+  if (!bk) return res.status(404).json({ error: "not found" });
+  Object.assign(bk, req.body || {});
+  saveStore(store);
+  res.json(bk);
+});
+
+app.delete("/api/bookings/:id", (req, res) => {
+  store.bookings = (store.bookings || []).filter((b) => b.id !== req.params.id);
+  saveStore(store);
+  res.json({ ok: true });
+});
+
+function computeRevenueSummary(periodDays) {
+  const cutoff = Date.now() - periodDays * 86400000;
+  const inPeriod = (store.bookings || []).filter((b) => new Date(b.date).getTime() >= cutoff);
+  const total = inPeriod.reduce((s, b) => s + Number(b.amount || 0), 0);
+  return { total, count: inPeriod.length };
+}
+
+// ---------------------------------------------------------------------------
+// Editable competitor list (GET exposed via /api/state already).
+// ---------------------------------------------------------------------------
+app.post("/api/competitors", (req, res) => {
+  const { username } = req.body || {};
+  if (!username) return res.status(400).json({ error: "username is required" });
+  if (!store.competitors) store.competitors = [...DEFAULT_COMPETITORS];
+  const clean = username.replace(/^@/, "").trim();
+  if (!store.competitors.includes(clean)) store.competitors.push(clean);
+  saveStore(store);
+  res.json(store.competitors);
+});
+
+app.delete("/api/competitors/:username", (req, res) => {
+  store.competitors = (store.competitors || DEFAULT_COMPETITORS).filter((u) => u !== req.params.username);
+  saveStore(store);
+  res.json(store.competitors);
+});
+
+// ---------------------------------------------------------------------------
+// Data export — a full JSON snapshot Nawaf can download, so the data isn't
+// only ever living in one cloud store.
+// ---------------------------------------------------------------------------
+app.get("/api/export", (req, res) => {
+  // Deliberately exclude internal/sensitive implementation details — the
+  // Outlook refresh token and raw push subscriptions aren't useful to export
+  // and shouldn't leave the server.
+  const { outlookRefreshToken, pushSubscriptions, gmMessages, ...exportable } = store;
+  res.set("Content-Disposition", `attachment; filename="loop-backup-${todayISO()}.json"`);
+  res.json(exportable);
+});
+
+function getUpcomingPaymentReminders() {
+  const now = new Date();
+  const todayDay = now.getDate();
+  const monthKeyNow = `${now.getFullYear()}-${now.getMonth() + 1}`;
+  return (store.recurringPayments || []).filter((r) => {
+    if (r.lastRemindedMonth === monthKeyNow) return false; // already flagged this month
+    const daysUntilDue = r.dueDayOfMonth - todayDay;
+    return daysUntilDue >= 0 && daysUntilDue <= 3;
+  });
+}
+
+// Bookings whose trip ended in the last 2 days — worth asking the customer
+// for a review/feedback while the experience is still fresh.
+function getPostTripFollowups() {
+  const now = Date.now();
+  return (store.bookings || []).filter((b) => {
+    if (!b.tripEndDate || b.feedbackRequested) return false;
+    const daysSinceEnd = (now - new Date(b.tripEndDate).getTime()) / 86400000;
+    return daysSinceEnd >= 0 && daysSinceEnd <= 2;
+  });
+}
+
+// Bookings departing within a week that still have a document checklist gap.
+function getBookingsMissingDocs() {
+  const now = Date.now();
+  return (store.bookings || []).filter((b) => {
+    if (!b.tripStartDate || !b.docs) return false;
+    const daysUntilTrip = (new Date(b.tripStartDate).getTime() - now) / 86400000;
+    if (daysUntilTrip < 0 || daysUntilTrip > 7) return false;
+    return Object.values(b.docs).some((v) => !v);
+  });
+}
+
+function markPaymentsReminded(reminders) {
+  const now = new Date();
+  const monthKeyNow = `${now.getFullYear()}-${now.getMonth() + 1}`;
+  reminders.forEach((r) => { r.lastRemindedMonth = monthKeyNow; });
+  if (reminders.length) saveStore(store);
+}
 
 // All state-changing actions are exposed as GET with query params (not
 // conventional REST, but GET requests have proven reliable end-to-end while
@@ -1144,6 +2137,34 @@ app.post("/api/chat-image", async (req, res) => {
     return res.status(400).json({ error: "at least one valid image is required" });
   }
   const id = startJob(() => runGM(message, message || `📎 ${images.length > 1 ? images.length + " صور" : "صورة"}`, images));
+  res.json({ jobId: id });
+});
+
+// Invoice photo → structured payment fields (job-queue, same pattern as
+// chat/department image endpoints).
+// Speak a GM reply with an EchoNova Emirati voice (job-queue, same pattern
+// as chat — the sync call can take a few seconds for longer replies).
+app.post("/api/tts", (req, res) => {
+  const text = (req.body?.text || "").toString();
+  if (!text.trim()) return res.status(400).json({ error: "text is required" });
+  if (!ECHONOVA_API_KEY) return res.status(503).json({ error: "tts not configured" });
+  const jobId = startJob(() => synthesizeSpeech(text));
+  res.json({ jobId });
+});
+
+app.get("/api/tts/voices", async (req, res) => {
+  try {
+    const voices = await listEchoNovaVoices();
+    res.json(voices.map((v) => ({ id: v.id, name: v.name, displayName: v.displayName, language: v.language, gender: v.gender })));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/invoices/scan", async (req, res) => {
+  const image = req.body?.image;
+  if (!image?.data || !image?.mediaType) return res.status(400).json({ error: "image is required" });
+  const id = startJob(() => scanInvoiceImage(image));
   res.json({ jobId: id });
 });
 
@@ -1222,8 +2243,25 @@ app.get("/api/price-history/refresh", (req, res) => {
   res.json({ jobId });
 });
 
+app.get("/api/reports/:period/refresh", (req, res) => {
+  const { period } = req.params;
+  if (!["weekly", "monthly"].includes(period)) return res.status(400).json({ error: "period must be weekly or monthly" });
+  const jobId = startJob(() => generatePeriodicReport(period));
+  res.json({ jobId });
+});
+
+app.get("/api/forecast/seasonal/refresh", (req, res) => {
+  const jobId = startJob(() => generateSeasonalForecast());
+  res.json({ jobId });
+});
+
+app.get("/api/marketing/content/refresh", (req, res) => {
+  const jobId = startJob(() => generateMarketingContent());
+  res.json({ jobId });
+});
+
 app.get("/api/reset", (req, res) => {
-  store = { gmMessages: [], gmDisplayLog: [], deptLogs: {}, dailyBriefing: null, secretaryBriefing: null, competitorReport: null, archive: {}, priceHistory: [] };
+  store = JSON.parse(JSON.stringify(EMPTY_STORE));
   saveStore(store);
   res.json({ ok: true });
 });
@@ -1246,6 +2284,17 @@ cron.schedule("0 4 * * *", async () => {
   if (new Date().getDate() === 1) {
     console.log("[cron] generating monthly price point…");
     try { await generateMonthlyPricePoint(); } catch (e) { console.error("[cron] price point failed:", e.message); }
+    console.log("[cron] generating monthly financial report…");
+    try { await generatePeriodicReport("monthly"); } catch (e) { console.error("[cron] monthly report failed:", e.message); }
+    console.log("[cron] generating seasonal forecast…");
+    try { await generateSeasonalForecast(); } catch (e) { console.error("[cron] seasonal forecast failed:", e.message); }
+  }
+  // Sunday is the start of the business week in the Gulf.
+  if (new Date().getDay() === 0) {
+    console.log("[cron] generating weekly financial report…");
+    try { await generatePeriodicReport("weekly"); } catch (e) { console.error("[cron] weekly report failed:", e.message); }
+    console.log("[cron] generating weekly marketing content…");
+    try { await generateMarketingContent(); } catch (e) { console.error("[cron] marketing content failed:", e.message); }
   }
 });
 
