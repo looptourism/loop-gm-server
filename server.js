@@ -857,7 +857,8 @@ async function sendOutlookEmail({ to, subject, body }) {
 // directly, no auth needed. Billed per character, so text is cleaned and
 // capped before sending.
 // ---------------------------------------------------------------------------
-const ECHONOVA_API_KEY = process.env.ECHONOVA_API_KEY;
+// strip any whitespace/line breaks a copy-paste into Render may have introduced
+const ECHONOVA_API_KEY = (process.env.ECHONOVA_API_KEY || "").replace(/\s+/g, "") || null;
 const ECHONOVA_BASE = "https://api.echonova.ai";
 const DEFAULT_TTS_VOICE = "Abdulla";
 let echonovaVoicesCache = { at: 0, items: [] };
