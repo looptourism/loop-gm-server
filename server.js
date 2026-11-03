@@ -446,8 +446,9 @@ const TOOLS = [
       properties: {
         customerName: { type: "string", description: "اسم العميل." },
         customerId: { type: "string", description: "معرّف العميل إن كان مسجّلًا، لتحديث حالته تلقائيًا إلى booked." },
-        package: { type: "string", description: "اسم الباقة أو الوجهة." },
-        amount: { type: "number", description: "قيمة الحجز بالدرهم." },
+        package: { type: "string", description: "اسم الباقة. استخدم نفس اسم الباقة من قائمة باقاتنا المحفوظة إن وُجدت." },
+        amount: { type: "number", description: "قيمة الحجز الكاملة بالدرهم." },
+        paid: { type: "number", description: "المبلغ المدفوع فعليًا حتى الآن (العربون) بالدرهم. إن لم يُذكر اعتبره 0 واسأل نواف عنه." },
         tripStartDate: { type: "string", description: "تاريخ بداية الرحلة (السفر) بصيغة YYYY-MM-DD إن ذُكر، للتذكير بالمستندات الناقصة قبلها." },
         tripEndDate: { type: "string", description: "تاريخ انتهاء الرحلة بصيغة YYYY-MM-DD إن ذُكر، لمتابعة طلب التقييم بعدها." },
       },
@@ -466,6 +467,19 @@ const TOOLS = [
         visa: { type: "boolean", description: "هل التأشيرة متوفرة." },
       },
       required: ["bookingId"],
+    },
+  },
+  {
+    name: "record_customer_payment",
+    description: "تسجيل دفعة استلمناها من عميل على حجز موجود (تُضاف إلى المدفوع). استخدمها عندما يخبرك نواف أن عميلًا دفع مبلغًا أو سدّد الباقي.",
+    input_schema: {
+      type: "object",
+      properties: {
+        bookingId: { type: "string", description: "معرّف الحجز إن كان معروفًا." },
+        customerName: { type: "string", description: "اسم العميل، يُستخدم إن لم يُعرف معرّف الحجز (أحدث حجز بهذا الاسم)." },
+        amount: { type: "number", description: "المبلغ المستلم الآن بالدرهم." },
+      },
+      required: ["amount"],
     },
   },
   {
@@ -1254,14 +1268,14 @@ async function runGM(userText, displayText, images) {
           ? `الاسم: ${c.name}\nالمصدر: ${c.source || "غير محدد"}\nالمرحلة: ${c.stage}\nآخر تواصل: ${c.lastContact}\nملاحظات: ${c.notes || "لا يوجد"}\nالمعرّف: ${c.id}`
           : "لم يُعثر على عميل بهذا الاسم أو المعرّف.";
       } else if (tu.name === "record_booking") {
-        const { customerName, customerId, package: pkg, amount, tripStartDate, tripEndDate } = tu.input || {};
+        const { customerName, customerId, package: pkg, amount, paid, tripStartDate, tripEndDate } = tu.input || {};
         if (!customerName || !amount) {
           responseText = "لم يُسجَّل الحجز — customerName وamount مطلوبان.";
         } else {
           if (!store.bookings) store.bookings = [];
           const booking = {
-            id: "bk" + Date.now(), customerName, customerId: customerId || null, package: pkg || "",
-            amount: Number(amount), date: todayISO(), notes: "",
+            id: "bk" + Date.now(), customerName, customerId: customerId || null, package: canonicalPackage(pkg),
+            amount: Number(amount), paid: Number(paid) || 0, date: todayISO(), notes: "",
             tripStartDate: tripStartDate || null, tripEndDate: tripEndDate || null,
             feedbackRequested: false, docs: { passport: false, photo: false, visa: false },
           };
@@ -1271,7 +1285,8 @@ async function runGM(userText, displayText, images) {
             if (c) { c.stage = "booked"; c.lastContact = todayISO(); }
           }
           saveStore(store);
-          responseText = `تم تسجيل حجز بقيمة ${amount} د.إ لـ${customerName}.${tripEndDate ? ` تاريخ انتهاء الرحلة: ${tripEndDate}.` : ""}`;
+          const owedNow = Number(amount) - (Number(paid) || 0);
+          responseText = `تم تسجيل حجز بقيمة ${amount} د.إ لـ${customerName} (باقة: ${booking.package || "—"}).${owedNow > 0 ? ` المتبقي عليه: ${owedNow} د.إ.` : " مدفوع بالكامل."}${tripEndDate ? ` تاريخ انتهاء الرحلة: ${tripEndDate}.` : ""} المعرّف: ${booking.id}`;
         }
       } else if (tu.name === "update_booking_docs") {
         const { bookingId, passport, photo, visa } = tu.input || {};
@@ -1287,12 +1302,25 @@ async function runGM(userText, displayText, images) {
           const missing = Object.entries(bk.docs).filter(([, v]) => !v).map(([k]) => k);
           responseText = `تم التحديث. ${bk.customerName}: ${missing.length ? "ناقص — " + missing.join("، ") : "كل المستندات مكتملة ✅"}`;
         }
+      } else if (tu.name === "record_customer_payment") {
+        const { bookingId, customerName, amount: got } = tu.input || {};
+        const bk = (store.bookings || []).find((b) => (bookingId && b.id === bookingId) || (!bookingId && customerName && b.customerName === customerName));
+        if (!bk || typeof got !== "number") {
+          responseText = "لم يُسجَّل — لم يُعثر على الحجز أو المبلغ غير صالح.";
+        } else {
+          bk.paid = (typeof bk.paid === "number" ? bk.paid : 0) + got;
+          saveStore(store);
+          const left = Number(bk.amount || 0) - bk.paid;
+          responseText = `تم تسجيل ${got} د.إ من ${bk.customerName}. المدفوع: ${bk.paid} من ${bk.amount} د.إ.${left > 0 ? ` الباقي: ${left} د.إ.` : " الحجز مدفوع بالكامل ✅"}`;
+        }
       } else if (tu.name === "check_bookings_status") {
         const missing = getBookingsMissingDocs();
         const followups = getPostTripFollowups();
         const parts = [];
         if (missing.length) parts.push("مستندات ناقصة قبل السفر:\n" + missing.map((b) => `- ${b.customerName} (سفر ${b.tripStartDate}): ناقص ${Object.entries(b.docs).filter(([, v]) => !v).map(([k]) => k).join("، ")}`).join("\n"));
         if (followups.length) parts.push("عملاء يُقترح طلب تقييمهم:\n" + followups.map((b) => `- ${b.customerName} (${b.package || "—"})`).join("\n"));
+        const owed = getOutstandingBookings();
+        if (owed.length) parts.push("مبالغ مستحقة على العملاء:\n" + owed.map((b) => `- ${b.customerName} (${b.package || "—"}): باقي ${b.remaining} د.إ من ${b.amount}${b.tripStartDate ? `، السفر ${b.tripStartDate}` : ""}`).join("\n"));
         responseText = parts.length ? parts.join("\n\n") : "لا يوجد شي يحتاج انتباه بالحجوزات حاليًا.";
       } else if (tu.name === "build_custom_package") {
         try {
@@ -1550,6 +1578,15 @@ async function generateDailyBriefing() {
   const missingDocs = getBookingsMissingDocs();
   if (missingDocs.length) {
     prompt += `\n\nهؤلاء عملاء يسافرون خلال أسبوع ولديهم مستندات ناقصة — نبّه نواف إليها:\n${missingDocs.map((b) => `- ${b.customerName} (سفر ${b.tripStartDate}): ناقص ${Object.entries(b.docs).filter(([, v]) => !v).map(([k]) => k).join("، ")}`).join("\n")}`;
+  }
+
+  const owedSoon = getOutstandingBookings().filter((b) => {
+    if (!b.tripStartDate) return false;
+    const d = (new Date(b.tripStartDate).getTime() - Date.now()) / 86400000;
+    return d >= 0 && d <= 14;
+  });
+  if (owedSoon.length) {
+    prompt += `\n\nهؤلاء عملاء يسافرون خلال أسبوعين وما زال عليهم مبالغ — نبّه نواف إليها:\n${owedSoon.map((b) => `- ${b.customerName} (سفر ${b.tripStartDate}): باقي ${b.remaining} د.إ`).join("\n")}`;
   }
 
   const result = await runGM(prompt, "إحاطة الصباح");
@@ -1815,6 +1852,7 @@ app.get("/api/state", (req, res) => {
     customers: store.customers || [],
     recurringPayments: store.recurringPayments || [],
     bookings: store.bookings || [],
+    packages: getPackages(),
     competitors: store.competitors && store.competitors.length ? store.competitors : DEFAULT_COMPETITORS,
     periodicReports: store.periodicReports || { weekly: null, monthly: null },
     seasonalForecast: store.seasonalForecast || null,
@@ -1836,12 +1874,26 @@ app.post("/api/payments", (req, res) => {
     invoice: p.invoice || "",
     notes: p.notes || "",
     image: p.image || null,
+    bookingId: p.bookingId || null, // supplier cost tied to a booking → profit per package
   };
   if (!store.payments) store.payments = [];
   store.payments.unshift(payment);
   checkBudgetAfterPayment();
   saveStore(store);
   res.json(payment);
+});
+
+// Edit a saved payment (amount, category, linked booking…).
+app.patch("/api/payments/:id", (req, res) => {
+  const p = (store.payments || []).find((x) => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: "not found" });
+  const body = { ...(req.body || {}) };
+  delete body.id;
+  if ("amount" in body) body.amount = Number(body.amount) || 0;
+  if ("bookingId" in body) body.bookingId = body.bookingId || null;
+  Object.assign(p, body);
+  saveStore(store);
+  res.json(p);
 });
 
 app.delete("/api/payments/:id", (req, res) => {
@@ -2005,8 +2057,9 @@ app.post("/api/bookings", (req, res) => {
     id: "bk" + Date.now(),
     customerName: b.customerName,
     customerId: b.customerId || null,
-    package: b.package || "",
+    package: canonicalPackage(b.package),
     amount: Number(b.amount) || 0,
+    paid: Number(b.paid) || 0,
     date: b.date || todayISO(),
     notes: b.notes || "",
     tripStartDate: b.tripStartDate || null,
@@ -2023,9 +2076,29 @@ app.post("/api/bookings", (req, res) => {
 app.patch("/api/bookings/:id", (req, res) => {
   const bk = (store.bookings || []).find((b) => b.id === req.params.id);
   if (!bk) return res.status(404).json({ error: "not found" });
-  Object.assign(bk, req.body || {});
+  const body = { ...(req.body || {}) };
+  if ("package" in body) body.package = canonicalPackage(body.package);
+  if ("paid" in body) body.paid = Number(body.paid) || 0;
+  if ("amount" in body) body.amount = Number(body.amount) || 0;
+  Object.assign(bk, body);
   saveStore(store);
   res.json(bk);
+});
+
+// Saved package list (the dropdown in the booking form).
+app.post("/api/packages", (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ error: "name is required" });
+  const list = getPackages();
+  if (!list.some((p) => normPkgKey(p.name) === normPkgKey(name))) list.push({ id: "pk" + Date.now(), name });
+  saveStore(store);
+  res.json(list);
+});
+
+app.delete("/api/packages/:id", (req, res) => {
+  store.packages = getPackages().filter((p) => p.id !== req.params.id);
+  saveStore(store);
+  res.json(store.packages);
 });
 
 app.delete("/api/bookings/:id", (req, res) => {
@@ -2104,6 +2177,72 @@ function getBookingsMissingDocs() {
     if (daysUntilTrip < 0 || daysUntilTrip > 7) return false;
     return Object.values(b.docs).some((v) => !v);
   });
+}
+
+// --- Packages, receivables, trip alerts -----------------------------------
+const DOC_LABELS = { passport: "الجواز", photo: "الصورة", visa: "التأشيرة" };
+const docLabel = (k) => DOC_LABELS[k] || k;
+
+// Loose key so "عمرة اقتصادية" / "عمره اقتصاديه" / "عمرة  اقتصادية" count as one package.
+function normPkgKey(name) {
+  return String(name || "").trim().toLowerCase()
+    .replace(/[\u064B-\u0652\u0640]/g, "")
+    .replace(/[أإآ]/g, "ا").replace(/ة/g, "ه").replace(/ى/g, "ي")
+    .replace(/\s+/g, " ");
+}
+function getPackages() {
+  if (!Array.isArray(store.packages)) {
+    // first run: seed the list from package names already used in bookings
+    const seen = new Map();
+    (store.bookings || []).forEach((b) => {
+      const n = String(b.package || "").trim();
+      if (n && !seen.has(normPkgKey(n))) seen.set(normPkgKey(n), n);
+    });
+    store.packages = [...seen.values()].map((name, i) => ({ id: "pk" + (Date.now() + i), name }));
+    saveStore(store);
+  }
+  return store.packages;
+}
+// Map any typed package name onto the saved list's spelling when it matches.
+function canonicalPackage(name) {
+  const n = String(name || "").trim();
+  if (!n) return "";
+  const hit = getPackages().find((p) => normPkgKey(p.name) === normPkgKey(n));
+  return hit ? hit.name : n;
+}
+
+// Bookings with money still owed. Bookings saved before "paid" existed have
+// no value recorded, so they're left out instead of being shown as unpaid.
+function getOutstandingBookings() {
+  return (store.bookings || [])
+    .filter((b) => typeof b.paid === "number" && Number(b.amount || 0) - b.paid > 0.5)
+    .map((b) => ({ ...b, remaining: Math.round((Number(b.amount || 0) - b.paid) * 100) / 100 }));
+}
+
+// Daily device alert for trips within a week that still miss documents
+// and/or still have a balance due. One push per booking per day.
+async function sendTripAlerts() {
+  const now = Date.now();
+  const today = todayISO();
+  let sent = 0;
+  for (const b of store.bookings || []) {
+    if (!b.tripStartDate) continue;
+    const days = Math.ceil((new Date(b.tripStartDate).getTime() - now) / 86400000);
+    if (days < 0 || days > 7) continue;
+    if (b.tripAlertDay === today) continue;
+    const missing = b.docs ? Object.entries(b.docs).filter(([, v]) => !v).map(([k]) => docLabel(k)) : [];
+    const owed = typeof b.paid === "number" ? Number(b.amount || 0) - b.paid : 0;
+    if (!missing.length && owed <= 0.5) continue;
+    const when = days === 0 ? "اليوم" : days === 1 ? "بكرة" : `بعد ${days} أيام`;
+    const parts = [];
+    if (missing.length) parts.push(`ناقص: ${missing.join("، ")}`);
+    if (owed > 0.5) parts.push(`باقي عليه ${Math.round(owed)} د.إ`);
+    await sendPushToAll(`✈️ رحلة ${b.customerName} ${when}`, parts.join(" · ")).catch(() => {});
+    b.tripAlertDay = today;
+    sent++;
+  }
+  if (sent) saveStore(store);
+  return sent;
 }
 
 function markPaymentsReminded(reminders) {
@@ -2329,6 +2468,12 @@ cron.schedule("0 4 * * *", async () => {
     console.log("[cron] generating weekly marketing content…");
     try { await generateMarketingContent(); } catch (e) { console.error("[cron] marketing content failed:", e.message); }
   }
+});
+
+// 05:00 UTC = 9:00 AM Gulf time — device alerts for trips in the coming week.
+cron.schedule("0 5 * * *", async () => {
+  try { const n = await sendTripAlerts(); console.log(`[cron] trip alerts sent: ${n}`); }
+  catch (e) { console.error("[cron] trip alerts failed:", e.message); }
 });
 
 const PORT = process.env.PORT || 3000;
