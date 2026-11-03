@@ -914,6 +914,29 @@ async function synthesizeSpeech(text) {
   return { audioUrl: data.data.audioUrl, durationSeconds: data.data.durationSeconds, credits: data.data.creditsConsumed };
 }
 
+// Speech to Text — the iPad records a short clip (MediaRecorder, usually
+// audio/mp4) and sends it as base64 JSON, like images. EchoNova needs a
+// multipart "file" part whose Content-Type starts with audio/, plus language.
+async function transcribeSpeech(audio) {
+  if (!ECHONOVA_API_KEY) throw new Error("ECHONOVA_API_KEY غير مضاف بعد.");
+  const buf = Buffer.from(String(audio?.data || ""), "base64");
+  if (!buf.length) throw new Error("ما وصل صوت");
+  let mime = String(audio?.mediaType || "audio/mp4").split(";")[0].trim().toLowerCase();
+  if (!mime.startsWith("audio/")) mime = "audio/mp4";
+  const ext = mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : mime.includes("ogg") ? "ogg" : mime.includes("mpeg") ? "mp3" : "m4a";
+  const form = new FormData();
+  form.append("file", new Blob([buf], { type: mime }), `voice.${ext}`);
+  form.append("language", audio?.language === "en" ? "en" : "ar");
+  const res = await fetchWithTimeout(`${ECHONOVA_BASE}/v1/speech-to-text/sync`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ECHONOVA_API_KEY}` },
+    body: form,
+  }, 60000);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.success === false) throw new Error(data.errorMessage || `EchoNova STT (${res.status})`);
+  return { text: (data.data?.transcription || "").trim(), durationSeconds: data.data?.durationSeconds, credits: data.data?.creditsConsumed };
+}
+
 // Real email sending via Resend — a free transactional email API (no
 // credit card, 3,000/month). Without RESEND_API_KEY set, the tool reports
 // that email isn't configured yet instead of silently failing.
@@ -1607,7 +1630,7 @@ app.use(cors({
 // client sent (or omitted) — this lets the frontend send POST requests
 // without a "Content-Type: application/json" header, which avoids the CORS
 // preflight (OPTIONS) round-trip that some free hosting edges mishandle.
-app.use(express.json({ type: () => true }));
+app.use(express.json({ type: () => true, limit: "25mb" })); // voice clips + images arrive as base64
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
@@ -2160,6 +2183,15 @@ app.get("/api/tts/voices", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Voice clip → text (job-queue, same pattern as TTS). Body: { audio: { data, mediaType } }
+app.post("/api/stt", (req, res) => {
+  const audio = req.body?.audio;
+  if (!audio?.data) return res.status(400).json({ error: "audio is required" });
+  if (!ECHONOVA_API_KEY) return res.status(503).json({ error: "stt not configured" });
+  const jobId = startJob(() => transcribeSpeech(audio));
+  res.json({ jobId });
 });
 
 app.post("/api/invoices/scan", async (req, res) => {
