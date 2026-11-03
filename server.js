@@ -2287,7 +2287,13 @@ app.get("/api/job/:id", (req, res) => {
 app.get("/api/chat", async (req, res) => {
   const message = (req.query.message || "").toString().trim();
   if (!message) return res.status(400).json({ error: "message is required" });
-  const id = startJob(() => runGM(message));
+  // In a voice call the reply is read aloud, so ask for a short spoken answer:
+  // faster to write, faster to turn into audio, and nicer to listen to.
+  const voice = req.query.voice === "1";
+  const prompt = voice
+    ? `${message}\n\n[ملاحظة النظام: هذه مكالمة صوتية — سيُقرأ ردّك بصوت عالٍ. ردّ بكلام طبيعي مختصر (٢-٤ جمل)، بدون جداول أو قوائم أو رموز أو روابط. إن طُلبت إحاطة أو تقرير فاذكر أهم ٣ نقاط فقط باختصار.]`
+    : message;
+  const id = startJob(() => runGM(prompt, voice ? message : undefined));
   res.json({ jobId: id });
 });
 
