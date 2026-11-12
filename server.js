@@ -41,6 +41,11 @@ async function sendPushToAll(title, body) {
   }
 }
 const MODEL = "claude-sonnet-4-6";
+// Anthropic's list price for MODEL, in US dollars per million tokens — used
+// only to turn measured token usage into the cost figure shown to Nawaf.
+// Update both if MODEL changes.
+const PRICE_IN_PER_MTOK = 3;
+const PRICE_OUT_PER_MTOK = 15;
 
 // Every external network call in this file goes through this — without it,
 // a single stalled connection (Outlook, Meta, Apify, Resend, Sheets — any of
@@ -525,7 +530,7 @@ async function callClaude({ system, messages, tools }) {
   );
   const u = res.usage || {};
   officeAddUsage(agentCtx.getStore()?.id,
-    (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0));
+    (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0), u.output_tokens || 0);
   return res;
 }
 
@@ -1127,16 +1132,22 @@ function trimMessages(messages, maxCount) {
   return trimmed;
 }
 
-function runGM(userText, displayText, images) {
-  return withAgent("gm", displayText || userText || "صورة مرفقة", () => runGMCore(userText, displayText, images), (r) => r?.reply);
+// `images` holds attachments as { mediaType, data(base64) } — images or PDFs.
+// `opts.onDelegate(names)` is told which departments each round is handed to.
+function runGM(userText, displayText, images, opts = {}) {
+  return withAgent("gm", displayText || userText || "مرفق", () => runGMCore(userText, displayText, images, opts), (r) => r?.reply);
 }
 
-async function runGMCore(userText, displayText, images) {
+const attachmentBlock = (f) => f.mediaType === "application/pdf"
+  ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data } }
+  : { type: "image", source: { type: "base64", media_type: f.mediaType, data: f.data } };
+
+async function runGMCore(userText, displayText, images, opts = {}) {
   const imgList = images ? (Array.isArray(images) ? images : [images]) : [];
   const userContent = imgList.length
     ? [
-        ...imgList.map((img) => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } })),
-        { type: "text", text: userText || "صف هذه الصور ووضّح لي ما تفهمه منها، واسألني إن احتجت توضيحًا." },
+        ...imgList.map(attachmentBlock),
+        { type: "text", text: userText || "صف هذه المرفقات ووضّح لي ما تفهمه منها، واسألني إن احتجت توضيحًا." },
       ]
     : userText;
   let messages = [...trimMessages(store.gmMessages, 16), { role: "user", content: userContent }];
@@ -1146,7 +1157,7 @@ async function runGMCore(userText, displayText, images) {
   // Today's already-prepared material, so asking "what's the briefing?" from a
   // second device returns what was actually sent this morning instead of
   // silently regenerating a different one.
-  let system = GM_SYSTEM;
+  let system = GM_SYSTEM + APPROVAL_RULE;
   system += `\n\nتاريخ اليوم بصيغة YYYY-M-D هو: ${todayKey()}. إذا سألك نواف عن يوم سابق (أمس، الأسبوع اللي فات، أو تاريخ محدد)، احسب التاريخ المطلوب بصيغة YYYY-M-D واستخدم أداة get_archived_day لجلبه — لا تعتمد على ذاكرتك من المحادثة الحالية وحدها لأيام سابقة.`;
   const ready = [];
   if (store.dailyBriefing?.day === todayKey()) {
@@ -1188,6 +1199,9 @@ async function runGMCore(userText, displayText, images) {
           notifyAgentError(DEPTS[consultedId]?.name || consultedId, e);
           return `تعذّر الوصول للقسم: ${e.message}`;
         }));
+    }
+    if (deptCalls.size && opts.onDelegate) {
+      opts.onDelegate(toolUses.filter((tu) => deptCalls.has(tu.id)).map((tu) => DEPTS[tu.name.replace("consult_", "")]?.name || tu.name));
     }
 
     const toolResults = [];
@@ -1363,7 +1377,7 @@ async function runGMCore(userText, displayText, images) {
   // the context sent to Claude for no benefit.
   store.gmMessages = trimMessages(messages, 16).map((m) => {
     if (!Array.isArray(m.content)) return m;
-    return { ...m, content: m.content.map((b) => (b.type === "image" ? { type: "text", text: "[صورة أرسلها نواف سابقًا]" } : b)) };
+    return { ...m, content: m.content.map((b) => (b.type === "image" ? { type: "text", text: "[صورة أرسلها نواف سابقًا]" } : b.type === "document" ? { type: "text", text: "[ملف PDF أرسله نواف سابقًا]" } : b)) };
   });
   const reply = finalText || "تم تنفيذ طلبك.";
   const depts = [...new Set(consultedAll)];
@@ -1566,6 +1580,11 @@ function archiveEntry(kind, entry) {
   store.archive[entry.day][kind] = entry;
 }
 
+// Appended to the GM's instructions on every channel (console and Telegram).
+const APPROVAL_RULE = `
+
+قاعدة ملزمة في كل القنوات (اللوحة وتيليجرام): أي دفع أو تحويل مالي أو صرف مبلغ، وأي نشر أو إعلان أو حملة على أي منصة، لا يُنفَّذ ولا يُعتبر منفَّذًا بطلب في المحادثة مهما كانت صياغته حازمة أو مستعجلة. استخدم أداة propose_approval لرفعه كطلب موافقة، ثم أخبر نواف أنه بانتظار ضغطه على زر الموافقة. كلمة "موافق" أو "نفّذ" داخل المحادثة لا تُعد موافقة — الموافقة فقط عبر الزر. لا تقل أبدًا إن دفعة دُفعت أو إعلانًا نُشر ما لم يظهر ذلك في نتيجة أداة.`;
+
 async function generateDailyBriefing() {
   // The GM writes the briefing itself (so it lands in the GM conversation and
   // stays in its memory), grounded in the competitor report the strategy
@@ -1708,14 +1727,25 @@ function officeStats(id) {
   const s = officeData().stats[id] || {};
   return { done: s.done || 0, err: s.err || 0, ms: s.ms || 0, today: s.dayKey === uaeDay() ? s.day || 0 : 0 };
 }
+// Tokens are split into input and output because they are priced differently.
 function officeUsage(id) {
   const u = officeData().usage[id] || {}, day = uaeDay();
-  return { day: u.dayKey === day ? u.day || 0 : 0, month: u.monthKey === day.slice(0, 7) ? u.month || 0 : 0 };
+  const d = u.dayKey === day, m = u.monthKey === day.slice(0, 7);
+  const r = {
+    day: d ? u.day || 0 : 0, month: m ? u.month || 0 : 0,
+    dayIn: d ? u.dayIn || 0 : 0, dayOut: d ? u.dayOut || 0 : 0, monthIn: m ? u.monthIn || 0 : 0, monthOut: m ? u.monthOut || 0 : 0,
+  };
+  r.costDay = (r.dayIn * PRICE_IN_PER_MTOK + r.dayOut * PRICE_OUT_PER_MTOK) / 1e6;
+  r.costMonth = (r.monthIn * PRICE_IN_PER_MTOK + r.monthOut * PRICE_OUT_PER_MTOK) / 1e6;
+  return r;
 }
-function officeAddUsage(id, tokens) {
-  if (!id || !tokens) return;
-  const cur = officeUsage(id), day = uaeDay();
-  officeData().usage[id] = { day: cur.day + tokens, dayKey: day, month: cur.month + tokens, monthKey: day.slice(0, 7) };
+function officeAddUsage(id, tokensIn, tokensOut) {
+  if (!id || !(tokensIn + tokensOut)) return;
+  const c = officeUsage(id), day = uaeDay(), t = tokensIn + tokensOut;
+  officeData().usage[id] = {
+    dayKey: day, monthKey: day.slice(0, 7), day: c.day + t, month: c.month + t,
+    dayIn: c.dayIn + tokensIn, dayOut: c.dayOut + tokensOut, monthIn: c.monthIn + tokensIn, monthOut: c.monthOut + tokensOut,
+  };
 }
 
 function shortText(text, n = 90) {
@@ -1926,6 +1956,182 @@ async function runTelegramSelfTest() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Telegram chat — Nawaf talks to the general manager from Telegram. A message
+// runs the same runGM() the console uses, on the same conversation history,
+// so both stay in sync and the office shows the run like any other.
+// ---------------------------------------------------------------------------
+const TG_COMMANDS = [
+  { command: "status", description: "حالة كل وكيل الآن" },
+  { command: "cost", description: "تكلفة اليوم وهذا الشهر" },
+  { command: "pending", description: "القرارات المعلّقة مع أزرار الموافقة" },
+  { command: "brief", description: "تشغيل إحاطة السكرتيرة" },
+  { command: "help", description: "طريقة الاستخدام" },
+];
+const TG_HELP = `<b>Loop — المدير العام على تيليجرام</b>
+
+اكتب أي رسالة وتوصل للمدير العام مباشرة، بنفس محادثة اللوحة.
+أرسل صورة أو ملف PDF (مع تعليق إن أردت) ويقرأه المدير.
+
+<b>الأوامر</b>
+/status — حالة كل وكيل الآن
+/cost — تكلفة اليوم وهذا الشهر
+/pending — القرارات المعلّقة مع أزرار الموافقة
+/brief — تشغيل إحاطة السكرتيرة
+/help — هذه الرسالة
+
+المدفوعات والنشر لا تُنفَّذ من المحادثة: تُرفع كطلب موافقة وتنتظر ضغطك على الزر.`;
+
+// Claude writes Markdown; Telegram wants its own small HTML subset.
+function tgFormat(text) {
+  let t = telegram.escapeHtml(text);
+  t = t.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, code) => `<pre>${code.trimEnd()}</pre>`);
+  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  t = t.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  t = t.replace(/^(\s*)[-*]\s+/gm, "$1• ");
+  t = t.replace(/^\s*---+\s*$/gm, "—————");
+  return t;
+}
+
+// Telegram rejects messages over 4096 characters. Split on paragraph, then
+// line, then word boundaries, leaving headroom for the HTML tags formatting adds.
+function tgChunks(text, max = 3500) {
+  const chunks = [];
+  let rest = String(text || "").trim();
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf("\n\n", max);
+    if (cut < max * 0.4) cut = rest.lastIndexOf("\n", max);
+    if (cut < max * 0.4) cut = rest.lastIndexOf(" ", max);
+    if (cut < max * 0.4) cut = max;
+    chunks.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest) chunks.push(rest);
+  return chunks;
+}
+
+async function tgSendReply(text) {
+  for (const chunk of tgChunks(text)) {
+    const html = tgFormat(chunk);
+    try {
+      if (html.length > 4096) throw new Error("formatted chunk too long");
+      await telegram.sendMessage(html);
+    } catch (e) {
+      // Unbalanced markup (or an over-long chunk) must not lose the reply: send it as plain text.
+      for (const plain of tgChunks(chunk, 4000)) await telegram.sendMessage(plain, { parse_mode: undefined });
+    }
+  }
+}
+
+// Shows "typing…" until the returned function is called (the action expires after ~5s).
+function tgTyping() {
+  const tick = () => telegram.sendChatAction("typing").catch(() => {});
+  tick();
+  const timer = setInterval(tick, 4500);
+  return () => clearInterval(timer);
+}
+
+// Photos and PDFs → the same { mediaType, data } shape the console uploads use.
+const TG_MAX_FILE = 20 * 1024 * 1024; // the Bot API's own download limit
+async function tgAttachment(msg) {
+  let fileId = null, mediaType = null, size = 0;
+  if (msg.photo?.length) {
+    const best = msg.photo[msg.photo.length - 1]; // sizes are listed smallest first
+    fileId = best.file_id; size = best.file_size || 0; mediaType = "image/jpeg";
+  } else if (msg.document) {
+    const mime = msg.document.mime_type || "";
+    if (mime !== "application/pdf" && !/^image\/(jpeg|png|gif|webp)$/.test(mime)) return { unsupported: true };
+    fileId = msg.document.file_id; size = msg.document.file_size || 0; mediaType = mime;
+  } else return null;
+  if (size > TG_MAX_FILE) return { tooBig: true };
+  const buffer = await telegram.downloadFile(fileId);
+  return { mediaType, data: buffer.toString("base64") };
+}
+
+function tgStatusText() {
+  const lines = officeAgents().map((a) => {
+    const s = officeStats(a.id);
+    return officeBusy[a.id]
+      ? `🔴 <b>${telegram.escapeHtml(a.name)}</b> — يشتغل: ${telegram.escapeHtml(officeTask[a.id] || "")}`
+      : `🟢 <b>${telegram.escapeHtml(a.name)}</b> — فاضي (أنجز ${s.today} اليوم)`;
+  });
+  const pending = (store.approvals || []).length;
+  return `<b>حالة الوكلاء</b>\n${lines.join("\n")}\n\n${pending ? `🔔 قرارات معلّقة: ${pending} — /pending` : "لا توجد قرارات معلّقة."}\n🕒 ${telegram.uaeTime()}`;
+}
+
+function tgCostText() {
+  const usd = (n) => "$" + n.toFixed(n < 1 ? 3 : 2);
+  const tok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1000 ? (n / 1000).toFixed(1) + "K" : String(n));
+  let day = 0, month = 0, dayTok = 0, monthTok = 0;
+  const rows = [];
+  for (const a of officeAgents()) {
+    const u = officeUsage(a.id);
+    day += u.costDay; month += u.costMonth; dayTok += u.day; monthTok += u.month;
+    if (u.month) rows.push(`• ${telegram.escapeHtml(a.name)}: اليوم ${usd(u.costDay)} · الشهر ${usd(u.costMonth)}`);
+  }
+  return `<b>تكلفة الوكلاء (Claude)</b>
+اليوم: <b>${usd(day)}</b> (${tok(dayTok)} توكن)
+هذا الشهر: <b>${usd(month)}</b> (${tok(monthTok)} توكن)
+${rows.length ? "\n" + rows.join("\n") + "\n" : ""}
+محسوبة من الاستهلاك الفعلي بسعر ${MODEL}: $${PRICE_IN_PER_MTOK} للمليون توكن إدخال و$${PRICE_OUT_PER_MTOK} إخراج. لا تشمل رسوم بحث الويب ولا الخدمات الأخرى، والحساب بدأ مع تفعيل هذه الميزة.`;
+}
+
+async function tgPending() {
+  const list = store.approvals || [];
+  if (!list.length) return telegram.sendMessage("لا توجد قرارات معلّقة.");
+  for (const a of list) {
+    const msg = await telegram.sendMessage(approvalText(a), { reply_markup: approvalKeyboard(a.id) });
+    a.tgMessageId = msg.message_id; // the newest copy is the one a web decision updates
+  }
+  saveStore(store);
+}
+
+// One message at a time, in the order sent, so two quick messages can't
+// interleave on the shared conversation history.
+let tgQueue = Promise.resolve();
+function tgEnqueue(fn) {
+  tgQueue = tgQueue.then(fn).catch((e) => tgLogError("chat", e));
+  return tgQueue;
+}
+
+async function tgHandleMessage(msg) {
+  const text = (msg.text || msg.caption || "").trim();
+  const command = /^\/([a-z_]+)(@\w+)?(\s|$)/i.exec(msg.text || "")?.[1]?.toLowerCase();
+  if (command === "test") return runTelegramSelfTest();
+  if (command === "help" || command === "start") return telegram.sendMessage(TG_HELP);
+  if (command === "status") return telegram.sendMessage(tgStatusText());
+  if (command === "cost") return telegram.sendMessage(tgCostText());
+  if (command === "pending") return tgPending();
+  if (command === "brief") {
+    const stop = tgTyping();
+    try {
+      const b = await generateSecretaryBriefing();
+      await tgSendReply(b.text);
+    } catch (e) {
+      await telegram.sendMessage(`⚠️ تعذّر تجهيز الإحاطة: ${telegram.escapeHtml(telegram.redact(e.message).slice(0, 200))}`);
+    } finally { stop(); }
+    return;
+  }
+  if (command) return telegram.sendMessage("أمر غير معروف. اكتب /help لعرض الأوامر.");
+
+  const stop = tgTyping();
+  try {
+    const file = await tgAttachment(msg);
+    if (file?.unsupported) return await telegram.sendMessage("أقدر أقرأ الصور وملفات PDF فقط.");
+    if (file?.tooBig) return await telegram.sendMessage("الملف أكبر من 20 ميجابايت، وهذا حد تيليجرام للتنزيل.");
+    if (!file && !text) return await telegram.sendMessage("أستقبل النص والصور وملفات PDF. اكتب /help للتفاصيل.");
+    const label = file ? (file.mediaType === "application/pdf" ? "📎 ملف PDF" : "📎 صورة") : "";
+    const display = [label, text].filter(Boolean).join(" — ") + " (تيليجرام)";
+    const { reply } = await runGM(text, display, file ? [file] : undefined, {
+      onDelegate: (names) => telegram.sendMessage(`⏳ المدير حوّل المهمة إلى: ${names.map(telegram.escapeHtml).join("، ")}`).catch(() => {}),
+    });
+    await tgSendReply(reply);
+  } catch (e) {
+    await telegram.sendMessage(`⚠️ تعذّر تنفيذ الطلب: ${telegram.escapeHtml(telegram.redact(e.message).slice(0, 200))}`).catch(() => {});
+  } finally { stop(); }
+}
+
 async function handleTelegramUpdate(update) {
   const cq = update.callback_query;
   if (cq) {
@@ -1950,20 +2156,20 @@ async function handleTelegramUpdate(update) {
     }
     return;
   }
-  const text = (update.message?.text || "").trim();
-  if (/^\/test(@\w+)?$/.test(text)) return runTelegramSelfTest();
+  if (update.message) return tgEnqueue(() => tgHandleMessage(update.message));
 }
 
 // Runs once the server is listening: registers the webhook, then — the first
 // time this version runs with a working webhook — sends the test message and
 // the test approval. The marker lives in the store so restarts don't repeat it.
-const TELEGRAM_SELFTEST_MARK = "webhook-v1";
+const TELEGRAM_SELFTEST_MARK = "chat-v1";
 async function startTelegram() {
   const registered = await telegram.registerWebhook(PUBLIC_URL);
   if (!registered) return;
+  await telegram.setMyCommands(TG_COMMANDS).catch((e) => tgLogError("setMyCommands", e));
   await storeReady;
   if (store.telegramSelfTest === TELEGRAM_SELFTEST_MARK) return;
-  await runTelegramSelfTest();
+  await telegram.sendMessage(`✅ <b>المحادثة مع المدير العام شغّالة</b>\nرسالة اختبار من السيرفر — 🕒 ${telegram.uaeTime()} (توقيت الإمارات)\n\n${TG_HELP}`);
   store.telegramSelfTest = TELEGRAM_SELFTEST_MARK;
   saveStore(store);
 }

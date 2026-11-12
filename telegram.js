@@ -68,6 +68,32 @@ function answerCallbackQuery(id, text) {
   return api("answerCallbackQuery", { callback_query_id: id, ...(text ? { text } : {}) });
 }
 
+function sendChatAction(action) {
+  return api("sendChatAction", { chat_id: CHAT_ID, action });
+}
+
+function setMyCommands(commands) {
+  return api("setMyCommands", { commands });
+}
+
+// Downloads a file the owner sent to the bot. The download URL embeds the
+// token, so it is built and used here and never returned or logged.
+async function downloadFile(fileId) {
+  const file = await api("getFile", { file_id: fileId });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const res = await fetch(`https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`telegram file download failed: ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error("telegram file download timed out");
+    throw new Error(redact(e.message));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Points Telegram at our webhook (with the shared secret), then logs what
 // Telegram itself reports back. The webhook URL contains no credentials.
 async function registerWebhook(publicUrl) {
@@ -121,6 +147,6 @@ function isFromOwnerChat(update) {
 module.exports = {
   enabled, WEBHOOK_PATH,
   redact, escapeHtml, uaeTime,
-  sendMessage, editMessageText, answerCallbackQuery,
+  sendMessage, editMessageText, answerCallbackQuery, sendChatAction, setMyCommands, downloadFile,
   registerWebhook, isAuthenticWebhook, isFromOwnerChat,
 };
