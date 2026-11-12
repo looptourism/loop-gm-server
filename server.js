@@ -1740,7 +1740,7 @@ function officeMetrics() {
   const exp = computeExpenseSummary(30), rev = computeRevenueSummary(30);
   const num = (n) => Math.round(n).toLocaleString("en-US");
   const last = (store.priceHistory || []).slice(-1)[0];
-  const gap = last && Number(last.competitorAvg) > 0 ? ((last.ourAvg - last.competitorAvg) / last.competitorAvg) * 100 : null;
+  const gap = last && Number(last.competitorAvg) > 0 && Number(last.ourAvg) > 0 ? ((last.ourAvg - last.competitorAvg) / last.competitorAvg) * 100 : null; // needs both real averages
   const stale = getStaleCustomers(3).length;
   const idle = officeAgents().filter((a) => !officeBusy[a.id]).length;
   const pending = (store.approvals || []).length;
