@@ -5,6 +5,7 @@ const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
 const Anthropic = require("@anthropic-ai/sdk");
+const telegram = require("./telegram");
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -127,7 +128,7 @@ function normalizeStore(s) {
   return { ...base, ...s, settings: { ...base.settings, ...(s.settings || {}) } };
 }
 store = normalizeStore(store);
-loadStoreRemote().then((remote) => {
+const storeReady = loadStoreRemote().then((remote) => {
   if (remote) store = normalizeStore(remote);
 });
 
@@ -1092,7 +1093,8 @@ async function callDepartment(deptId, instruction, images) {
       : instruction;
     const res = await callClaude({ system: systemText, messages: [{ role: "user", content }] });
     return textOf(res.content) || "لا يوجد رد.";
-  } catch {
+  } catch (e) {
+    notifyAgentError(dept.name, e);
     return "تعذر الوصول للقسم حاليًا.";
 
   }
@@ -1165,8 +1167,12 @@ async function runGM(userText, displayText, images) {
     const deptCalls = new Map();
     for (const tu of toolUses) {
       if (!tu.name.startsWith("consult_")) continue;
-      deptCalls.set(tu.id, callDepartment(tu.name.replace("consult_", ""), tu.input?.instruction || "")
-        .catch((e) => `تعذّر الوصول للقسم: ${e.message}`));
+      const consultedId = tu.name.replace("consult_", "");
+      deptCalls.set(tu.id, callDepartment(consultedId, tu.input?.instruction || "")
+        .catch((e) => {
+          notifyAgentError(DEPTS[consultedId]?.name || consultedId, e);
+          return `تعذّر الوصول للقسم: ${e.message}`;
+        }));
     }
 
     const toolResults = [];
@@ -1226,19 +1232,7 @@ async function runGM(userText, displayText, images) {
         if (!title || !why) {
           responseText = "لم يُسجّل الاقتراح — title وwhy مطلوبان.";
         } else {
-          if (!store.approvals) store.approvals = [];
-          const approval = {
-            id: "a" + Date.now(),
-            from: from || "المدير العام",
-            icon: from && from !== "المدير العام" ? "dept" : "gm",
-            title, why, meta: meta || "",
-            at: new Date().toLocaleString("ar-AE", { hour: "numeric", minute: "2-digit" }),
-          };
-          store.approvals.push(approval);
-          saveStore(store);
-          if (store.settings?.alerts?.approval !== false) {
-            sendPushToAll("قرار ينتظر موافقتك", title).catch(() => {});
-          }
+          createApproval({ title, why, meta, from });
           responseText = `تم تسجيل الاقتراح وهو بانتظار موافقتك الآن: "${title}".`;
         }
       } else if (tu.name === "upsert_customer") {
@@ -1664,6 +1658,167 @@ async function generateSecretaryBriefing() {
 }
 
 // ---------------------------------------------------------------------------
+// Telegram — approvals with inline buttons, and agent-error alerts, sent to
+// Nawaf's own chat. All Bot API access lives in telegram.js; this section is
+// only the business side: what gets sent, and what a button press does.
+// ---------------------------------------------------------------------------
+const GM_NAME = "المدير العام";
+const PUBLIC_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "https://loop-gm-server-1.onrender.com").replace(/\/+$/, "");
+
+function tgLogError(what, e) {
+  console.error(`[telegram] ${what} failed:`, telegram.redact(e?.message || e));
+}
+
+function approvalText(a) {
+  const h = telegram.escapeHtml;
+  const lines = [`🔔 <b>طلب موافقة من ${h(a.from)}</b>`, "", `<b>${h(a.title)}</b>`, h(a.why)];
+  if (a.meta) lines.push("", h(a.meta));
+  return lines.join("\n");
+}
+
+function approvalKeyboard(id) {
+  return { inline_keyboard: [[
+    { text: "✅ موافق", callback_data: `ap:ok:${id}` },
+    { text: "❌ رفض", callback_data: `ap:no:${id}` },
+  ]] };
+}
+
+function decisionLine(ok, ts) {
+  return `${ok ? "✅ <b>تمت الموافقة</b>" : "❌ <b>تم الرفض</b>"}\n🕒 ${telegram.uaeTime(new Date(ts))} (توقيت الإمارات)`;
+}
+
+// The one place approvals are created — records it, pushes to the browser,
+// and sends the Telegram message with the two decision buttons.
+function createApproval({ title, why, meta, from, test }) {
+  if (!store.approvals) store.approvals = [];
+  const approval = {
+    id: "a" + Date.now() + Math.random().toString(36).slice(2, 5),
+    from: from || GM_NAME,
+    icon: from && from !== GM_NAME ? "dept" : "gm",
+    title, why, meta: meta || "",
+    at: new Date().toLocaleString("ar-AE", { timeZone: "Asia/Dubai", hour: "numeric", minute: "2-digit" }),
+    ...(test ? { test: true } : {}),
+  };
+  store.approvals.push(approval);
+  saveStore(store);
+  if (store.settings?.alerts?.approval !== false) {
+    sendPushToAll("قرار ينتظر موافقتك", title).catch(() => {});
+  }
+  if (telegram.enabled) {
+    telegram.sendMessage(approvalText(approval), { reply_markup: approvalKeyboard(approval.id) })
+      .then((msg) => {
+        // Remembered so a decision made in the web app can update this message too.
+        const live = (store.approvals || []).find((a) => a.id === approval.id);
+        if (live) { live.tgMessageId = msg.message_id; saveStore(store); }
+      })
+      .catch((e) => tgLogError("approval message", e));
+  }
+  return approval;
+}
+
+// The one place approvals are resolved — from the web app or from Telegram.
+// Returns the resolved approval (with decidedOk/decidedAt), or null if it
+// doesn't exist or was already decided.
+function decideApproval(id, ok, { viaTelegram = false } = {}) {
+  const approval = (store.approvals || []).find((a) => a.id === id);
+  if (!approval) return null;
+  const ts = Date.now();
+  store.approvals = store.approvals.filter((a) => a.id !== id);
+  if (!store.decided) store.decided = [];
+  store.decided.unshift({ id, title: approval.title, ok, ts });
+  store.decided = store.decided.slice(0, 20);
+  saveStore(store);
+  approval.decidedOk = ok;
+  approval.decidedAt = ts;
+  // Decided in the web app: bring the Telegram message in line (the Telegram
+  // path edits its own message from the callback handler).
+  if (!viaTelegram && telegram.enabled && approval.tgMessageId) {
+    telegram.editMessageText(approval.tgMessageId, `${approvalText(approval)}\n\n${decisionLine(ok, ts)}`)
+      .catch((e) => tgLogError("approval message update", e));
+  }
+  return approval;
+}
+
+// Short Telegram alert when an agent fails. The same agent failing with the
+// same error repeatedly (e.g. an API key that's down) alerts once per 10 min.
+const recentAgentAlerts = new Map();
+function notifyAgentError(agent, err) {
+  const message = telegram.redact(err?.message || err || "خطأ غير معروف").slice(0, 300);
+  console.error(`[agent-error] ${agent}: ${message}`);
+  if (!telegram.enabled || store.settings?.alerts?.fail === false) return;
+  const key = `${agent}|${message}`;
+  const now = Date.now();
+  if (now - (recentAgentAlerts.get(key) || 0) < 10 * 60 * 1000) return;
+  recentAgentAlerts.set(key, now);
+  for (const [k, t] of recentAgentAlerts) if (now - t > 10 * 60 * 1000) recentAgentAlerts.delete(k);
+  telegram.sendMessage(`⚠️ <b>خطأ عند ${telegram.escapeHtml(agent)}</b>\n${telegram.escapeHtml(message)}\n🕒 ${telegram.uaeTime()}`)
+    .catch((e) => tgLogError("error alert", e));
+}
+
+const CRON_AGENTS = {
+  "competitor report": "الاستراتيجية", "daily briefing": GM_NAME, "secretary briefing": "السكرتيرة",
+  "price point": "الاستراتيجية", "monthly report": "المالية", "weekly report": "المالية",
+  "seasonal forecast": "الاستراتيجية", "marketing content": "التسويق", "trip alerts": "تنبيهات الرحلات",
+};
+function cronFail(what, e) {
+  console.error(`[cron] ${what} failed:`, e.message);
+  notifyAgentError(CRON_AGENTS[what] || what, e);
+}
+
+// A test message followed by a test approval, so both buttons can be tried.
+async function runTelegramSelfTest() {
+  await telegram.sendMessage(`✅ <b>Loop HQ متصل بتيليجرام</b>\nرسالة اختبار من السيرفر.\n🕒 ${telegram.uaeTime()} (توقيت الإمارات)`);
+  createApproval({
+    from: GM_NAME, test: true,
+    title: "طلب موافقة تجريبي",
+    why: "هذا طلب للاختبار فقط — جرّب زر الموافقة أو الرفض. لن يُنفَّذ أي شيء فعلي.",
+    meta: "اكتب /test في أي وقت لإرسال طلب تجريبي جديد.",
+  });
+}
+
+async function handleTelegramUpdate(update) {
+  const cq = update.callback_query;
+  if (cq) {
+    const m = /^ap:(ok|no):(.+)$/.exec(cq.data || "");
+    if (!m) return telegram.answerCallbackQuery(cq.id);
+    const ok = m[1] === "ok";
+    const approval = decideApproval(m[2], ok, { viaTelegram: true });
+    const messageId = cq.message?.message_id;
+    if (!approval) {
+      // Already decided (second tap, or decided in the web app) or expired.
+      const past = (store.decided || []).find((d) => d.id === m[2]);
+      await telegram.answerCallbackQuery(cq.id, "سبق البتّ في هذا الطلب");
+      if (messageId) {
+        const tail = past ? decisionLine(past.ok, past.ts) : "⚪ هذا الطلب لم يعد قائمًا.";
+        await telegram.editMessageText(messageId, `${telegram.escapeHtml(cq.message.text || "")}\n\n${tail}`).catch(() => {});
+      }
+      return;
+    }
+    await telegram.answerCallbackQuery(cq.id, ok ? "تمت الموافقة ✅" : "تم الرفض ❌");
+    if (messageId) {
+      await telegram.editMessageText(messageId, `${approvalText(approval)}\n\n${decisionLine(ok, approval.decidedAt)}`);
+    }
+    return;
+  }
+  const text = (update.message?.text || "").trim();
+  if (/^\/test(@\w+)?$/.test(text)) return runTelegramSelfTest();
+}
+
+// Runs once the server is listening: registers the webhook, then — the first
+// time this version runs with a working webhook — sends the test message and
+// the test approval. The marker lives in the store so restarts don't repeat it.
+const TELEGRAM_SELFTEST_MARK = "webhook-v1";
+async function startTelegram() {
+  const registered = await telegram.registerWebhook(PUBLIC_URL);
+  if (!registered) return;
+  await storeReady;
+  if (store.telegramSelfTest === TELEGRAM_SELFTEST_MARK) return;
+  await runTelegramSelfTest();
+  store.telegramSelfTest = TELEGRAM_SELFTEST_MARK;
+  saveStore(store);
+}
+
+// ---------------------------------------------------------------------------
 // HTTP API
 // ---------------------------------------------------------------------------
 const app = express();
@@ -1692,6 +1847,7 @@ app.get("/api/status", (req, res) => {
     meta: !!(META_TOKEN && META_IG_USER_ID),
     push: !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
     echonova: !!ECHONOVA_API_KEY,
+    telegram: telegram.enabled,
     lastUpdate: new Date().toISOString(),
   });
 });
@@ -1966,14 +2122,20 @@ app.get("/api/payments/:id/invoice", (req, res) => {
 
 app.post("/api/approvals/:id/decide", (req, res) => {
   const { decision } = req.body || {};
-  const approval = (store.approvals || []).find((a) => a.id === req.params.id);
+  const approval = decideApproval(req.params.id, decision === "approve");
   if (!approval) return res.status(404).json({ error: "not found" });
-  store.approvals = store.approvals.filter((a) => a.id !== req.params.id);
-  if (!store.decided) store.decided = [];
-  store.decided.unshift({ title: approval.title, ok: decision === "approve", ts: Date.now() });
-  store.decided = store.decided.slice(0, 20);
-  saveStore(store);
   res.json({ ok: true });
+});
+
+// Telegram webhook. Two gates before anything is acted on: the request must
+// carry the secret registered with setWebhook, and the update must come from
+// Nawaf's own chat. Telegram gets its 200 straight away; the work happens after.
+app.post(telegram.WEBHOOK_PATH, (req, res) => {
+  if (!telegram.isAuthenticWebhook(req)) return res.status(403).json({ error: "forbidden" });
+  res.json({ ok: true });
+  const update = req.body || {};
+  if (!telegram.isFromOwnerChat(update)) return;
+  handleTelegramUpdate(update).catch((e) => tgLogError("update handling", e));
 });
 
 app.patch("/api/settings", (req, res) => {
@@ -2275,12 +2437,17 @@ function markPaymentsReminded(reminders) {
 const jobs = new Map(); // id -> { status: 'pending'|'done'|'error', result, error }
 let jobCounter = 0;
 
-function startJob(fn) {
+// `agent` is the Arabic name of the agent doing the work, when the job is an
+// agent's — a failure then also reaches Nawaf on Telegram.
+function startJob(fn, agent) {
   const id = String(++jobCounter);
   jobs.set(id, { status: "pending" });
   fn()
     .then((result) => jobs.set(id, { status: "done", result }))
-    .catch((e) => jobs.set(id, { status: "error", error: e.message || "internal error" }));
+    .catch((e) => {
+      jobs.set(id, { status: "error", error: e.message || "internal error" });
+      if (agent) notifyAgentError(agent, e);
+    });
   // Jobs are small and short-lived; drop them from memory after a while so
   // this never grows unbounded.
   setTimeout(() => jobs.delete(id), 10 * 60 * 1000);
@@ -2302,7 +2469,7 @@ app.get("/api/chat", async (req, res) => {
   const prompt = voice
     ? `${message}\n\n[ملاحظة النظام: هذه مكالمة صوتية — سيُقرأ ردّك بصوت عالٍ. ردّ بكلام طبيعي مختصر (٢-٤ جمل)، بدون جداول أو قوائم أو رموز أو روابط. إن طُلبت إحاطة أو تقرير فاذكر أهم ٣ نقاط فقط باختصار.]`
     : message;
-  const id = startJob(() => runGM(prompt, voice ? message : undefined));
+  const id = startJob(() => runGM(prompt, voice ? message : undefined), GM_NAME);
   res.json({ jobId: id });
 });
 
@@ -2314,7 +2481,7 @@ app.post("/api/chat-image", async (req, res) => {
   if (!images.length || images.some((img) => !img?.data || !img?.mediaType)) {
     return res.status(400).json({ error: "at least one valid image is required" });
   }
-  const id = startJob(() => runGM(message, message || `📎 ${images.length > 1 ? images.length + " صور" : "صورة"}`, images));
+  const id = startJob(() => runGM(message, message || `📎 ${images.length > 1 ? images.length + " صور" : "صورة"}`, images), GM_NAME);
   res.json({ jobId: id });
 });
 
@@ -2364,7 +2531,7 @@ app.get("/api/department/:id", async (req, res) => {
     const responseText = await callDepartment(id, message);
     appendDeptLog(id, message, responseText);
     return { reply: responseText };
-  });
+  }, DEPTS[id].name);
   res.json({ jobId });
 });
 
@@ -2382,7 +2549,7 @@ app.post("/api/department/:id/image", async (req, res) => {
     const responseText = await callDepartment(id, message, images);
     appendDeptLog(id, message || `📎 ${images.length > 1 ? images.length + " صور" : "صورة"}`, responseText);
     return { reply: responseText };
-  });
+  }, DEPTS[id].name);
   res.json({ jobId });
 });
 
@@ -2392,12 +2559,13 @@ app.get("/api/briefing/daily", async (req, res) => {
     const fresh = await generateDailyBriefing();
     res.json(fresh);
   } catch (e) {
+    notifyAgentError(req.path.includes("secretary") ? "السكرتيرة" : GM_NAME, e);
     res.status(500).json({ error: e.message || "internal error" });
   }
 });
 
 app.get("/api/briefing/daily/refresh", (req, res) => {
-  const jobId = startJob(() => generateDailyBriefing());
+  const jobId = startJob(() => generateDailyBriefing(), GM_NAME);
   res.json({ jobId });
 });
 
@@ -2407,12 +2575,13 @@ app.get("/api/briefing/secretary", async (req, res) => {
     const fresh = await generateSecretaryBriefing();
     res.json(fresh);
   } catch (e) {
+    notifyAgentError(req.path.includes("secretary") ? "السكرتيرة" : GM_NAME, e);
     res.status(500).json({ error: e.message || "internal error" });
   }
 });
 
 app.get("/api/briefing/secretary/refresh", (req, res) => {
-  const jobId = startJob(() => generateSecretaryBriefing());
+  const jobId = startJob(() => generateSecretaryBriefing(), "السكرتيرة");
   res.json({ jobId });
 });
 
@@ -2421,29 +2590,29 @@ app.get("/api/competitor-report", (req, res) => {
 });
 
 app.get("/api/competitor-report/refresh", (req, res) => {
-  const jobId = startJob(() => generateCompetitorReport());
+  const jobId = startJob(() => generateCompetitorReport(), DEPTS.strategy.name);
   res.json({ jobId });
 });
 
 app.get("/api/price-history/refresh", (req, res) => {
-  const jobId = startJob(() => generateMonthlyPricePoint());
+  const jobId = startJob(() => generateMonthlyPricePoint(), DEPTS.strategy.name);
   res.json({ jobId });
 });
 
 app.get("/api/reports/:period/refresh", (req, res) => {
   const { period } = req.params;
   if (!["weekly", "monthly"].includes(period)) return res.status(400).json({ error: "period must be weekly or monthly" });
-  const jobId = startJob(() => generatePeriodicReport(period));
+  const jobId = startJob(() => generatePeriodicReport(period), DEPTS.finance.name);
   res.json({ jobId });
 });
 
 app.get("/api/forecast/seasonal/refresh", (req, res) => {
-  const jobId = startJob(() => generateSeasonalForecast());
+  const jobId = startJob(() => generateSeasonalForecast(), DEPTS.strategy.name);
   res.json({ jobId });
 });
 
 app.get("/api/marketing/content/refresh", (req, res) => {
-  const jobId = startJob(() => generateMarketingContent());
+  const jobId = startJob(() => generateMarketingContent(), DEPTS.marketing.name);
   res.json({ jobId });
 });
 
@@ -2463,33 +2632,36 @@ app.get("/api/reset", (req, res) => {
 // own conversation history, so it can discuss it later in the day).
 cron.schedule("0 4 * * *", async () => {
   console.log("[cron] generating competitor report…");
-  try { await generateCompetitorReport(); } catch (e) { console.error("[cron] competitor report failed:", e.message); }
+  try { await generateCompetitorReport(); } catch (e) { cronFail("competitor report", e); }
   console.log("[cron] generating daily briefing…");
-  try { await generateDailyBriefing(); } catch (e) { console.error("[cron] daily briefing failed:", e.message); }
+  try { await generateDailyBriefing(); } catch (e) { cronFail("daily briefing", e); }
   console.log("[cron] generating secretary briefing…");
-  try { await generateSecretaryBriefing(); } catch (e) { console.error("[cron] secretary briefing failed:", e.message); }
+  try { await generateSecretaryBriefing(); } catch (e) { cronFail("secretary briefing", e); }
   if (new Date().getDate() === 1) {
     console.log("[cron] generating monthly price point…");
-    try { await generateMonthlyPricePoint(); } catch (e) { console.error("[cron] price point failed:", e.message); }
+    try { await generateMonthlyPricePoint(); } catch (e) { cronFail("price point", e); }
     console.log("[cron] generating monthly financial report…");
-    try { await generatePeriodicReport("monthly"); } catch (e) { console.error("[cron] monthly report failed:", e.message); }
+    try { await generatePeriodicReport("monthly"); } catch (e) { cronFail("monthly report", e); }
     console.log("[cron] generating seasonal forecast…");
-    try { await generateSeasonalForecast(); } catch (e) { console.error("[cron] seasonal forecast failed:", e.message); }
+    try { await generateSeasonalForecast(); } catch (e) { cronFail("seasonal forecast", e); }
   }
   // Sunday is the start of the business week in the Gulf.
   if (new Date().getDay() === 0) {
     console.log("[cron] generating weekly financial report…");
-    try { await generatePeriodicReport("weekly"); } catch (e) { console.error("[cron] weekly report failed:", e.message); }
+    try { await generatePeriodicReport("weekly"); } catch (e) { cronFail("weekly report", e); }
     console.log("[cron] generating weekly marketing content…");
-    try { await generateMarketingContent(); } catch (e) { console.error("[cron] marketing content failed:", e.message); }
+    try { await generateMarketingContent(); } catch (e) { cronFail("marketing content", e); }
   }
 });
 
 // 05:00 UTC = 9:00 AM Gulf time — device alerts for trips in the coming week.
 cron.schedule("0 5 * * *", async () => {
   try { const n = await sendTripAlerts(); console.log(`[cron] trip alerts sent: ${n}`); }
-  catch (e) { console.error("[cron] trip alerts failed:", e.message); }
+  catch (e) { cronFail("trip alerts", e); }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Loop GM server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Loop GM server running on port ${PORT}`);
+  startTelegram().catch((e) => console.error("[telegram] startup failed:", telegram.redact(e.message)));
+});
