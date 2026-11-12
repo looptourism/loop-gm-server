@@ -1920,6 +1920,46 @@ app.get("/assets/logo.png", (req, res) => {
   res.send(Buffer.from(LOGO_BASE64, "base64"));
 });
 
+// ---------------------------------------------------------------------------
+// Loop HQ office page — public/office.html, served only at /office and only
+// after HTTP Basic login (OFFICE_USER / OFFICE_PASSWORD). The file is sent
+// from this one route on purpose: there is no static folder, so the page has
+// no second, unprotected URL. With no credentials configured it stays closed.
+// ---------------------------------------------------------------------------
+const OFFICE_USER = (process.env.OFFICE_USER || "").trim();
+const OFFICE_PASSWORD = process.env.OFFICE_PASSWORD || "";
+const OFFICE_FILE = path.join(__dirname, "public", "office.html");
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && require("crypto").timingSafeEqual(x, y);
+}
+
+function requireOfficeLogin(req, res, next) {
+  if (!OFFICE_USER || !OFFICE_PASSWORD) {
+    return res.status(503).type("text/plain; charset=utf-8").send("صفحة المكتب مقفلة: أضف OFFICE_USER و OFFICE_PASSWORD في إعدادات السيرفر.");
+  }
+  const [scheme, encoded] = (req.get("Authorization") || "").split(" ");
+  if (scheme === "Basic" && encoded) {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const sep = decoded.indexOf(":");
+    const userOk = safeEqual(decoded.slice(0, sep), OFFICE_USER);
+    const passOk = safeEqual(decoded.slice(sep + 1), OFFICE_PASSWORD);
+    if (sep > 0 && userOk && passOk) return next();
+  }
+  res.set("WWW-Authenticate", 'Basic realm="Loop HQ", charset="UTF-8"');
+  res.status(401).type("text/plain; charset=utf-8").send("تسجيل الدخول مطلوب.");
+}
+
+// Matches both /office and /office/ (Express ignores the trailing slash).
+app.get("/office", requireOfficeLogin, (req, res) => {
+  if (!fs.existsSync(OFFICE_FILE)) {
+    return res.status(404).type("text/plain; charset=utf-8").send("ملف public/office.html غير موجود في المستودع.");
+  }
+  res.set("Cache-Control", "private, no-store");
+  res.sendFile(OFFICE_FILE);
+});
+
 app.get("/privacy", (req, res) => {
   res.set("Content-Type", "text/html; charset=utf-8");
   res.send(`<!DOCTYPE html>
