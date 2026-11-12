@@ -523,6 +523,9 @@ async function callClaude({ system, messages, tools }) {
     { model: MODEL, max_tokens: 1000, system, messages, ...(tools ? { tools } : {}) },
     { timeout: 60000 }
   );
+  const u = res.usage || {};
+  officeAddUsage(agentCtx.getStore()?.id,
+    (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0));
   return res;
 }
 
@@ -1021,7 +1024,11 @@ async function sendEmail({ to, subject, body }) {
   }
 }
 
-async function callDepartment(deptId, instruction, images) {
+function callDepartment(deptId, instruction, images) {
+  return withAgent(deptId, instruction || "فحص صورة مرفقة", () => callDepartmentCore(deptId, instruction, images));
+}
+
+async function callDepartmentCore(deptId, instruction, images) {
   const dept = DEPTS[deptId];
   let systemText = dept.system;
   if (dept.sheetUrl) {
@@ -1095,6 +1102,8 @@ async function callDepartment(deptId, instruction, images) {
     return textOf(res.content) || "لا يوجد رد.";
   } catch (e) {
     notifyAgentError(dept.name, e);
+    const ctx = agentCtx.getStore();
+    if (ctx) ctx.failed = telegram.redact(e?.message || "تعذر الوصول للقسم");
     return "تعذر الوصول للقسم حاليًا.";
 
   }
@@ -1118,7 +1127,11 @@ function trimMessages(messages, maxCount) {
   return trimmed;
 }
 
-async function runGM(userText, displayText, images) {
+function runGM(userText, displayText, images) {
+  return withAgent("gm", displayText || userText || "صورة مرفقة", () => runGMCore(userText, displayText, images), (r) => r?.reply);
+}
+
+async function runGMCore(userText, displayText, images) {
   const imgList = images ? (Array.isArray(images) ? images : [images]) : [];
   const userContent = imgList.length
     ? [
@@ -1168,6 +1181,8 @@ async function runGM(userText, displayText, images) {
     for (const tu of toolUses) {
       if (!tu.name.startsWith("consult_")) continue;
       const consultedId = tu.name.replace("consult_", "");
+      officeEmit("delegate", { from: "gm", to: consultedId, text: shortText(tu.input?.instruction, 60) });
+      officeLog("gm", `حوّل مهمة لـ${DEPTS[consultedId]?.name || consultedId}`);
       deptCalls.set(tu.id, callDepartment(consultedId, tu.input?.instruction || "")
         .catch((e) => {
           notifyAgentError(DEPTS[consultedId]?.name || consultedId, e);
@@ -1631,7 +1646,11 @@ async function generateCompetitorReport() {
   return store.competitorReport;
 }
 
-async function generateSecretaryBriefing() {
+function generateSecretaryBriefing() {
+  return withAgent("secretary", "تجهيز الإحاطة الشخصية", generateSecretaryBriefingCore, (b) => b?.text);
+}
+
+async function generateSecretaryBriefingCore() {
   let system = SECRETARY_SYSTEM_BASE;
   try {
     const k = await fetchKrakenData();
@@ -1655,6 +1674,131 @@ async function generateSecretaryBriefing() {
   archiveEntry("secretaryBriefing", store.secretaryBriefing);
   saveStore(store);
   return store.secretaryBriefing;
+}
+
+// ---------------------------------------------------------------------------
+// Office — live view of what the agents are really doing. Every agent run
+// goes through withAgent(), which records it (state, duration, tokens) and
+// pushes it to the office page over Server-Sent Events. Nothing here is
+// simulated: an agent shows as working only while its Claude call is running.
+// ---------------------------------------------------------------------------
+const { AsyncLocalStorage } = require("async_hooks");
+const agentCtx = new AsyncLocalStorage(); // which agent the current async call chain belongs to
+const SECRETARY_NAME = "السكرتيرة";
+const officeClients = new Set(); // open SSE responses
+const officeBusy = {};  // agent id -> number of runs in flight
+const officeTask = {};  // agent id -> what it is working on now
+
+function officeAgents() {
+  const list = [{ id: "gm", name: GM_NAME, role: "يستلم مهامك ويوزّعها على الأقسام" }];
+  for (const [id, d] of Object.entries(DEPTS)) list.push({ id, name: d.name, role: d.role });
+  list.push({ id: "secretary", name: SECRETARY_NAME, role: "الإحاطة الشخصية الصباحية" });
+  return list;
+}
+
+function officeData() {
+  if (!store.office) store.office = {};
+  const d = store.office;
+  d.stats = d.stats || {}; d.usage = d.usage || {}; d.log = d.log || [];
+  return d;
+}
+const uaeDay = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dubai" }); // YYYY-MM-DD
+
+function officeStats(id) {
+  const s = officeData().stats[id] || {};
+  return { done: s.done || 0, err: s.err || 0, ms: s.ms || 0, today: s.dayKey === uaeDay() ? s.day || 0 : 0 };
+}
+function officeUsage(id) {
+  const u = officeData().usage[id] || {}, day = uaeDay();
+  return { day: u.dayKey === day ? u.day || 0 : 0, month: u.monthKey === day.slice(0, 7) ? u.month || 0 : 0 };
+}
+function officeAddUsage(id, tokens) {
+  if (!id || !tokens) return;
+  const cur = officeUsage(id), day = uaeDay();
+  officeData().usage[id] = { day: cur.day + tokens, dayKey: day, month: cur.month + tokens, monthKey: day.slice(0, 7) };
+}
+
+function shortText(text, n = 90) {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  return t.length > n ? t.slice(0, n) + "…" : t;
+}
+
+function officeEmit(type, data) {
+  if (!officeClients.size) return;
+  const frame = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of officeClients) res.write(frame);
+}
+function officeLog(who, text) {
+  const d = officeData();
+  const entry = { who, text: shortText(text, 200), ts: Date.now() };
+  d.log.unshift(entry);
+  d.log = d.log.slice(0, 60);
+  officeEmit("log", entry);
+}
+
+function officeMetrics() {
+  const exp = computeExpenseSummary(30), rev = computeRevenueSummary(30);
+  const num = (n) => Math.round(n).toLocaleString("en-US");
+  const last = (store.priceHistory || []).slice(-1)[0];
+  const gap = last && Number(last.competitorAvg) > 0 ? ((last.ourAvg - last.competitorAvg) / last.competitorAvg) * 100 : null;
+  const stale = getStaleCustomers(3).length;
+  const idle = officeAgents().filter((a) => !officeBusy[a.id]).length;
+  const pending = (store.approvals || []).length;
+  return {
+    finance: { t: "مصاريف آخر 30 يوم (د.إ)", v: exp.total, s: num(exp.total) },
+    accounting: { t: "دفعات مسجّلة (30 يوم)", v: exp.count, s: num(exp.count) },
+    sales: { t: "إيرادات الحجوزات (30 يوم)", v: rev.total, s: num(rev.total) },
+    strategy: { t: "سعرنا مقابل المنافسين", v: gap, s: gap == null ? "—" : `${gap > 0 ? "+" : ""}${Math.round(gap)}%` },
+    communication: { t: "عملاء بانتظار متابعة", v: stale, s: num(stale) },
+    marketing: { t: "مهام اليوم", v: officeStats("marketing").today, s: num(officeStats("marketing").today) },
+    secretary: { t: "إحاطة اليوم", v: null, s: store.secretaryBriefing?.day === todayKey() ? "جاهزة" : "لم تُجهَّز" },
+    meeting: { t: "قرارات بانتظارك", v: pending, s: num(pending) },
+    break: { t: "وكلاء فاضيين الآن", v: idle, s: num(idle) },
+  };
+}
+
+function officeSnapshot() {
+  return {
+    agents: officeAgents().map((a) => ({
+      ...a, state: officeBusy[a.id] ? "working" : "idle", text: officeBusy[a.id] ? officeTask[a.id] || "" : "",
+      stats: officeStats(a.id), usage: officeUsage(a.id),
+    })),
+    approvals: (store.approvals || []).map(({ id, from, title, why, meta, at }) => ({ id, from, title, why, meta, at })),
+    log: officeData().log,
+    metrics: officeMetrics(),
+  };
+}
+
+// Runs `fn` as agent `id`: marks it working, attributes token usage to it,
+// and reports how it ended. `summarize` turns the result into the one line
+// shown in the office. A run that handled its own failure (callDepartment
+// returns an apology instead of throwing) flags it through the context.
+async function withAgent(id, task, fn, summarize = (r) => r) {
+  const ctx = { id, failed: null };
+  officeBusy[id] = (officeBusy[id] || 0) + 1;
+  officeTask[id] = shortText(task, 60);
+  officeEmit("agent", { id, state: "working", text: officeTask[id] });
+  const t0 = Date.now();
+  const finish = (error, result) => {
+    officeBusy[id] = Math.max(0, (officeBusy[id] || 1) - 1);
+    const s = officeStats(id), day = uaeDay();
+    const text = error ? shortText(error, 120) : shortText(summarize(result), 120);
+    officeData().stats[id] = error
+      ? { done: s.done, err: s.err + 1, ms: s.ms, day: s.today, dayKey: day }
+      : { done: s.done + 1, err: s.err, ms: s.ms + (Date.now() - t0), day: s.today + 1, dayKey: day };
+    officeLog(id, error ? `خطأ: ${text}` : text);
+    saveStore(store);
+    officeEmit("agent", { id, state: error ? "error" : "done", text, busy: officeBusy[id] > 0, stats: officeStats(id), usage: officeUsage(id) });
+    officeEmit("metrics", officeMetrics());
+  };
+  try {
+    const result = await agentCtx.run(ctx, fn);
+    finish(ctx.failed, result);
+    return result;
+  } catch (e) {
+    finish(telegram.redact(e?.message || "خطأ غير معروف"));
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1704,6 +1848,9 @@ function createApproval({ title, why, meta, from, test }) {
   if (store.settings?.alerts?.approval !== false) {
     sendPushToAll("قرار ينتظر موافقتك", title).catch(() => {});
   }
+  officeLog("gm", `طلب موافقتك: ${title}`);
+  officeEmit("approval", { id: approval.id, from: approval.from, title, why, meta: approval.meta, at: approval.at });
+  officeEmit("metrics", officeMetrics());
   if (telegram.enabled) {
     telegram.sendMessage(approvalText(approval), { reply_markup: approvalKeyboard(approval.id) })
       .then((msg) => {
@@ -1730,6 +1877,9 @@ function decideApproval(id, ok, { viaTelegram = false } = {}) {
   saveStore(store);
   approval.decidedOk = ok;
   approval.decidedAt = ts;
+  officeLog("you", `${ok ? "وافقت على" : "رفضت"}: ${approval.title}`);
+  officeEmit("decided", { id, ok, from: approval.from, title: approval.title });
+  officeEmit("metrics", officeMetrics());
   // Decided in the web app: bring the Telegram message in line (the Telegram
   // path edits its own message from the callback handler).
   if (!viaTelegram && telegram.enabled && approval.tgMessageId) {
@@ -1896,6 +2046,7 @@ const OPEN_PATHS = new Set([
   telegram.WEBHOOK_PATH,     // guarded by its own secret-token header
   "/auth/outlook/callback",  // Microsoft redirects here; it only accepts a valid OAuth code
   "/assets/logo.png", "/privacy",
+  "/sw.js",                  // the push service worker: no data in it, and browsers refetch it on their own
 ]);
 
 app.use((req, res, next) => {
@@ -2093,6 +2244,12 @@ function sendPage(file, missing) {
 
 // Express ignores the trailing slash, so this is both /office and /office/.
 app.get("/office", legacyOfficeLogin, sendPage(OFFICE_FILE, "ملف public/office.html غير موجود في المستودع."));
+
+// The console's push service worker has to live at the site root.
+app.get("/sw.js", (req, res) => {
+  res.set("Cache-Control", "no-cache");
+  res.type("application/javascript").sendFile(path.join(__dirname, "public", "sw.js"));
+});
 
 // The console is only ever served to a logged-in session.
 app.get("/", (req, res, next) => (AUTH_ON ? next() : res.status(503).type("text/plain; charset=utf-8").send("أضف CONSOLE_PASSWORD في إعدادات السيرفر لفتح اللوحة.")),
@@ -2315,6 +2472,25 @@ app.post(telegram.WEBHOOK_PATH, (req, res) => {
   if (!telegram.isFromOwnerChat(update)) return;
   handleTelegramUpdate(update).catch((e) => tgLogError("update handling", e));
 });
+
+// Office page data: a snapshot, and a Server-Sent Events stream of everything
+// that happens after it. Both sit behind the same login as the rest of /api.
+app.get("/api/office/state", (req, res) => res.json(officeSnapshot()));
+
+app.get("/api/office/stream", (req, res) => {
+  res.set({
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no", // tell proxies not to buffer the stream
+  });
+  res.flushHeaders();
+  res.write(`retry: 4000\n\nevent: state\ndata: ${JSON.stringify(officeSnapshot())}\n\n`);
+  officeClients.add(res);
+  req.on("close", () => officeClients.delete(res));
+});
+// Idle proxies drop silent connections; a comment line every 25s keeps it open.
+setInterval(() => { for (const res of officeClients) res.write(": ping\n\n"); }, 25000).unref();
 
 app.patch("/api/settings", (req, res) => {
   store.settings = { ...DEFAULT_SETTINGS, ...store.settings, ...(req.body || {}) };

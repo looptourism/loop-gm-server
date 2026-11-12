@@ -1,0 +1,1436 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07080F">
+<title>Loop — مجلس الإدارة الرقمي · v9</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* =========================================================
+   Loop — مجلس الإدارة الرقمي
+   ملف واحد: التصميم + الواجهة. البيانات حالياً تجريبية (Mock)
+   واربطها بالسيرفر من كائن API في أسفل الملف.
+   ========================================================= */
+:root{
+  --bg:#07080F; --surface:rgba(255,255,255,.035); --surface-2:rgba(255,255,255,.05);
+  --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.14);
+  --text:#ECEEF6; --text-strong:#FFFFFF; --muted:#A3A9C2; --dim:#8C92AB;
+  --accent:#A594FF; --accent-ink:#0B0A1A; --accent-soft:rgba(165,148,255,.14); --accent-line:rgba(165,148,255,.38);
+  --accent2:#5BD9F5; --accent2-soft:rgba(91,217,245,.12); --accent2-line:rgba(91,217,245,.32);
+  --amber:#F5B85B; --amber-soft:rgba(245,184,91,.13); --amber-line:rgba(245,184,91,.38);
+  --coral:#FF7A85; --coral-soft:rgba(255,122,133,.1); --coral-line:rgba(255,122,133,.4);
+  --mint:#7CF2C4; --mint-soft:rgba(124,242,196,.12);
+  --node-bg:#0F1017;
+  --r-lg:24px; --r-md:18px; --r-sm:14px;
+  --font:'IBM Plex Sans Arabic','Noto Sans Arabic',Tahoma,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent2);outline-offset:2px;border-radius:10px}
+[hidden]{display:none!important}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mono{font-family:var(--mono)}
+.ltr{direction:ltr;unicode-bidi:isolate}
+svg.i{width:20px;height:20px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+svg.i.s16{width:16px;height:16px} svg.i.s14{width:14px;height:14px} svg.i.s18{width:18px;height:18px}
+
+/* ---------- layout ---------- */
+.app{min-height:100vh;display:flex;justify-content:center;position:relative;overflow-x:hidden}
+.app::before{content:"";position:fixed;top:-180px;left:50%;width:620px;height:460px;margin-left:-310px;border-radius:50%;background:radial-gradient(closest-side,rgba(124,108,255,.18),rgba(124,108,255,0));pointer-events:none;z-index:0}
+.sidebar{display:none}
+.main{position:relative;z-index:1;width:100%;max-width:460px;padding:calc(env(safe-area-inset-top,0px) + 16px) 16px calc(env(safe-area-inset-bottom,0px) + 104px);display:flex;flex-direction:column;gap:16px}
+.main.has-composer{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 180px)}
+.side-chat{display:none}
+
+/* ---------- common pieces ---------- */
+.card{border-radius:var(--r-lg);border:1px solid var(--line);background:var(--surface)}
+.row{display:flex;align-items:center;gap:12px}
+.col{display:flex;flex-direction:column}
+.grow{flex:1;min-width:0}
+.h1{margin:0;font-size:20px;font-weight:700;color:var(--text-strong)}
+.h2{margin:0;font-size:15px;font-weight:700;color:var(--text-strong)}
+.sub{font-size:12px;color:var(--muted)}
+.sec-head{display:flex;align-items:baseline;justify-content:space-between;padding:0 4px}
+.icon-btn{position:relative;width:44px;height:44px;flex-shrink:0;border-radius:14px;border:1px solid var(--line);background:var(--surface-2);color:#C7CBDD;display:inline-flex;align-items:center;justify-content:center;padding:0;text-decoration:none}
+.icon-btn.amber{border-color:var(--amber-line);background:var(--amber-soft);color:var(--amber)}
+.icon-btn .badge{position:absolute;top:-4px;left:-4px}
+.badge{min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:var(--coral);border:2px solid var(--bg);color:#1A0A0C;font:600 10px/1 var(--mono);display:inline-flex;align-items:center;justify-content:center}
+.btn{height:44px;padding:0 16px;border-radius:14px;border:1px solid var(--line-2);background:transparent;color:#D9DCE8;font-size:14px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:6px;text-decoration:none}
+.btn.primary{border:none;background:var(--accent);color:var(--accent-ink);font-weight:700;box-shadow:0 8px 24px rgba(124,108,255,.32)}
+.btn.outline{border-color:var(--accent-line);color:var(--accent)}
+.btn.danger{border-color:var(--coral-line);color:var(--coral)}
+.btn.coral{border:none;background:var(--coral);color:#1A0A0C;font-weight:700}
+.btn.amber{border:none;background:var(--amber);color:#2A1806;font-weight:700}
+.btn.block{width:100%;height:52px;border-radius:16px;font-size:15px}
+.chip{flex-shrink:0;height:40px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:#C7CBDD;font-size:13px;display:inline-flex;align-items:center;gap:6px}
+.chip[aria-pressed="true"]{background:rgba(165,148,255,.18);border-color:rgba(165,148,255,.45);color:#fff;font-weight:600}
+.chips{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;margin:0 -16px;padding:0 16px}
+.chips::-webkit-scrollbar{display:none}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#C7CBDD;padding:4px 10px;border-radius:999px;border:1px solid var(--line-2);white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;display:inline-block}
+.live{animation:blink 1.8s ease-in-out infinite}
+.seg{display:grid;gap:4px;padding:4px;border-radius:16px;background:var(--surface-2);border:1px solid var(--line)}
+.seg button{height:40px;border-radius:12px;border:none;background:transparent;color:var(--muted);font-size:13px;display:flex;align-items:center;justify-content:center;gap:6px}
+.seg button[aria-pressed="true"]{background:rgba(165,148,255,.18);color:#fff;font-weight:600}
+.tile{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:var(--accent-soft);color:var(--accent)}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stat{border-radius:14px;background:var(--surface-2);padding:10px 6px;display:flex;flex-direction:column;align-items:center;gap:2px}
+.stat b{font:600 20px/1.3 var(--mono);color:#fff}
+.stat span{font-size:11px;color:var(--muted)}
+.empty{padding:28px 16px;text-align:center;color:var(--muted);font-size:14px;line-height:1.7}
+
+/* ---------- header ---------- */
+.topbar{display:flex;align-items:center;justify-content:space-between}
+.brand-logo{display:block;width:150px;height:auto;margin:0 auto}
+.back-head{display:flex;align-items:center;gap:12px}
+
+/* ---------- orb ---------- */
+.orb{border-radius:50%;flex-shrink:0;background:radial-gradient(circle at 35% 30%,#fff 0%,var(--accent2) 22%,var(--accent) 58%,#2A1F6B 100%);box-shadow:0 0 26px rgba(124,108,255,.55)}
+.orb-wrap{position:relative;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.orb-wrap .ring{position:absolute;inset:18%;border-radius:50%;border:1px solid var(--accent);animation:pulse 2.6s ease-out infinite}
+.orb-wrap .ring.r2{border-color:var(--accent2);animation-delay:1.3s}
+.offline .orb{filter:grayscale(.85);opacity:.55}
+.offline .ring{display:none}
+
+/* ---------- network ---------- */
+.net{position:relative;width:100%;max-width:380px;aspect-ratio:322/285;align-self:center}
+.net svg.lines{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.net .core{position:absolute;width:80px;height:80px;transform:translate(50%,-50%)}
+.node{position:absolute;width:76px;transform:translate(50%,-22px);display:flex;flex-direction:column;align-items:center;gap:3px;background:none;border:none;padding:0;color:inherit;text-decoration:none}
+.node .disc{position:relative;width:44px;height:44px;border-radius:50%;background:var(--node-bg);border:1px solid var(--accent-line);color:var(--accent);display:flex;align-items:center;justify-content:center}
+.node .cnt{position:absolute;top:-5px;left:-6px;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:#25233F;border:2px solid var(--node-bg);color:#fff;font:600 10px/1 var(--mono);display:flex;align-items:center;justify-content:center}
+.node .lbl{font-size:11px;line-height:1.4;color:#D9DCE8;background:var(--node-bg);padding:0 4px;border-radius:4px;white-space:nowrap}
+.node.out .disc{border-color:var(--accent2);color:var(--accent2);box-shadow:0 0 18px rgba(91,217,245,.55)}
+.node.out .cnt{background:var(--accent2);color:var(--bg)}
+.node.in .disc{border-color:var(--accent);box-shadow:0 0 18px rgba(165,148,255,.6)}
+.node.in .cnt{background:var(--accent);color:var(--bg)}
+.node.out .lbl,.node.in .lbl{color:#fff}
+.node.idle .disc{border-color:var(--line-2);color:var(--dim)} .node.idle .cnt{background:#1A1C28;color:var(--muted)} .node.idle .lbl{color:var(--dim)}
+.node.fail .disc{border-color:var(--coral);color:var(--coral);box-shadow:0 0 18px rgba(255,122,133,.45)} .node.fail .cnt{background:var(--coral);color:var(--bg)}
+.node.paused .disc{border-color:var(--line-2);color:var(--muted)} .node.paused .cnt{background:#25273A;color:#C7CBDD}
+line.flow{stroke-dasharray:3 7;animation:flow 1.8s linear infinite}
+line.flow-fast{stroke-dasharray:6 6;animation:flow .8s linear infinite}
+.feed{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.03)}
+.feed div{display:flex;align-items:center;gap:8px;font-size:13px;color:#D9DCE8;line-height:1.6}
+.feed b{color:#fff;font-weight:600}
+.alert{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:var(--r-md);background:var(--coral-soft);border:1px solid var(--coral-line)}
+.alert .tile{background:rgba(255,122,133,.16);color:var(--coral)}
+.fail-box{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:14px;background:rgba(255,122,133,.07);border:1px solid rgba(255,122,133,.25)}
+.teaser{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:var(--r-md);border:1px solid var(--amber-line);background:rgba(245,184,91,.06);text-decoration:none;color:inherit}
+.teaser .tile{background:var(--amber-soft);color:var(--amber)}
+
+/* ---------- المكتب (داخل اللوحة) ---------- */
+.main.office{max-width:none;padding:0;gap:0}
+.office-frame{display:block;width:100%;border:0;background:var(--bg,#10153A);height:calc(100dvh - env(safe-area-inset-bottom,0px) - 84px)}
+@media (min-width:1024px){ body.office-on .side-chat{display:none} .main.office{flex:1;min-width:0} .office-frame{height:calc(100dvh - 40px);border-radius:26px;border:1px solid var(--line)} }
+
+/* ---------- bottom nav ---------- */
+.tabbar{position:fixed;z-index:20;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 12px);transform:translateX(-50%);width:calc(100% - 32px);max-width:428px;border-radius:24px;border:1px solid rgba(255,255,255,.1);background:rgba(18,19,32,.86);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);padding:6px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+.tabbar a{height:56px;border-radius:18px;color:var(--muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:12px;font-weight:500;text-decoration:none}
+.tabbar a[aria-current="page"]{background:rgba(165,148,255,.16);color:var(--accent);font-weight:600}
+
+/* ---------- chat ---------- */
+.chat-head{display:flex;align-items:center;gap:12px;padding:8px;border-radius:22px;border:1px solid var(--line);background:var(--surface)}
+.msgs{display:flex;flex-direction:column;gap:14px}
+.msg-me{align-self:flex-end;max-width:80%;padding:12px 14px;border-radius:18px 18px 18px 6px;background:rgba(165,148,255,.16);border:1px solid rgba(165,148,255,.3);font-size:14px;line-height:1.7;color:#fff;white-space:pre-wrap;word-break:break-word}
+.msg-me img{display:block;max-width:180px;border-radius:12px}
+.msg-gm{align-self:flex-start;width:92%;display:flex;flex-direction:column;gap:8px}
+.gm-label{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#D9DCE8}
+.bubble{padding:14px;border-radius:6px 18px 18px 18px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);font-size:14px;line-height:1.75;color:var(--text);white-space:pre-wrap}
+.deleg{border-radius:var(--r-md);border:1px solid var(--line);background:rgba(255,255,255,.03);padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.deleg .tile{width:32px;height:32px;border-radius:10px}
+.st-done{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--accent);flex-shrink:0}
+.st-work{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--accent2);flex-shrink:0}
+.spin{width:11px;height:11px;border-radius:50%;border:2px solid rgba(91,217,245,.25);border-top-color:var(--accent2);animation:spin .9s linear infinite;flex-shrink:0}
+.typing{align-self:flex-start;display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:6px 18px 18px 18px;background:rgba(91,217,245,.06);border:1px solid rgba(91,217,245,.2);font-size:12px;color:#C7CBDD}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--accent2);display:inline-block;animation:dot 1.2s ease-in-out infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+.composer-dock{position:fixed;z-index:19;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 92px);width:calc(100% - 32px);max-width:428px;display:flex;flex-direction:column;gap:8px}
+.composer{display:flex;align-items:center;gap:6px;padding:6px;border-radius:22px;border:1px solid var(--accent-line);background:rgba(18,19,32,.94);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.composer input[type=text]{flex:1;min-width:0;height:44px;border:none;outline:none;background:transparent;color:#fff;font-size:15px;padding:0 6px}
+.composer .send{width:44px;height:44px;border-radius:16px;border:none;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.composer .ghost{width:44px;height:44px;border-radius:16px;border:none;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.composer .ghost.mic-on{color:var(--coral);background:var(--coral-soft);animation:pulse-mic 1.4s ease-in-out infinite}
+@keyframes pulse-mic{0%,100%{opacity:1}50%{opacity:.55}}
+.composer .ghost.mic-ready{color:var(--mint);background:rgba(52,211,153,.14);box-shadow:0 0 0 2px rgba(52,211,153,.35)}
+.composer.amber{border-color:var(--amber-line)} .composer.amber .send{background:var(--amber);color:#2A1806}
+.kv{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:36px;font-size:13px}
+.kv span:first-child{color:var(--muted)} .kv span:last-child{color:var(--text);font-weight:500;text-align:left}
+.kvbox{display:flex;flex-direction:column;padding:4px 12px;border-radius:12px;background:rgba(255,255,255,.035)}
+.tag-auto{font-size:10px;font-weight:600;color:var(--accent);padding:2px 6px;border-radius:6px;background:var(--accent-soft);margin-inline-start:6px}
+
+/* ---------- departments ---------- */
+.dept-card{display:flex;flex-direction:column;gap:12px;padding:14px;border-radius:20px;border:1px solid var(--line);background:var(--surface);text-decoration:none;color:inherit}
+.dept-card.hot{border-color:var(--accent2-line);box-shadow:0 0 0 4px rgba(91,217,245,.05),0 0 28px rgba(91,217,245,.08)}
+.dept-card.hot .tile{background:var(--accent2-soft);color:var(--accent2)}
+.dept-idle{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:20px;border:1px dashed rgba(255,255,255,.13);background:rgba(255,255,255,.015)}
+.dept-idle .tile{background:var(--surface-2);color:var(--muted)}
+.status{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid var(--line-2);color:#D9DCE8}
+.status.work{color:var(--accent2);background:var(--accent2-soft);border-color:var(--accent2-line)}
+.status.done{color:var(--accent);background:rgba(165,148,255,.1);border-color:var(--accent-line)}
+.status.fail{color:var(--coral);background:var(--coral-soft);border-color:var(--coral-line)}
+.taskline{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.03)}
+.taskline span:first-child{font-size:11px;color:var(--dim)} .taskline span:last-child{font-size:13px;color:var(--text)}
+.hist{display:flex;align-items:center;gap:10px;padding:12px 4px;border-bottom:1px solid rgba(255,255,255,.06);font-size:13px}
+
+/* ---------- secretary ---------- */
+.sec-avatar{width:44px;height:44px;border-radius:15px;flex-shrink:0;background:linear-gradient(140deg,#FFE2A8 0%,var(--amber) 45%,#B9732A 100%);color:#2A1806;display:flex;align-items:center;justify-content:center;box-shadow:0 0 22px rgba(245,184,91,.35)}
+.brief{border-radius:var(--r-lg);border:1px solid var(--amber-line);background:rgba(245,184,91,.05);padding:18px;display:flex;flex-direction:column;gap:16px}
+.num{width:24px;height:24px;border-radius:8px;flex-shrink:0;background:var(--amber-soft);color:var(--amber);font:600 12px/1 var(--mono);display:flex;align-items:center;justify-content:center}
+.chip.amber{border-color:rgba(245,184,91,.3);background:rgba(245,184,91,.06);color:#F3DDB7}
+
+/* ---------- settings ---------- */
+.group{border-radius:20px;border:1px solid var(--line);background:var(--surface);padding:4px 0}
+.group > * + *{border-top:1px solid rgba(255,255,255,.06)}
+.set-row{display:flex;align-items:center;gap:12px;min-height:52px;padding:6px 14px}
+.switch{width:52px;height:44px;border:none;background:transparent;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.switch span{position:relative;width:46px;height:26px;border-radius:13px;background:rgba(255,255,255,.14);transition:background .2s}
+.switch span::after{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;transition:left .2s}
+.switch[aria-checked="true"] span{background:var(--accent)}
+.switch[aria-checked="true"] span::after{left:22px}
+.meter{height:8px;border-radius:4px;background:rgba(255,255,255,.08);overflow:hidden}
+.meter i{display:block;height:100%;border-radius:4px;background:var(--accent)}
+
+/* ---------- accounting ---------- */
+.catbar{display:flex;gap:3px;height:10px;border-radius:5px;overflow:hidden}
+.legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px}
+.legend div{display:flex;align-items:center;gap:8px;font-size:12px}
+.pay{border-radius:var(--r-md);border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03)}
+.pay.open{border-color:var(--accent-line);background:rgba(255,255,255,.045);box-shadow:0 0 0 4px rgba(124,108,255,.06)}
+.pay > button{width:100%;min-height:64px;display:flex;align-items:center;gap:12px;padding:10px 14px;border:none;background:transparent;text-align:right}
+.pay .chev{color:var(--dim);display:flex;transition:transform .2s}
+.pay.open .chev{transform:rotate(180deg)}
+.pay-detail{margin:0 14px 14px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.035);display:flex;flex-direction:column}
+.amt{display:inline-flex;align-items:baseline;gap:4px;flex-shrink:0}
+.amt b{font:600 15px/1.2 var(--mono);color:#fff;direction:ltr;unicode-bidi:isolate}
+.amt small{font-size:11px;color:var(--muted)}
+.total-bar{position:fixed;z-index:19;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 92px);width:calc(100% - 32px);max-width:428px;display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:22px;border:1px solid var(--line-2);background:rgba(18,19,32,.94);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:0 -8px 30px rgba(0,0,0,.35)}
+.total-bar .amt b{font-size:24px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12px;color:var(--muted)}
+.field input,.field select,.field textarea{height:46px;padding:0 14px;border-radius:14px;border:1px solid var(--line-2);background:var(--surface-2);color:#fff;font-size:15px;outline:none}
+.field textarea{height:84px;padding:10px 14px;resize:vertical}
+.field.flag input{border-color:rgba(245,184,91,.55)}
+.flag-note{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--amber)}
+.scan{display:flex;gap:14px;align-items:center;padding:14px;border-radius:20px;border:1px solid var(--line);background:var(--surface)}
+.scan-thumb{position:relative;flex-shrink:0;width:96px;height:124px;border-radius:10px;background:#EEF0F6;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.scan-thumb img{width:100%;height:100%;object-fit:cover}
+.scan-thumb .beam{position:absolute;left:0;right:0;height:2px;background:var(--accent2);box-shadow:0 0 12px 2px rgba(91,217,245,.8);animation:scan 2.8s ease-in-out infinite}
+.drop{display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 16px;border-radius:20px;border:1px dashed var(--accent-line);background:rgba(165,148,255,.05);color:var(--accent);text-align:center;cursor:pointer}
+.toast{position:fixed;z-index:50;left:50%;top:calc(env(safe-area-inset-top,0px) + 14px);transform:translateX(-50%);padding:10px 16px;border-radius:14px;background:#1B1D2C;border:1px solid var(--line-2);color:#fff;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+
+/* ---------- motion ---------- */
+@keyframes pulse{0%{transform:scale(1);opacity:.55}100%{transform:scale(1.75);opacity:0}}
+@keyframes blink{50%{opacity:.3}}
+@keyframes flow{to{stroke-dashoffset:-30}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes dot{0%,80%,100%{transform:translateY(0);opacity:.35}40%{transform:translateY(-4px);opacity:1}}
+@keyframes scan{0%{top:8%}50%{top:88%}100%{top:8%}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+/* ---------- iPad / desktop ---------- */
+@media (min-width:1024px){
+  .app{padding:20px;gap:16px;align-items:flex-start}
+  .sidebar{display:flex;position:sticky;top:20px;width:232px;flex-shrink:0;height:calc(100vh - 40px);flex-direction:column;gap:6px;padding:18px 12px;border-radius:26px;border:1px solid var(--line);background:var(--surface);z-index:1}
+  .sidebar .brand-logo{width:132px;margin:4px auto 18px}
+  .sidebar a{height:48px;padding:0 14px;border-radius:14px;display:flex;align-items:center;gap:12px;font-size:14px;color:#C7CBDD;text-decoration:none}
+  .sidebar a[aria-current="page"]{background:rgba(165,148,255,.16);color:var(--accent);font-weight:600}
+  .sidebar a.amber{color:var(--amber)}
+  .sidebar a .badge{margin-right:auto;border:none}
+  .sidebar hr{border:none;height:1px;margin:8px 14px;background:rgba(255,255,255,.08)}
+  .sidebar .sys{margin-top:auto;display:flex;align-items:center;gap:8px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.03);font-size:12px;color:var(--muted)}
+  .main{max-width:640px;padding:0 0 40px}
+  .main.has-composer{padding-bottom:120px}
+  .tabbar,.mobile-only{display:none!important}
+  .side-chat{display:flex;position:sticky;top:20px;width:380px;flex-shrink:0;height:calc(100vh - 40px);flex-direction:column;gap:12px;padding:14px;border-radius:26px;border:1px solid var(--line);background:var(--surface);z-index:1}
+  .side-chat .msgs{flex:1;overflow-y:auto}
+  .side-chat .composer-dock{position:static;transform:none;width:100%}
+  .composer-dock,.total-bar{bottom:20px;left:calc(50% - 72px);max-width:620px}
+  body.with-side .composer-dock:not(.in-side),body.with-side .total-bar{left:calc(50% - 72px)}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar" aria-label="القائمة"></aside>
+  <main class="main" id="view" tabindex="-1"></main>
+  <section class="side-chat" id="sideChat" aria-label="محادثة المدير العام"></section>
+</div>
+<nav class="tabbar" id="tabbar" aria-label="التنقل الرئيسي"></nav>
+<div id="dock"></div>
+<div id="toastHost" aria-live="polite"></div>
+<input type="file" id="invoiceInput" accept="image/*" capture="environment" class="sr" tabindex="-1" aria-hidden="true">
+
+<script>
+/* =========================================================
+   1) الأيقونات
+   ========================================================= */
+const ICONS={
+ office:'<path d="M4 20V6.5a1.5 1.5 0 0 1 1.5-1.5h7A1.5 1.5 0 0 1 14 6.5V20"/><path d="M14 10h4.5A1.5 1.5 0 0 1 20 11.5V20"/><path d="M2.5 20h19"/><path d="M7.5 9h3M7.5 12.5h3M7.5 16h3"/>',
+ fin:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M16 14.5h2"/>',
+ mkt:'<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6"/><path d="M18 6.5a8 8 0 0 1 0 11"/>',
+ str:'<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+ com:'<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/>',
+ acc:'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+ sal:'<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>',
+ sec:'<path d="M9 3h6v3H9z"/><path d="M7 4.5H5V21h14V4.5h-2"/><path d="M9 11h6"/><path d="M9 15h4"/>',
+ gear:'<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+ bell:'<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+ refresh:'<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/>',
+ back:'<path d="M9 6l6 6-6 6"/>', fwd:'<path d="M15 6l-6 6 6 6"/>', down:'<path d="M6 9l6 6 6-6"/>',
+ check:'<path d="M5 12l4 4 10-10"/>', x:'<path d="M6 6l12 12M18 6L6 18"/>',
+ warn:'<path d="M12 4l9 16H3z"/><path d="M12 10v4"/><path d="M12 17v.5"/>',
+ home:'<rect x="4" y="4" width="7" height="7" rx="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.8"/><rect x="13" y="13" width="7" height="7" rx="1.8"/>',
+ gm:'<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.5"/>',
+ depts:'<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 5a3 3 0 0 1 0 6"/><path d="M21 20a6 6 0 0 0-4-5.6"/>',
+ up:'<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>',
+ mic:'<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
+ sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
+ doc:'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>',
+ db:'<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
+ sup:'<path d="M3 7h11v9H3z"/><path d="M14 10h4l3 3v3h-7"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/>',
+ lic:'<rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10" r="3"/><path d="M10.5 13l-1 5 2.5-1.3 2.5 1.3-1-5"/>',
+ cloud:'<path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/>',
+ other:'<circle cx="12" cy="12" r="9"/><path d="M8 12h.01M12 12h.01M16 12h.01"/>',
+ plus:'<path d="M12 5v14M5 12h14"/>', cam:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+ pen:'<path d="M4 20h4L19 9l-4-4L4 16z"/>', clip:'<path d="M20 11l-8.5 8.5a5 5 0 0 1-7-7L13 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L14 7"/>',
+ trash:'<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/>',
+ speaker:'<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9a4.5 4.5 0 0 1 0 6"/><path d="M19.5 6.5a8 8 0 0 1 0 11"/>'
+};
+const ic=(n,c='')=>`<svg class="i ${c}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]||''}</svg>`;
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>Number(n||0).toLocaleString('en-US',{maximumFractionDigits:2});
+const dfmt=(d,opt={day:'numeric',month:'long',year:'numeric'})=>new Intl.DateTimeFormat('ar-AE-u-nu-latn',opt).format(new Date(d));
+const LOGO='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUoAAACbCAYAAAAEPNI7AAAWfmNhQlgAABZ+anVtYgAAAB5qdW1kYzJwYQARABCAAACqADibcQNjMnBhAAAAFlhqdW1iAAAAR2p1bWRjMm1hABEAEIAAAKoAOJtxA3VybjpjMnBhOmY1NjAzOGE4LTdkZDctNDQ5Ny1iNTZmLTg3MjE1YjA4OTEwYwAAAAOTanVtYgAAAClqdW1kYzJhcwARABCAAACqADibcQNjMnBhLmFzc2VydGlvbnMAAAAAuGp1bWIAAABEanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5pbmdyZWRpZW50LnYzAAAAABhjMnNo9UQ7ySiWEaWwkjTHyS+gZAAAAGxjYm9yo2lkYzpmb3JtYXRpaW1hZ2UvcG5namluc3RhbmNlSUR4LHhtcDppaWQ6NGQ1OTgwNmEtYThhMy00ZTI0LTg3YjEtNDBkY2IzMmY0ODg3bHJlbGF0aW9uc2hpcGhwYXJlbnRPZgAAAeJqdW1iAAAAQWp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuYWN0aW9ucy52MgAAAAAYYzJzaMWrG+CDERoJC92m+gqifg4AAAGZY2JvcqJnYWN0aW9uc4KiZmFjdGlvbmtjMnBhLm9wZW5lZGpwYXJhbWV0ZXJzoWtpbmdyZWRpZW50c4GiY3VybHgtc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5pbmdyZWRpZW50LnYzZGhhc2hYIOSBfnxGZuovGNW18bMG62h9c5Owg9aCz2geRYHnxBfPpGZhY3Rpb254HWNvbS5hbnRocm9waWMuY2xhdWRlLnByb3ZpZGVkanBhcmFtZXRlcnOheB9jb20uYW50aHJvcGljLm9yaWdpbi1jb25maWRlbmNlZ3Vua25vd25rZGVzY3JpcHRpb254ZkNsYXVkZSBwcm92aWRlZCB0aGlzIGZpbGUgYXQgdGhlIHJlcXVlc3Qgb2YgYSB1c2VyIGFuZCBtYXkgaGF2ZSBjcmVhdGVkIG9yIG1vZGlmaWVkIHRoZSBmaWxlIGNvbnRlbnRzLm1zb2Z0d2FyZUFnZW50oWRuYW1lZkNsYXVkZXJhbGxBY3Rpb25zSW5jbHVkZWT1AAAAyGp1bWIAAABAanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5oYXNoLmRhdGEAAAAAGGMyc2jfLAbNr3s8qjA1xwcf8oR/AAAAgGNib3KlY2FsZ2ZzaGEyNTZjcGFkTQAAAAAAAAAAAAAAAABkaGFzaFgganRiExA4bD96kCFYfoDIdBBSe2DuvcmnvNCJxyXt3kFkbmFtZW5qdW1iZiBtYW5pZmVzdGpleGNsdXNpb25zgaJlc3RhcnQYIWZsZW5ndGgZFooAAAI+anVtYgAAACdqdW1kYzJjbAARABCAAACqADibcQNjMnBhLmNsYWltLnYyAAAAAg9jYm9ypWNhbGdmc2hhMjU2aXNpZ25hdHVyZXhNc2VsZiNqdW1iZj0vYzJwYS91cm46YzJwYTpmNTYwMzhhOC03ZGQ3LTQ0OTctYjU2Zi04NzIxNWIwODkxMGMvYzJwYS5zaWduYXR1cmVqaW5zdGFuY2VJRHgseG1wOmlpZDozNzMwZTVkZi02NmU2LTQyODEtYTQyOS00MDUzY2YyZDhlZmRyY3JlYXRlZF9hc3NlcnRpb25zg6JjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFgg5IF+fEZm6i8Y1bXxswbraH1zk7CD1oLPaB5FgefEF8+iY3VybHgqc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5hY3Rpb25zLnYyZGhhc2hYIAXzC4Y1o2RVoZAI6e/p+g+xv7uw6GETKp37tmfDHwJYomN1cmx4KXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaGFzaC5kYXRhZGhhc2hYIP4WV9gLyUD+1IlA89VztVLj58bv9CTA3UR4Us/sooerdGNsYWltX2dlbmVyYXRvcl9pbmZvo2RuYW1lb0FudGhyb3BpYyBGaWxlc2d2ZXJzaW9uZTEuMC4wa3NwZWNWZXJzaW9uZTIuNC4wAAAQOGp1bWIAAAAoanVtZGMyY3MAEQAQgAAAqgA4m3EDYzJwYS5zaWduYXR1cmUAAAAQCGNib3LShFkCEqIBJhghWQIKMIICBjCCAY2gAwIBAgIUQOWgCu7COdC+uIP6BkIFPWdVEwAwCgYIKoZIzj0EAwMwSTEXMBUGA1UEChMOQW50aHJvcGljLCBQQkMxLjAsBgNVBAMTJUFudGhyb3BpYyBDb250ZW50IENyZWRlbnRpYWxzIFJvb3QgQ0EwHhcNMjYwODA3MTg0MzU2WhcNMjgwODA2MTk0MzU2WjBEMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEpMCcGA1UEAxMgQW50aHJvcGljIENsYXVkZSBDb250ZW50IFNpZ25pbmcwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASYegpry1AYBRTVNL1CpTlbROnY3dey+UrsF9C3phYrATN3ZHf93Mo8RQN0KOUuOn19P4oWNFWe5n2/She9N7eTo1gwVjAOBgNVHQ8BAf8EBAMCB4AwFQYDVR0lBA4wDAYKKwYBBAGD6F4CATAMBgNVHRMBAf8EAjAAMB8GA1UdIwQYMBaAFM5R4gSBTmRbI/jjxM+aPpzB11zCMAoGCCqGSM49BAMDA2cAMGQCMDFzHRSeAXrSy1WOzkbhPZ6Km2wGTmZ/2gK18k8BQGXyqz88Rdrz6CTX9flAnYNVxgIwcF9c3fVhqmJKpi+UhasNUMko69cyX6STPfta3Q8EjyzDjzoyrol46FP6VFHhvUcJoWNwYWRZDZ4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA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'; // استبدلها بمسار شعاركم الأصلي، مثل: 'logo.png'
+
+/* =========================================================
+   2) البيانات التجريبية (Mock) — احذفها بعد الربط بالسيرفر
+   ========================================================= */
+const today=new Date();
+const iso=(daysAgo)=>{const d=new Date(today);d.setDate(d.getDate()-daysAgo);return d.toISOString().slice(0,10)};
+const CATS={
+ sup:{label:'رسوم موردين',color:'var(--accent)',soft:'var(--accent-soft)'},
+ lic:{label:'تراخيص',color:'var(--amber)',soft:'var(--amber-soft)'},
+ mkt:{label:'إعلانات',color:'var(--accent2)',soft:'var(--accent2-soft)'},
+ cloud:{label:'اشتراكات',color:'var(--mint)',soft:'var(--mint-soft)'},
+ other:{label:'أخرى',color:'var(--muted)',soft:'var(--surface-2)'}
+};
+const METHODS=['تحويل بنكي','نقداً','بطاقة','شيك'];
+const MOCK={
+ health:{server:true,claude:true,apify:true,sheets:true,lastUpdate:new Date().toISOString()},
+ departments:[
+  {id:'strategy',name:'الاستراتيجية',icon:'str',state:'out',tasks:7,current:'مقارنة أسعار المنافسين',last:iso(0),sources:['بيانات المنافسين (Apify)','Google Sheets']},
+  {id:'finance',name:'المالية',icon:'fin',state:'active',tasks:2,current:'هامش الربح لكل باقة',last:iso(0),sources:['Google Sheets']},
+  {id:'marketing',name:'التسويق',icon:'mkt',state:'active',tasks:2,current:'فكرة حملة للشهر',last:iso(0),sources:['Google Sheets']},
+  {id:'sales',name:'المبيعات',icon:'sal',state:'in',tasks:3,current:'تقرير المبيعات',last:iso(14),sources:['Google Sheets']},
+  {id:'communication',name:'الاتصال',icon:'com',state:'idle',tasks:0,current:null,last:null,sources:[]},
+  {id:'accounting',name:'المحاسبة',icon:'acc',state:'idle',tasks:0,current:null,last:null,sources:['Google Sheets']}
+ ],
+ activity:[{type:'out',dept:'strategy',text:'المدير يوزّع مهمة جديدة على'},{type:'in',dept:'sales',text:'تسلّم تقريرها للمدير'}],
+ approvals:[
+  {id:'a1',from:'المدير العام',icon:'gm',title:'عرض محدود على الباقة الاقتصادية للعمرة',why:'بناءً على تقارير الاستراتيجية والمالية: سعرنا أعلى من متوسط السوق، والهامش يسمح بخصم.',meta:'الخصم المقترح: [نسبة الخصم]',at:'قبل ساعتين'},
+  {id:'a2',from:'التسويق',icon:'mkt',title:'نشر حملة الشهر على إنستغرام',why:'حملة مرتبطة بالعرض المقترح، تحتاج اعتماد العرض أولاً.',meta:'الميزانية المقترحة: [المبلغ]',at:'قبل 20 دقيقة'}
+ ],
+ decided:[],
+ briefing:{generatedAt:new Date(new Date().setHours(7,0,0,0)).toISOString(),
+  top:['اقتراحان ينتظران قرارك، أهمهم عرض الباقة الاقتصادية.','التسويق يسلّم فكرة حملة الشهر خلال اليوم.','الاتصال والمحاسبة بدون أي مهمة منذ الإطلاق.'],
+  fromDepts:[{dept:'strategy',text:'سلّمت مقارنة أسعار المنافسين',done:true},{dept:'finance',text:'سلّمت تحليل هامش الربح',done:true},{dept:'marketing',text:'يجهّز فكرة الحملة',done:false}]},
+ settings:{budget:{used:0,limit:0},briefTime:'07:00',alerts:{fail:true,approval:true,report:false},enabled:{}},
+ payments:[
+  {id:'p1',cat:'sup',title:'حجوزات فنادق مكة',payee:'[اسم المورد]',amount:12400,date:iso(13),method:'تحويل بنكي',invoice:'',notes:''},
+  {id:'p2',cat:'sup',title:'رسوم مورد التأشيرات',payee:'[اسم المورد]',amount:3200,date:iso(6),method:'تحويل بنكي',invoice:'',notes:''},
+  {id:'p3',cat:'mkt',title:'إعلانات إنستغرام',payee:'Meta',amount:1500,date:iso(15),method:'بطاقة',invoice:'',notes:''},
+  {id:'p4',cat:'lic',title:'تجديد الرخصة التجارية',payee:'[الجهة]',amount:7850,date:iso(18),method:'تحويل بنكي',invoice:'',notes:''},
+  {id:'p5',cat:'cloud',title:'اشتراك Claude API',payee:'Anthropic',amount:180,date:iso(31),method:'بطاقة',invoice:'',notes:''}
+ ],
+ chat:[]
+};
+
+/* =========================================================
+   3) طبقة الربط بالسيرفر
+   كل دالة هنا ترجع Promise. حالياً تشتغل على MOCK.
+   لربطها: غيّر USE_MOCK إلى false وحدد API_BASE،
+   وأنشئ نفس المسارات في سيرفر Node.js.
+   ========================================================= */
+const USE_MOCK=false;
+const API_BASE=''; // served by the API server itself: same origin, same login session
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+async function http(path,opts={}){
+  const res=await fetch(API_BASE+path,{headers:{'Content-Type':'application/json'},...opts});
+  if(res.status===401){ location.href='/login?next=/'; throw new Error('login required'); }
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/* ---- job-queue helpers: start* returns instantly with a jobId, the real
+   server.js backend does the slow work in the background; poll until done.
+   Mirrors the pattern already proven reliable on the effortless-cranachan
+   frontend — needed because a single long-held request from the browser to
+   this host is not reliable on Render's free tier. ---- */
+async function startJobReq(path,opts){ const r=await http(path,opts); return r.jobId; }
+async function pollJobReq(jobId,maxTries=150){
+  for(let i=0;i<maxTries;i++){
+    await wait(i<20?500:1200); // quick checks first: voice turns usually finish within seconds
+    let job;
+    try{ job=await http('/api/job/'+jobId); } catch { continue; }
+    if(job.status==='done') return job.result;
+    if(job.status==='error') throw new Error(job.error||'فشلت العملية');
+  }
+  throw new Error('استغرق الرد وقتًا طويلًا جدًا');
+}
+function fileToBase64(file){
+  return new Promise((resolve,reject)=>{
+    const fr=new FileReader();
+    fr.onload=()=>{ const m=String(fr.result).match(/^data:(.+);base64,(.+)$/); if(!m){reject(new Error('read failed'));return;} resolve({mediaType:m[1],data:m[2]}); };
+    fr.onerror=reject; fr.readAsDataURL(file);
+  });
+}
+async function dataUrlToBase64(dataUrl){
+  const m=String(dataUrl).match(/^data:(.+);base64,(.+)$/);
+  if(!m) throw new Error('bad data url');
+  return {mediaType:m[1],data:m[2]};
+}
+
+/* ---- shape translation: the real backend's /api/state + /api/status don't
+   match this UI's expected shape 1:1 (that shape was designed against MOCK
+   data before the backend existed) — deriveState() bridges the two so every
+   view function below needs zero changes. ---- */
+const DEPT_META={
+  strategy:{name:'الاستراتيجية',icon:'str',sources:['بيانات المنافسين (Apify)','Google Sheets']},
+  finance:{name:'المالية',icon:'fin',sources:['Google Sheets']},
+  marketing:{name:'التسويق',icon:'mkt',sources:['Instagram (Meta API)']},
+  sales:{name:'المبيعات',icon:'sal',sources:['Google Sheets']},
+  communication:{name:'الاتصال',icon:'com',sources:[]},
+  accounting:{name:'المحاسبة',icon:'acc',sources:['Google Sheets']},
+};
+function splitBriefing(text){
+  if(!text) return [];
+  let lines=String(text).split('\n').map(s=>s.trim()).filter(Boolean);
+  if(lines.length<2) lines=String(text).split(/(?<=[.!؟])\s+/).map(s=>s.trim()).filter(Boolean);
+  return lines.slice(0,3);
+}
+function deptMeta(id){ return DEPT_META[id]||{name:id,icon:'gm',sources:[]}; }
+function deriveState(raw,status){
+  const deptLogs=raw.deptLogs||{};
+  const departments=Object.entries(DEPT_META).map(([id,meta])=>{
+    const logs=deptLogs[id]||[];
+    const last=logs.length?logs[logs.length-1]:null;
+    return {id,name:meta.name,icon:meta.icon,state:logs.length?'active':'idle',tasks:logs.length,
+      current:last?String(last.instruction||'').slice(0,120):null,
+      last:last?new Date(last.ts).toISOString().slice(0,10):null,
+      sources:meta.sources};
+  });
+  const allLogs=[];
+  Object.entries(deptLogs).forEach(([id,logs])=>(logs||[]).forEach(l=>allLogs.push({...l,dept:id})));
+  allLogs.sort((a,b)=>b.ts-a.ts);
+  const activity=allLogs.slice(0,3).map(l=>({type:'in',dept:l.dept,text:'سلّم تقريره للمدير'}));
+  const db=raw.dailyBriefing;
+  const briefing=db
+    ?{generatedAt:db.ts,top:splitBriefing(db.text).length?splitBriefing(db.text):['راجع الإحاطة كاملة من المحادثة مع المدير العام.'],fromDepts:(db.depts||[]).map(d=>({dept:d,text:'قدّم تحديثًا للإحاطة',done:true}))}
+    :{generatedAt:new Date().toISOString(),top:['لم تُولَّد الإحاطة بعد اليوم — اطلب من السكرتير تحديثها.'],fromDepts:[]};
+  return {
+    health:{server:true,claude:status.claude,apify:status.apify,sheets:status.sheets,echonova:!!status.echonova,lastUpdate:status.lastUpdate},
+    departments, activity,
+    approvals:raw.approvals||[], decided:raw.decided||[],
+    briefing, settings:raw.settings||MOCK.settings,
+    payments:raw.payments||[], chat:[],
+    customers:raw.customers||[], recurringPayments:raw.recurringPayments||[],
+    bookings:raw.bookings||[], competitors:raw.competitors||[], priceHistory:raw.priceHistory||[], packages:raw.packages||[], briefingText:db?String(db.text||''):'',
+    periodicReports:raw.periodicReports||{weekly:null,monthly:null},
+    seasonalForecast:raw.seasonalForecast||null, marketingContent:raw.marketingContent||null,
+  };
+}
+
+const API={
+  // GET /api/state + GET /api/status → مُحوَّلة لشكل S عبر deriveState
+  async getState(){
+    const [raw,status]=await Promise.all([http('/api/state'),http('/api/status')]);
+    return deriveState(raw,status);
+  },
+  // رسالة عادية → GET /api/chat (طابور مهام)، صورة مرفقة بالمحادثة → تُعامَل كفاتورة عبر المحاسبة
+  async sendMessage(text,imageDataUrl){
+    if(imageDataUrl){
+      const img=await dataUrlToBase64(imageDataUrl);
+      const jobId=await startJobReq('/api/invoices/scan',{method:'POST',body:JSON.stringify({image:img})});
+      const result=await pollJobReq(jobId);
+      return {delegations:[{dept:'accounting',task:'قراءة الفاتورة',status:'done'}],
+        reply:'المحاسبة قرأت الفاتورة. راجع البيانات وأكّد التسجيل.',
+        paymentDraft:{...result,date:result.date||new Date().toISOString().slice(0,10)}};
+    }
+    const jobId=await startJobReq('/api/chat?message='+encodeURIComponent(text||'')+(UI.voiceMode?'&voice=1':''));
+    const result=await pollJobReq(jobId);
+    return {delegations:(result.depts||[]).map(d=>({dept:d,task:'استشارة '+deptMeta(d).name,status:'done'})),reply:result.reply};
+  },
+  // مسح فاتورة من شاشة "دفعة جديدة" → نفس أداة القراءة البصرية بالسيرفر
+  async scanInvoice(file){
+    const img=await fileToBase64(file);
+    const jobId=await startJobReq('/api/invoices/scan',{method:'POST',body:JSON.stringify({image:img})});
+    return pollJobReq(jobId);
+  },
+  async addPayment(p){ return http('/api/payments',{method:'POST',body:JSON.stringify(p)}); },
+  async deletePayment(id){ return http('/api/payments/'+id,{method:'DELETE'}); },
+  async decide(id,decision){ return http(`/api/approvals/${id}/decide`,{method:'POST',body:JSON.stringify({decision})}); },
+  // لا يوجد مفهوم "إعادة مهمة فاشلة" بالسيرفر الحالي بعد — عملية غير مفعّلة فعليًا
+  async retry(){ return {ok:true}; },
+  async generateBriefing(){
+    const jobId=await startJobReq('/api/briefing/daily/refresh');
+    const result=await pollJobReq(jobId);
+    return {generatedAt:result.ts,top:splitBriefing(result.text),fromDepts:(result.depts||[]).map(d=>({dept:d,text:'قدّم تحديثًا للإحاطة',done:true}))};
+  },
+  async saveSettings(s){ return http('/api/settings',{method:'PATCH',body:JSON.stringify(s)}); },
+  // لا يوجد تحديث لحظي (SSE) بعد — بديل بسيط وآمن: تحديث دوري كل 25 ثانية
+  subscribe(){
+    const t=setInterval(async()=>{
+      if(!S) return;
+      try{ const fresh=await API.getState(); S.departments=fresh.departments; S.activity=fresh.activity; S.health=fresh.health; S.approvals=fresh.approvals; if(!isTyping()) render(true); }
+      catch{ S.health.server=false; if(!isTyping()) render(true); }
+    },25000);
+    return ()=>clearInterval(t);
+  }
+};
+
+/* =========================================================
+   4) الحالة والتوجيه
+   ========================================================= */
+let S=null;
+const UI={openPay:null,payFilter:'all',period:'3m',deptFilter:'all',typing:null,draft:null,scanning:false,scanImg:null,newMode:'photo',sending:false,listening:false,pushStatus:null,openBooking:null,bookingDraft:null,voiceMode:false,speaking:false,transcribing:false};
+
+/* ---- text-to-speech: reads the GM's replies aloud using the device's
+   built-in voice (SpeechSynthesis — free, no external service). Picks an
+   Arabic voice if the device has one installed; otherwise the default voice
+   still reads the text, just possibly with non-Arabic pronunciation. ---- */
+function pickArabicVoice(){
+  const voices=window.speechSynthesis?speechSynthesis.getVoices():[];
+  return voices.find(v=>v.lang&&v.lang.toLowerCase().startsWith('ar'))||null;
+}
+/* ---- EchoNova Emirati voice (server-side, see /api/tts) with the device
+   voice as an automatic fallback if EchoNova isn't configured or fails. ---- */
+const SILENT_WAV="data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YSADAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==";
+const ttsAudio=new Audio();
+ttsAudio.setAttribute('playsinline','');
+function unlockAudio(){ try{ ttsAudio.src=SILENT_WAV; const p=ttsAudio.play(); if(p&&p.catch) p.catch(()=>{}); }catch{} }
+// iOS also blocks speechSynthesis started outside a tap — prime it during the tap.
+function unlockSpeech(){ try{ if('speechSynthesis' in window){ const u=new SpeechSynthesisUtterance(' '); u.volume=0; speechSynthesis.speak(u); } }catch{} }
+function speakWithDevice(text,done){
+  if(!('speechSynthesis' in window)||!text){ done(); return; }
+  speechSynthesis.cancel();
+  const utter=new SpeechSynthesisUtterance(text.replace(/[*_#`]/g,''));
+  const voice=pickArabicVoice(); if(voice) utter.voice=voice;
+  utter.lang=voice?voice.lang:'ar-AE'; utter.rate=1;
+  utter.onend=utter.onerror=done;
+  // safety net: if Safari silently drops it, onend never fires — don't hang
+  setTimeout(done,Math.min(30000,Math.max(4000,text.length*90)));
+  speechSynthesis.speak(utter);
+}
+// Read a reply aloud with EchoNova in short pieces: the first sentence starts
+// playing while the next piece is still being generated, so there's no long
+// wait, and a long reply (like the briefing) never times out as one huge clip.
+function speechChunks(text,max=220){
+  const clean=String(text||'').replace(/[*_#`>|]/g,'').replace(/https?:\/\/\S+/g,'').replace(/\s*\n+\s*/g,'. ').replace(/\s+/g,' ').trim().slice(0,1500);
+  const parts=clean.split(/(?<=[.!؟?،:;])\s+/), out=[]; let cur='';
+  for(const p of parts){ const lim=out.length?max:110; /* short first piece → voice starts sooner */ if(cur&&(cur+' '+p).length>lim){ out.push(cur); cur=p; } else cur=cur?cur+' '+p:p; }
+  if(cur) out.push(cur);
+  return out.flatMap(c=>c.length<=max*1.6?[c]:c.match(new RegExp(`.{1,${max}}(\\s|$)`,'g'))||[c]).map(c=>c.trim()).filter(Boolean);
+}
+async function ttsChunk(text){
+  const jobId=await startJobReq('/api/tts',{method:'POST',body:JSON.stringify({text})});
+  const {audioUrl}=await pollJobReq(jobId,120);
+  return audioUrl;
+}
+function playUrl(url){
+  return new Promise((res,rej)=>{
+    let t=null; const end=()=>{ clearTimeout(t); res(); };
+    ttsAudio.onended=end; ttsAudio.onerror=()=>{ clearTimeout(t); rej(new Error('تعذّر تشغيل الصوت')); };
+    ttsAudio.src=url;
+    ttsAudio.play().then(()=>{ t=setTimeout(end,120000); }).catch(rej);
+  });
+}
+async function speakText(text,onDone){
+  if(!text){ onDone&&onDone(); return; }
+  let finished=false;
+  const done=()=>{ if(finished) return; finished=true; UI.speaking=false; render(true); onDone&&onDone(); };
+  UI.speaking=true; render(true);
+  if(S&&S.health&&S.health.echonova){
+    const chunks=speechChunks(text);
+    let i=0;
+    try{
+      let next=ttsChunk(chunks[0]);
+      for(i=0;i<chunks.length;i++){
+        const url=await next;
+        if(!UI.voiceMode){ done(); return; } // call ended meanwhile
+        next=i+1<chunks.length?ttsChunk(chunks[i+1]):null;
+        if(next) next.catch(()=>{}); // handled when awaited
+        await playUrl(url);
+        if(!UI.voiceMode){ done(); return; }
+      }
+      done(); return;
+    }catch(e){
+      toast('تعذّر صوت Abdulla: '+String(e.message||e).slice(0,70));
+      if(!UI.voiceMode){ done(); return; }
+      speakWithDevice(chunks.slice(i).join(' '),done); // finish the rest with the device voice
+      return;
+    }
+  }
+  speakWithDevice(text,done);
+}
+function stopVoiceMode(){
+  UI.voiceMode=false; UI.speaking=false;
+  if('speechSynthesis' in window) speechSynthesis.cancel();
+  try{ ttsAudio.pause(); }catch{}
+  stopVoiceInput(true);
+  releaseMic();
+  render(true);
+}
+
+/* ---- voice input (v4): records a short clip with MediaRecorder and sends it
+   to the server (/api/stt → EchoNova Speech to Text). Replaces Safari's
+   webkitSpeechRecognition, which never picked up audio on the iPad.
+   Auto-stops after ~1.5s of silence; tapping the mic again stops it too. ---- */
+const SpeechSupported=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder);
+let activeRecognition=null; // the live recorder session (name kept for the rest of the app)
+let voiceRetries=0;
+let micStream=null, micCtx=null;
+// Call mode: the mic stream opened by the first tap stays open for the whole
+// call, so every next turn starts listening on its own (no tap per reply),
+// on iPad too. Recording only runs while the GM is NOT speaking (no echo).
+const IS_IOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+function pickRecMime(){
+  for(const t of ['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/ogg']){
+    try{ if(MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(t)) return t; }catch{}
+  }
+  return '';
+}
+function releaseMic(){
+  try{ micStream&&micStream.getTracks().forEach(t=>t.stop()); }catch{}
+  micStream=null;
+  try{ micCtx&&micCtx.close(); }catch{}
+  micCtx=null;
+}
+async function startVoiceInput(inputId){
+  if(!SpeechSupported||activeRecognition||UI.transcribing) return;
+  UI.voiceAwaitTap=false;
+  const session={stop:null,discard:false};
+  activeRecognition=session; UI.listening=true; render(true);
+  try{
+    if(!micStream||!micStream.active) micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
+  }catch(e){
+    activeRecognition=null; UI.listening=false;
+    if(UI.voiceMode) stopVoiceMode();
+    toast(e&&e.name==='NotAllowedError'?'اسمح بالميكروفون لهذا الموقع من إعدادات Safari':'تعذّر الوصول للميكروفون');
+    render(true); return;
+  }
+  if(activeRecognition!==session) return; // cancelled while asking for the mic
+  const mime=pickRecMime();
+  let rec;
+  try{ rec=mime?new MediaRecorder(micStream,{mimeType:mime}):new MediaRecorder(micStream); }
+  catch{ activeRecognition=null; UI.listening=false; toast('تعذّر تشغيل التسجيل'); render(true); return; }
+  const chunks=[];
+  rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+
+  // simple silence detection so the clip ends by itself after you stop talking
+  let spoke=false, quietSince=0, timer=null;
+  const startedAt=Date.now();
+  const noSpeechMs=UI.voiceMode?10000:8000;
+  let ctxOk=false;
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(AC){
+      if(!micCtx||micCtx.state==='closed') micCtx=new AC();
+      if(micCtx.state!=='running') await Promise.race([micCtx.resume().catch(()=>{}),new Promise(r=>setTimeout(r,400))]);
+      ctxOk=micCtx.state==='running';
+    }
+  }catch{}
+  if(activeRecognition!==session) return;
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(AC&&ctxOk){
+      const src=micCtx.createMediaStreamSource(micStream);
+      const an=micCtx.createAnalyser(); an.fftSize=1024; src.connect(an);
+      const buf=new Float32Array(an.fftSize);
+      timer=setInterval(()=>{
+        an.getFloatTimeDomainData(buf);
+        let sum=0; for(let i=0;i<buf.length;i++) sum+=buf[i]*buf[i];
+        const rms=Math.sqrt(sum/buf.length), now=Date.now();
+        if(rms>0.02){ spoke=true; quietSince=0; }
+        else if(spoke){ if(!quietSince) quietSince=now; else if(now-quietSince>1100) finish(); }
+        if(!spoke&&now-startedAt>noSpeechMs){ session.discard=true; finish(); } // nothing said
+        if(now-startedAt>60000) finish(); // hard cap per turn
+      },120);
+    }
+  }catch{}
+
+  function finish(){ clearInterval(timer); timer=null; if(rec.state!=='inactive'){ try{ rec.stop(); }catch{} } }
+  session.stop=finish;
+  // if the browser kept the audio analyser asleep, fall back to a fixed 8s clip
+  if(!ctxOk) timer=setTimeout(finish,8000);
+
+  rec.onstop=async()=>{
+    clearInterval(timer);
+    activeRecognition=null; UI.listening=false;
+    if(!UI.voiceMode) releaseMic(); // in a call the mic stays open until the call ends
+    const blob=new Blob(chunks,{type:(rec.mimeType||mime||'audio/mp4')});
+    if(session.discard||blob.size<1500){
+      if(UI.voiceMode){
+        voiceRetries++;
+        if(voiceRetries>=3){ voiceRetries=0; stopVoiceMode(); toast('انتهت المكالمة — ما سمعت شي'); return; }
+        setTimeout(()=>{ if(UI.voiceMode&&!activeRecognition) startVoiceInput(inputId); },400);
+      } else if(!session.discard){ toast('ما وصل صوت — حاول مرة ثانية'); }
+      render(true); return;
+    }
+    UI.transcribing=true; render(true);
+    let text='';
+    try{
+      const audio=await fileToBase64(blob);
+      audio.mediaType=String(audio.mediaType||'audio/mp4').split(';')[0];
+      const jobId=await startJobReq('/api/stt',{method:'POST',body:JSON.stringify({audio})});
+      const res=await pollJobReq(jobId);
+      text=(res&&res.text||'').trim();
+    }catch(e){
+      UI.transcribing=false;
+      if(UI.voiceMode) stopVoiceMode();
+      toast('تعذّر تحويل الصوت لنص: '+String(e.message||e).slice(0,80));
+      render(true); return;
+    }
+    UI.transcribing=false;
+    if(!text){
+      if(UI.voiceMode){
+        voiceRetries++;
+        if(voiceRetries>=3){ voiceRetries=0; stopVoiceMode(); toast('انتهت المكالمة — ما سمعت شي'); return; }
+        render(true); setTimeout(()=>{ if(UI.voiceMode&&!activeRecognition) startVoiceInput(inputId); },300); return;
+      }
+      toast('ما فهمت الكلام — حاول مرة ثانية');
+      render(true); return;
+    }
+    voiceRetries=0;
+    if(UI.voiceMode){
+      const el=document.getElementById(inputId); if(el) el.value='';
+      render(true); sendChat(text);
+    } else {
+      render(true);
+      const el=document.getElementById(inputId);
+      if(el){ el.value=(el.value?el.value+' ':'')+text; el.focus(); }
+    }
+  };
+  try{ rec.start(); }
+  catch{ clearInterval(timer); activeRecognition=null; UI.listening=false; toast('تعذّر تشغيل التسجيل'); render(true); }
+}
+function stopVoiceInput(discard){
+  const s=activeRecognition; if(!s) return;
+  if(discard) s.discard=true;
+  if(s.stop) s.stop(); else { activeRecognition=null; UI.listening=false; } // still waiting for mic permission
+}
+const route=()=>{const h=location.hash.replace(/^#\/?/,'')||'home';const [name,arg]=h.split('/');return {name,arg}};
+const go=h=>{location.hash=h};
+const deptById=id=>S.departments.find(d=>d.id===id);
+function toast(t){const h=document.getElementById('toastHost');h.innerHTML=`<div class="toast" role="status">${esc(t)}</div>`;clearTimeout(toast.t);toast.t=setTimeout(()=>h.innerHTML='',2400)}
+const wide=()=>matchMedia('(min-width:1024px)').matches;
+const offline=()=>!S.health.server;
+
+/* =========================================================
+   5) مكونات مشتركة
+   ========================================================= */
+const orb=(size,rings=true)=>`<span class="orb-wrap" style="width:${size+24}px;height:${size+24}px">${rings?'<span class="ring"></span><span class="ring r2"></span>':''}<span class="orb" style="width:${size}px;height:${size}px"></span></span>`;
+const backHead=(title,sub,to='home',extra='')=>`<header class="back-head"><a class="icon-btn" href="#${to}" aria-label="رجوع">${ic('back')}</a><div class="grow col" style="gap:1px"><h1 class="h1">${title}</h1>${sub?`<span class="sub">${sub}</span>`:''}</div>${extra}</header>`;
+const amt=(n,size)=>`<span class="amt"><b ${size?`style="font-size:${size}px"`:''}>${fmt(n)}</b><small>د.إ</small></span>`;
+const statusChip=d=>d.state==='out'||d.state==='active'&&d.working?`<span class="status work"><span class="spin"></span>يشتغل الآن</span>`
+  :d.state==='fail'?`<span class="status fail">${ic('warn','s14')}فشلت المهمة</span>`
+  :d.state==='in'?`<span class="status done">${ic('check','s14')}سلّم تقريره</span>`
+  :`<span class="status"><span class="dot" style="background:var(--mint)"></span>جاهز</span>`;
+const pendingCount=()=>S.approvals.length;
+
+function renderChrome(r){
+  const tab=(k,label,h)=>`<a href="#${h}" ${r.name===h||(h==='depts'&&['depts','dept','accounting','new-payment'].includes(r.name))?'aria-current="page"':''}>${ic(k)}<span>${label}</span></a>`;
+  document.getElementById('tabbar').innerHTML=tab('home','الرئيسية','home')+tab('gm','المدير العام','gm')+tab('depts','الأقسام','depts')+tab('office','المكتب','office');
+  const sl=(k,label,h,cls='',badge='')=>`<a href="#${h}" class="${cls}" ${r.name===h?'aria-current="page"':''}>${ic(k)}<span>${label}</span>${badge}</a>`;
+  document.getElementById('sidebar').innerHTML=`<img class="brand-logo" src="${LOGO}" alt="Loop Travel & Tourism">
+   <nav aria-label="القائمة الرئيسية" class="col" style="gap:4px">${sl('home','الرئيسية','home')}${sl('gm','المدير العام','gm')}${sl('depts','الأقسام','depts')}${sl('office','المكتب','office')}<hr>${sl('sec','السكرتير','secretary','amber')}${sl('bell','بانتظار قرارك','approvals','',pendingCount()?`<span class="badge">${pendingCount()}</span>`:'')}${sl('gear','الإعدادات','settings')}</nav>
+   <div class="sys">${offline()?`<span class="dot" style="background:var(--coral)"></span>النظام غير متصل`:`<span class="dot live" style="background:var(--mint)"></span>كل الأنظمة تعمل`}</div>`;
+  const sideOn=wide()&&r.name==='home';
+  document.body.classList.toggle('with-side',sideOn);
+  document.getElementById('sideChat').innerHTML=sideOn?chatInner(true):'';
+  if(sideOn) bindChat(document.getElementById('sideChat'));
+}
+
+/* =========================================================
+   6) الشاشات
+   ========================================================= */
+function network(){
+  const W=322,H=285,cx=161,cy=135,rx=108,ry=103;
+  const ds=S.departments, n=ds.length;
+  let lines='',nodes='';
+  ds.forEach((d,i)=>{
+    const a=-Math.PI/2+i*2*Math.PI/n, x=cx+rx*Math.cos(a)*-1, y=cy+ry*Math.sin(a);
+    let st=d.state; if(offline()&&st!=='fail'&&st!=='idle') st='paused';
+    const L=(cls,attrs)=>`<line ${attrs} class="${cls}"/>`;
+    if(st==='out') lines+=L('flow-fast',`x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="var(--accent2)" stroke-width="2"`);
+    else if(st==='in') lines+=L('flow-fast',`x1="${x}" y1="${y}" x2="${cx}" y2="${cy}" stroke="var(--accent)" stroke-width="2"`);
+    else if(st==='active') lines+=L('flow',`x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="var(--accent)" stroke-opacity=".6" stroke-width="1.4"`);
+    else if(st==='fail') lines+=L('',`x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="var(--coral)" stroke-width="1.6" stroke-dasharray="4 4"`);
+    else if(st==='paused') lines+=L('',`x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="#4A4F66" stroke-width="1.3"`);
+    else lines+=L('',`x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="#3A3F55" stroke-width="1.2" stroke-dasharray="2 5"`);
+    const cls=st==='active'?'':st;
+    const count=st==='fail'?'!':d.tasks;
+    const label=st==='fail'?`قسم ${d.name}، فشلت آخر مهمة`:`قسم ${d.name}، ${d.tasks} مهام`;
+    nodes+=`<a class="node ${cls}" href="#${d.id==='accounting'?'accounting':'dept/'+d.id}" aria-label="${label}" style="right:${(x/W*100).toFixed(2)}%;top:${(y/H*100).toFixed(2)}%;transform:translate(50%,-22px)"><span class="disc">${ic(d.icon,'s18')}<span class="cnt">${count}</span></span><span class="lbl">${d.name}</span></a>`;
+  });
+  return `<div class="net ${offline()?'offline':''}"><svg class="lines" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><g transform="translate(${W},0) scale(-1,1)">${lines}</g></svg>
+   <div class="core" style="right:${cx/W*100}%;top:${cy/H*100}%;transform:translate(50%,-50%)">${orb(58,!offline())}</div>${nodes}</div>`;
+}
+const FUNNEL_STAGES=[['new','جديد','var(--accent2)'],['quoted','عرض سعر','var(--amber)'],['booked','حجز','var(--mint)'],['lost','خسرناه','var(--coral)']];
+function salesFunnel(){
+  const customers=S.customers||[];
+  if(!customers.length) return '';
+  const counts=FUNNEL_STAGES.map(([k])=>customers.filter(c=>c.stage===k).length);
+  const max=Math.max(1,...counts);
+  return `<div class="col" style="gap:8px;padding:14px 16px" aria-label="قمع المبيعات">
+   <div class="topbar"><b style="font-size:13px;color:#fff">قمع المبيعات</b><span class="sub">${customers.length} عميل</span></div>
+   <div class="col" style="gap:6px">${FUNNEL_STAGES.map(([k,label,color],i)=>`
+     <div class="row" style="gap:8px;align-items:center">
+       <span class="sub" style="width:56px;flex-shrink:0;font-size:11px">${label}</span>
+       <div style="flex:1;height:18px;border-radius:6px;background:var(--surface-2);overflow:hidden"><div style="width:${counts[i]/max*100}%;height:100%;background:${color};border-radius:6px"></div></div>
+       <span class="mono" style="width:20px;text-align:left;font-size:12px;color:#fff">${counts[i]}</span>
+     </div>`).join('')}</div>
+  </div>`;
+}
+function feed(){
+  const failed=S.departments.find(d=>d.state==='fail');
+  if(failed) return `<div class="fail-box"><div style="display:flex;gap:8px;font-size:13px;line-height:1.6"><span class="dot" style="background:var(--coral);margin-top:7px"></span><span><b style="color:#fff">${failed.name}</b> فشلت في مهمة "${esc(failed.current||'')}": ${esc(failed.error||'خطأ غير معروف')}</span></div>
+    <div class="row" style="gap:8px"><button class="btn coral" data-retry="${failed.id}">إعادة المهمة</button><a class="btn" href="#dept/${failed.id}">التفاصيل</a></div>
+    ${offline()?'<span class="sub">بقية الأقسام متوقفة مؤقتاً لحين عودة الاتصال.</span>':''}</div>`;
+  if(!S.activity.length) return `<div class="feed"><div><span class="dot" style="background:var(--dim)"></span>المدير بانتظار طلبك.</div></div>`;
+  return `<div class="feed">${S.activity.map(a=>{const d=deptById(a.dept);return a.type==='out'
+    ?`<div><span class="dot live" style="background:var(--accent2)"></span><span>${esc(a.text)} <b>${d?d.name:''}</b></span></div>`
+    :`<div><span class="dot live" style="background:var(--accent)"></span><span><b>${d?d.name:''}</b> ${esc(a.text)}</span></div>`}).join('')}</div>`;
+}
+/* ----- home charts: Umrah prices vs competitors (monthly line), spending
+   by category (donut), bookings by package type (donut). Data comes from
+   /api/state (priceHistory is recorded monthly by the GM). ----- */
+const AR_MONTHS=['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+const CHART_COLORS=['var(--accent)','var(--accent2)','var(--amber)','var(--mint)','var(--coral)','var(--muted)'];
+function priceChart(){
+  const pts=(S.priceHistory||[]).filter(p=>p&&p.month).slice(-12);
+  const head=`<div class="topbar"><h2 class="h2">أسعار العمرة شهريًا</h2><button class="icon-btn" data-price-refresh aria-label="اطلب من المدير تسجيل نقطة هذا الشهر" ${UI.priceRefreshing?'disabled':''} style="border:none">${UI.priceRefreshing?'<span class="spin"></span>':ic('refresh')}</button></div>
+   <div class="row" style="gap:14px;font-size:12px;color:var(--muted)"><span class="row" style="gap:6px"><span class="dot" style="background:var(--accent2);width:8px;height:8px"></span>أسعارنا</span><span class="row" style="gap:6px"><span class="dot" style="background:var(--coral);width:8px;height:8px"></span>متوسط المنافسين</span></div>`;
+  const vals=pts.flatMap(p=>[p.ourAvg,p.competitorAvg]).filter(v=>typeof v==='number');
+  if(!vals.length) return `<section class="card col" style="gap:12px;padding:16px;border-radius:22px">${head}<p class="sub" style="margin:0">${UI.priceRefreshing?'المدير يستشير المالية والاستراتيجية الحين…':'ما فيه نقاط مسجّلة بعد. المدير يسجّل نقطة كل شهر، أو اضغط ↻ عشان يسجّلها الحين.'}</p></section>`;
+  const W=320,H=170,L=46,R=12,T=12,B=28;
+  let lo=Math.min(...vals),hi=Math.max(...vals); const pad=(hi-lo)*0.15||hi*0.1||100; lo=Math.max(0,lo-pad); hi=hi+pad;
+  const x=i=>pts.length===1?(L+(W-L-R)/2):L+i*(W-L-R)/(pts.length-1);
+  const y=v=>T+(1-(v-lo)/(hi-lo))*(H-T-B);
+  const grid=[0,.5,1].map(f=>{const v=lo+f*(hi-lo);return `<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" style="stroke:var(--line)"/><text x="${L-6}" y="${y(v)+4}" text-anchor="end" font-size="10" style="fill:var(--dim)">${fmt(Math.round(v))}</text>`}).join('');
+  const series=(key,color)=>{
+    const seg=[];let cur=[];
+    pts.forEach((p,i)=>{ if(typeof p[key]==='number') cur.push(`${x(i)},${y(p[key])}`); else if(cur.length){seg.push(cur);cur=[];} });
+    if(cur.length) seg.push(cur);
+    return seg.map(s=>`<polyline points="${s.join(' ')}" fill="none" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" style="stroke:${color}"/>`).join('')
+      +pts.map((p,i)=>typeof p[key]==='number'?`<circle cx="${x(i)}" cy="${y(p[key])}" r="3.5" style="fill:${color}"><title>${fmt(p[key])} د.إ</title></circle>`:'').join('');
+  };
+  const labels=pts.map((p,i)=>{const m=+String(p.month).split('-')[1];return (pts.length<=6||i%2===0||i===pts.length-1)?`<text x="${x(i)}" y="${H-8}" text-anchor="middle" font-size="10" style="fill:var(--dim)">${AR_MONTHS[m-1]||p.month}</text>`:''}).join('');
+  const last=pts[pts.length-1];
+  const diff=(typeof last.ourAvg==='number'&&typeof last.competitorAvg==='number'&&last.competitorAvg)?Math.round((last.ourAvg-last.competitorAvg)/last.competitorAvg*100):null;
+  return `<section class="card col" style="gap:12px;padding:16px;border-radius:22px">${head}
+   <div class="ltr" style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="رسم أسعار العمرة مقارنة بالمنافسين">${grid}${series('competitorAvg','var(--coral)')}${series('ourAvg','var(--accent2)')}${labels}</svg></div>
+   ${diff===null?'':`<p class="sub" style="margin:0">آخر شهر: أسعارنا ${diff===0?'مساوية لمتوسط المنافسين':`${diff>0?'أعلى':'أقل'} من متوسط المنافسين بـ <b class="ltr" style="color:${diff>0?'var(--coral)':'var(--mint)'}">${Math.abs(diff)}%</b>`}</p>`}</section>`;
+}
+function donut(segs,centerTop,centerSub){
+  const total=segs.reduce((s,x)=>s+x.value,0); const r=42,C=2*Math.PI*r; let off=0;
+  const arcs=segs.map(sg=>{const len=total?sg.value/total*C:0; const a=`<circle cx="60" cy="60" r="${r}" fill="none" stroke-width="16" stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 60 60)" style="stroke:${sg.color}"><title>${esc(sg.label)}</title></circle>`; off+=len; return a;}).join('');
+  return `<svg viewBox="0 0 120 120" width="132" height="132" style="flex-shrink:0" aria-hidden="true"><circle cx="60" cy="60" r="${r}" fill="none" stroke-width="16" style="stroke:var(--surface-2)"/>${arcs}<text x="60" y="58" text-anchor="middle" font-size="15" font-weight="700" style="fill:var(--text-strong)">${centerTop}</text><text x="60" y="75" text-anchor="middle" font-size="9" style="fill:var(--dim)">${centerSub}</text></svg>`;
+}
+function legend(segs,fmtVal){
+  const total=segs.reduce((s,x)=>s+x.value,0)||1;
+  return `<div class="col grow" style="gap:8px">${segs.map(sg=>`<div class="row" style="gap:8px;font-size:12.5px"><span class="dot" style="background:${sg.color};width:9px;height:9px;flex-shrink:0"></span><span class="grow" style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(sg.label)}</span><span class="sub ltr">${fmtVal(sg.value)} · ${Math.round(sg.value/total*100)}%</span></div>`).join('')}</div>`;
+}
+function spendChart(){
+  const by={};
+  (S.payments||[]).forEach(p=>{const k=CATS[p.cat]?p.cat:'other'; by[k]=(by[k]||0)+(+p.amount||0);});
+  const segs=Object.entries(by).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({label:CATS[k].label,value:v,color:CATS[k].color}));
+  const total=segs.reduce((s,x)=>s+x.value,0);
+  const k=total>=1000?fmt(Math.round(total/100)/10)+'K':fmt(Math.round(total));
+  return `<section class="card col" style="gap:12px;padding:16px;border-radius:22px"><h2 class="h2">مجالات الصرف</h2>
+   ${segs.length?`<div class="row" style="gap:14px;align-items:center">${donut(segs,k,'د.إ إجمالي')}${legend(segs,v=>fmt(Math.round(v)))}</div>`:`<p class="sub" style="margin:0">ما فيه مصروفات مسجّلة بعد.</p>`}</section>`;
+}
+/* ----- packages, profit, monthly P&L, receivables, spoken briefing ----- */
+function normPkgKey(n){
+  return String(n||'').trim().toLowerCase().replace(/[\u064B-\u0652\u0640]/g,'')
+    .replace(/[أإآ]/g,'ا').replace(/ة/g,'ه').replace(/ى/g,'ي').replace(/\s+/g,' ');
+}
+// show every booking under the saved package spelling when names only differ slightly
+function pkgName(n){
+  const t=String(n||'').trim(); if(!t) return 'غير محدد';
+  const hit=(S.packages||[]).find(p=>normPkgKey(p.name)===normPkgKey(t));
+  return hit?hit.name:t;
+}
+const owedOf=b=>typeof b.paid==='number'?Math.max(0,Number(b.amount||0)-b.paid):null;
+const shortAmt=v=>Math.abs(v)>=1000?fmt(Math.round(v/100)/10)+'K':fmt(Math.round(v));
+function packageChart(){
+  const by={};
+  (S.bookings||[]).forEach(b=>{const k=pkgName(b.package); by[k]=(by[k]||0)+1;});
+  let ent=Object.entries(by).sort((a,b)=>b[1]-a[1]);
+  if(ent.length>6){ const rest=ent.slice(5).reduce((s,[,v])=>s+v,0); ent=[...ent.slice(0,5),['باقات أخرى',rest]]; }
+  const segs=ent.map(([l,v],i)=>({label:l,value:v,color:CHART_COLORS[i%CHART_COLORS.length]}));
+  const total=segs.reduce((s,x)=>s+x.value,0);
+  return `<section class="card col" style="gap:12px;padding:16px;border-radius:22px"><h2 class="h2">الحجوزات حسب الباقة</h2>
+   ${segs.length?`<div class="row" style="gap:14px;align-items:center">${donut(segs,fmt(total),'حجز')}${legend(segs,v=>fmt(v))}</div>`:`<p class="sub" style="margin:0">ما فيه حجوزات مسجّلة بعد.</p>`}</section>`;
+}
+function profitChart(){
+  const bks=S.bookings||[]; if(!bks.length) return '';
+  const costByBooking={};
+  (S.payments||[]).forEach(p=>{ if(p.bookingId) costByBooking[p.bookingId]=(costByBooking[p.bookingId]||0)+(+p.amount||0); });
+  const by={};
+  bks.forEach(b=>{const k=pkgName(b.package); const r=by[k]||(by[k]={rev:0,cost:0,n:0,linked:0}); r.rev+=+b.amount||0; r.n++; if(costByBooking[b.id]){ r.cost+=costByBooking[b.id]; r.linked++; }});
+  const rows=Object.entries(by).sort((a,b)=>(b[1].rev-b[1].cost)-(a[1].rev-a[1].cost));
+  const maxRev=Math.max(...rows.map(([,r])=>r.rev),1);
+  const anyLinked=rows.some(([,r])=>r.linked);
+  return `<section class="card col" style="gap:12px;padding:16px;border-radius:22px"><h2 class="h2">الربح لكل باقة</h2>
+   ${rows.map(([name,r])=>{
+     const profit=r.rev-r.cost, margin=r.rev?Math.round(profit/r.rev*100):0, full=r.linked===r.n;
+     return `<div class="col" style="gap:6px">
+      <div class="row" style="gap:8px"><b class="grow" style="font-size:13.5px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</b>
+       ${r.linked?`<span class="sub ltr" style="color:${profit>=0?'var(--mint)':'var(--coral)'}">${margin}%</span>`:`<span class="sub">بدون تكاليف</span>`}</div>
+      <div style="height:8px;border-radius:6px;background:var(--surface-2);overflow:hidden;display:flex"><span style="width:${r.cost/maxRev*100}%;background:var(--coral)"></span><span style="width:${Math.max(0,profit)/maxRev*100}%;background:var(--mint)"></span></div>
+      <span class="sub">إيراد ${fmt(Math.round(r.rev))} · تكلفة ${r.linked?fmt(Math.round(r.cost)):'—'} · ربح ${r.linked?fmt(Math.round(profit)):'—'} د.إ${r.linked&&!full?` · (${r.linked} من ${r.n} حجوزات مربوطة)`:''}</span>
+     </div>`;}).join('')}
+   <p class="sub" style="margin:0;line-height:1.7">${anyLinked?'<span style="color:var(--coral)">■</span> تكلفة &nbsp; <span style="color:var(--mint)">■</span> ربح. ':''}الربح يُحسب من دفعات الموردين المربوطة بكل حجز — اربطها من «دفعة جديدة ← مرتبطة بحجز».</p></section>`;
+}
+function monthlyChart(){
+  const now=new Date(), months=[];
+  for(let i=5;i>=0;i--){ const d=new Date(now.getFullYear(),now.getMonth()-i,1); months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`); }
+  const rev={},exp={};
+  (S.bookings||[]).forEach(b=>{const k=String(b.date||'').slice(0,7); rev[k]=(rev[k]||0)+(+b.amount||0);});
+  (S.payments||[]).forEach(p=>{const k=String(p.date||'').slice(0,7); exp[k]=(exp[k]||0)+(+p.amount||0);});
+  if(!months.some(m=>rev[m]||exp[m])) return '';
+  const W=320,H=170,L=10,R=10,T=14,B=28, max=Math.max(...months.map(m=>Math.max(rev[m]||0,exp[m]||0)),1);
+  const slot=(W-L-R)/months.length, bw=Math.min(16,slot/3);
+  const bars=months.map((m,i)=>{
+    const cx=L+slot*i+slot/2, hr=(rev[m]||0)/max*(H-T-B), he=(exp[m]||0)/max*(H-T-B), mo=+m.split('-')[1];
+    return `<rect x="${cx-bw-1}" y="${H-B-hr}" width="${bw}" height="${hr}" rx="3" style="fill:var(--accent2)"><title>إيراد ${fmt(rev[m]||0)}</title></rect>
+     <rect x="${cx+1}" y="${H-B-he}" width="${bw}" height="${he}" rx="3" style="fill:var(--coral)"><title>مصروف ${fmt(exp[m]||0)}</title></rect>
+     <text x="${cx}" y="${H-10}" text-anchor="middle" font-size="10" style="fill:var(--dim)">${AR_MONTHS[mo-1]}</text>`;}).join('');
+  const cur=months[months.length-1], net=(rev[cur]||0)-(exp[cur]||0);
+  return `<section class="card col" style="gap:12px;padding:16px;border-radius:22px"><h2 class="h2">الإيرادات مقابل المصروفات</h2>
+   <div class="row" style="gap:14px;font-size:12px;color:var(--muted)"><span class="row" style="gap:6px"><span class="dot" style="background:var(--accent2);width:8px;height:8px"></span>الإيرادات (قيمة الحجوزات)</span><span class="row" style="gap:6px"><span class="dot" style="background:var(--coral);width:8px;height:8px"></span>المصروفات</span></div>
+   <div class="ltr"><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="الإيرادات مقابل المصروفات لآخر ستة أشهر"><line x1="${L}" x2="${W-R}" y1="${H-B}" y2="${H-B}" style="stroke:var(--line)"/>${bars}</svg></div>
+   <p class="sub" style="margin:0">هذا الشهر: ${net>=0?`<b style="color:var(--mint)">ربح ${fmt(Math.round(net))} د.إ</b>`:`<b style="color:var(--coral)">خسارة ${fmt(Math.round(-net))} د.إ</b>`}</p></section>`;
+}
+function receivablesCard(){
+  const bks=S.bookings||[]; if(!bks.length) return '';
+  const owed=bks.filter(b=>(owedOf(b)||0)>0.5).sort((a,b)=>(a.tripStartDate||'9999').localeCompare(b.tripStartDate||'9999'));
+  const unknown=bks.filter(b=>typeof b.paid!=='number').length;
+  const total=owed.reduce((s,b)=>s+owedOf(b),0);
+  return `<a class="card col" href="#bookings" style="gap:10px;padding:16px;border-radius:22px;text-decoration:none;color:inherit">
+   <div class="topbar"><h2 class="h2">مستحقات على العملاء</h2>${total?amt(Math.round(total)):`<span class="sub" style="color:var(--mint)">ما فيه مستحقات</span>`}</div>
+   ${owed.slice(0,3).map(b=>`<div class="row" style="gap:8px;font-size:13px"><span class="grow" style="color:var(--text)">${esc(b.customerName)} <span class="sub">· ${esc(pkgName(b.package))}${b.tripStartDate?' · سفر '+dfmt(b.tripStartDate,{day:'numeric',month:'short'}):''}</span></span><b class="ltr" style="color:var(--amber)">${fmt(Math.round(owedOf(b)))}</b></div>`).join('')}
+   ${owed.length>3?`<span class="sub">و${owed.length-3} غيرهم…</span>`:''}
+   ${unknown?`<span class="sub">${unknown} ${unknown===1?'حجز قديم':'حجوزات قديمة'} بدون مبلغ مدفوع مسجّل — سجّله من صفحة الحجوزات.</span>`:''}</a>`;
+}
+function reminderText(b){
+  return `السلام عليكم ${b.customerName}، نذكّركم بالمبلغ المتبقي على حجزكم (${pkgName(b.package)}): ${fmt(Math.round(owedOf(b)))} درهم${b.tripStartDate?`، علمًا بأن موعد السفر ${dfmt(b.tripStartDate,{day:'numeric',month:'long'})}`:''}. شاكرين لكم — Loop Travel & Tourism`;
+}
+async function toggleBriefingAudio(){
+  if(UI.briefAudio){ try{ ttsAudio.pause(); }catch{} if('speechSynthesis' in window) speechSynthesis.cancel(); UI.briefAudio=null; render(true); return; }
+  const text=S.briefingText||(S.briefing.top||[]).join('. ');
+  if(!text){ toast('ما فيه إحاطة لليوم'); return; }
+  unlockAudio(); unlockSpeech(); // must run inside the tap on iPad
+  const done=()=>{ UI.briefAudio=null; render(true); };
+  if(S.health&&S.health.echonova){
+    UI.briefAudio='loading'; render(true);
+    try{
+      const jobId=await startJobReq('/api/tts',{method:'POST',body:JSON.stringify({text})});
+      const {audioUrl}=await pollJobReq(jobId);
+      if(UI.briefAudio!=='loading') return; // stopped while generating
+      UI.briefAudio='playing'; render(true);
+      ttsAudio.onended=ttsAudio.onerror=done; ttsAudio.src=audioUrl; await ttsAudio.play();
+      return;
+    }catch(e){ toast('تعذّر صوت EchoNova — بصوت الجهاز'); }
+  }
+  UI.briefAudio='playing'; render(true);
+  speakWithDevice(text,done);
+}
+function viewHome(){
+  const active=S.departments.filter(d=>d.state!=='idle').length, done=S.departments.reduce((s,d)=>s+d.tasks,0);
+  const off=offline();
+  return `
+  <header class="topbar">
+    <div class="row" style="gap:8px"><span class="dot ${off?'':'live'}" style="background:${off?'var(--coral)':'var(--accent2)'}"></span><span style="font-size:14px;font-weight:600;color:#D9DCE8">مجلس الإدارة الرقمي</span></div>
+    <div class="row mobile-only" style="gap:8px">
+      <a class="icon-btn amber" href="#secretary" aria-label="السكرتير الشخصي">${ic('sec')}</a>
+      <a class="icon-btn" href="#approvals" aria-label="بانتظار قرارك${pendingCount()?'، '+pendingCount():''}">${ic('bell')}${pendingCount()?`<span class="badge">${pendingCount()}</span>`:''}</a>
+      <a class="icon-btn" href="#settings" aria-label="الإعدادات">${ic('gear')}</a>
+    </div>
+  </header>
+  <img class="brand-logo mobile-only" src="${LOGO}" alt="Loop Travel & Tourism">
+  ${off?`<div class="alert" role="alert"><span class="tile">${ic('warn')}</span><div class="grow col" style="gap:1px"><b style="font-size:14px;color:#fff">انقطع الاتصال بالسيرفر</b><span style="font-size:12px;color:#D9DCE8">آخر تحديث ${dfmt(S.health.lastUpdate,{hour:'numeric',minute:'2-digit'})} · البيانات قد تكون قديمة</span></div><button class="icon-btn" data-reload aria-label="إعادة المحاولة">${ic('refresh')}</button></div>`:''}
+  <section class="card col" style="gap:14px;padding:18px 16px;border-radius:26px" aria-label="المدير العام">
+    <div class="topbar"><div class="col" style="gap:2px"><h1 class="h1">المدير العام</h1><span class="sub">${S.departments.length} أقسام · ${active} نشطة</span></div>
+      ${off?`<span class="pill" style="color:var(--coral);border-color:var(--coral-line)"><span class="dot" style="background:var(--coral);width:6px;height:6px"></span>غير متصل</span>`:`<span class="pill"><span class="dot" style="background:var(--accent2);width:6px;height:6px"></span>متصل · 24/7</span>`}</div>
+    ${network()}
+    ${feed()}
+    <p class="sub" style="margin:0;text-align:center">اضغط على أي قسم لفتح تفاصيله</p>
+    <div class="stats"><div class="stat"><b>${done}</b><span>مهمة منجزة</span></div><div class="stat"><b class="ltr">${active}/${S.departments.length}</b><span>أقسام نشطة</span></div><a class="stat" href="#approvals" style="text-decoration:none"><b>${pendingCount()}</b><span>بانتظار قرارك</span></a></div>
+  </section>
+  <a class="teaser" href="#secretary"><span class="tile">${ic('sun')}</span><div class="grow col" style="gap:1px"><b style="font-size:14px;color:#fff">إحاطة الصباح جاهزة</b><span class="sub">من السكرتير · ${dfmt(S.briefing.generatedAt,{hour:'numeric',minute:'2-digit'})}</span></div><span style="color:var(--amber);display:flex">${ic('fwd','s18')}</span></a>
+  ${(S.customers||[]).length?`<section class="card" style="border-radius:22px">${salesFunnel()}</section>`:''}
+  <a class="teaser" href="#bookings"><span class="tile">${ic('check')}</span><div class="grow col" style="gap:1px"><b style="font-size:14px;color:#fff">الحجوزات</b><span class="sub">${(S.bookings||[]).length} حجز مسجّل · المستندات والمتابعة</span></div><span style="color:var(--mint);display:flex">${ic('fwd','s18')}</span></a>
+  ${receivablesCard()}
+  ${monthlyChart()}
+  ${priceChart()}
+  ${profitChart()}
+  ${spendChart()}
+  ${packageChart()}`;
+}
+
+/* ----- chat ----- */
+function delegCard(list){
+  const done=list.filter(x=>x.status==='done').length;
+  return `<div class="deleg"><div class="topbar"><b style="font-size:13px;color:#fff">وزّعت الطلب على ${list.length===1?'قسم واحد':list.length+' أقسام'}</b><span class="sub mono ltr">${done}/${list.length}</span></div>
+  ${list.map(x=>{const d=deptById(x.dept)||{name:x.dept,icon:'gm'};return `<div class="row" style="gap:10px"><span class="tile">${ic(d.icon,'s16')}</span><div class="grow col"><b style="font-size:13px;color:var(--text)">${d.name}</b><span class="sub">${esc(x.task)}</span></div>${x.status==='done'?`<span class="st-done">${ic('check','s14')}سلّم</span>`:`<span class="st-work"><span class="spin"></span>يشتغل</span>`}</div>`}).join('')}</div>`;
+}
+function draftCard(p,idx){
+  const f=k=>(p.flags||[]).includes(k)?` <span class="flag-note">${ic('warn','s14')}تحقق</span>`:'';
+  return `<article class="deleg" style="border-color:var(--accent-line);background:rgba(255,255,255,.04)" aria-label="دفعة جاهزة للتسجيل">
+   <div class="topbar"><b style="font-size:13px;color:#fff">دفعة جاهزة للتسجيل</b>${amt(p.amount,18)}</div>
+   <div class="kvbox"><div class="kv"><span>الجهة المستفيدة</span><span>${esc(p.payee)}</span></div><div class="kv"><span>الفئة</span><span>${CATS[p.cat].label}<span class="tag-auto">تلقائي</span></span></div><div class="kv"><span>تاريخ الدفع</span><span>${dfmt(p.date)}</span></div><div class="kv"><span>طريقة الدفع${f('method')}</span><span>${esc(p.method||'—')}</span></div></div>
+   ${p.saved?`<span class="st-done" style="font-size:13px">${ic('check','s16')}تم التسجيل في سجل المدفوعات</span>`:`<div class="row" style="gap:8px"><button class="btn primary grow" data-confirm-draft="${idx}">${ic('check','s16')}تأكيد التسجيل</button><button class="btn" data-edit-draft="${idx}">تعديل</button></div>`}
+  </article>`;
+}
+function chatInner(side=false){
+  const typing=UI.typing?`<div class="typing"><span aria-hidden="true"><i></i> <i></i> <i></i></span>${esc(UI.typing)}</div>`:'';
+  const msgs=S.chat.length?S.chat.map((m,i)=>m.me
+    ?`<div class="msg-me">${m.image?`<img src="${m.image}" alt="صورة فاتورة مرفقة">`:''}${esc(m.text||'')}</div>`
+    :`<div class="msg-gm"><div class="gm-label"><span class="orb" style="width:20px;height:20px;box-shadow:none"></span>المدير العام</div>${m.delegations?.length?delegCard(m.delegations):''}${m.reply?`<div class="bubble">${esc(m.reply)}</div>`:''}${m.paymentDraft?draftCard(m.paymentDraft,i):''}</div>`).join('')
+    :`<div class="empty">اكتب طلبك للمدير العام، وهو يوزّعه على الأقسام ويرجع لك بالخلاصة.<br>تقدر كمان ترسل صورة فاتورة وتسجلها المحاسبة.</div>`;
+  const working=S.departments.filter(d=>['out','in'].includes(d.state)).length;
+  const head=`<div class="chat-head">${side?'':`<a class="icon-btn" href="#home" aria-label="رجوع" style="border:none">${ic('back')}</a>`}${orb(32)}<div class="grow col" style="gap:1px"><h1 class="h1" style="font-size:16px">المدير العام</h1><span class="sub">${UI.voiceMode?'مكالمة صوتية':offline()?'غير متصل':working?`يعمل الآن مع ${working===1?'قسم واحد':working+' أقسام'}`:'متصل · بانتظار طلبك'}</span></div>${SpeechSupported?`<button class="icon-btn" data-voice-mode="${side?'S':''}" aria-label="${UI.voiceMode?'إيقاف المحادثة الصوتية':'بدء محادثة صوتية كاملة'}" style="border:none;${UI.voiceMode?'color:var(--mint)':''}">${ic('speaker')}</button>`:''}</div>`;
+  const comp=`<div class="composer-dock ${side?'in-side':''}">${S.chat.length?'':`<div class="chips" style="margin:0;padding:0">${['إحاطة اليوم','أداء المبيعات','تحليل المنافسين'].map(t=>`<button class="chip" data-suggest="${t}">${t}</button>`).join('')}</div>`}
+   <form class="composer" data-chat-form><button type="button" class="ghost" data-attach aria-label="إرفاق صورة فاتورة">${ic('cam')}</button>${SpeechSupported?`<button type="button" class="ghost ${UI.listening||UI.transcribing?'mic-on':(UI.voiceMode&&!UI.speaking&&!UI.sending)?'mic-ready':''}" data-mic="${side?'S':''}" aria-label="${UI.listening?'إيقاف التسجيل الصوتي':'إدخال صوتي'}">${ic('mic')}</button>`:''}<label class="sr" for="msg${side?'S':''}">رسالة للمدير العام</label><input id="msg${side?'S':''}" type="text" placeholder="اكتب طلبك للمدير العام…" autocomplete="off"><button class="send" type="submit" aria-label="إرسال" ${UI.sending?'disabled':''}>${ic('up')}</button></form></div>`;
+  return `${head}<div class="msgs" aria-live="polite">${msgs}${typing}</div>${comp}`;
+}
+function viewChat(){ return chatInner(false); }
+async function sendChat(text,image){
+  if(!text&&!image) return;
+  S.chat.push({me:true,text,image}); UI.sending=true;
+  UI.typing=image?'المحاسبة تقرأ الفاتورة…':'المدير يراجع طلبك…'; render(true);
+  let replyText=null;
+  try{ const res=await API.sendMessage(text,image); S.chat.push({me:false,...res}); replyText=res.reply; }
+  catch(e){ const msg='تعذّر الوصول للمدير العام. تحقق من اتصال السيرفر ثم أعد الإرسال.'; S.chat.push({me:false,reply:msg}); replyText=msg; }
+  UI.typing=null; UI.sending=false; render(true);
+  if(UI.voiceMode&&replyText){
+    speakText(replyText,()=>{ if(!UI.voiceMode) return; startVoiceInput('msg'); });
+  }
+}
+function bindChat(root){
+  root.querySelectorAll('[data-chat-form]').forEach(f=>f.onsubmit=e=>{e.preventDefault();if(UI.sending){toast('انتظر رد المدير، وكلامك باقي بالخانة');return}const inp=f.querySelector('input');const t=inp.value.trim();if(!t)return;inp.value='';sendChat(t)});
+  root.querySelectorAll('[data-suggest]').forEach(b=>b.onclick=()=>sendChat(b.dataset.suggest));
+  root.querySelectorAll('[data-attach]').forEach(b=>b.onclick=()=>{UI.attachTarget='chat';document.getElementById('invoiceInput').click()});
+  root.querySelectorAll('[data-mic]').forEach(b=>b.onclick=()=>{ if(UI.listening){ stopVoiceInput(); } else { if(UI.voiceMode){ unlockAudio(); unlockSpeech(); } UI.voiceAwaitTap=false; startVoiceInput('msg'+b.dataset.mic); } });
+  root.querySelectorAll('[data-voice-mode]').forEach(b=>b.onclick=()=>{
+    if(UI.voiceMode){ stopVoiceMode(); }
+    else { unlockAudio(); unlockSpeech(); UI.voiceMode=true; render(true); startVoiceInput('msg'+b.dataset.voiceMode); }
+  });
+  root.querySelectorAll('[data-confirm-draft]').forEach(b=>b.onclick=async()=>{const m=S.chat[+b.dataset.confirmDraft];const p=m.paymentDraft;if(!p.amount){UI.draft={...p};UI.newMode='manual';go('new-payment');return}const saved=await API.addPayment(stripDraft(p));S.payments.unshift(saved);p.saved=true;toast('تم تسجيل الدفعة');render(true)});
+  root.querySelectorAll('[data-edit-draft]').forEach(b=>b.onclick=()=>{UI.draft={...S.chat[+b.dataset.editDraft].paymentDraft};UI.newMode='manual';go('new-payment')});
+  const m=root.querySelector('.msgs'); if(m&&root.id==='sideChat') m.scrollTop=m.scrollHeight;
+}
+const stripDraft=p=>({cat:p.cat,title:p.title||CATS[p.cat].label,payee:p.payee,amount:+p.amount,date:p.date,method:p.method,invoice:p.invoice||'',notes:p.notes||'',bookingId:p.bookingId||null});
+
+/* ----- departments ----- */
+function viewDepts(){
+  const order={out:0,in:1,active:2,fail:-1,idle:9};
+  let list=[...S.departments].sort((a,b)=>order[a.state]-order[b.state]);
+  if(UI.deptFilter==='active') list=list.filter(d=>d.state!=='idle'); if(UI.deptFilter==='idle') list=list.filter(d=>d.state==='idle');
+  const working=S.departments.filter(d=>d.state==='out').length, act=S.departments.filter(d=>d.state!=='idle').length;
+  const seg=(k,l,n)=>`<button aria-pressed="${UI.deptFilter===k}" data-dfilter="${k}">${l}<span class="mono sub">${n}</span></button>`;
+  return `<header class="topbar" style="align-items:flex-end"><div class="col" style="gap:2px"><h1 class="h1" style="font-size:26px">الأقسام</h1><span class="sub row" style="gap:6px"><span class="dot live" style="background:var(--accent2);width:6px;height:6px"></span>${working?`${working} ${working===1?'قسم يشتغل':'أقسام تشتغل'} الآن`:'لا يوجد قسم يشتغل الآن'}</span></div><a class="btn outline" href="#gm">${ic('gm','s18')}اسأل المدير</a></header>
+  <div class="seg" role="group" aria-label="تصفية الأقسام" style="grid-template-columns:repeat(3,1fr)">${seg('all','الكل',S.departments.length)}${seg('active','نشطة',act)}${seg('idle','خاملة',S.departments.length-act)}</div>
+  <div class="col" style="gap:10px">${list.map(d=>{
+    const href=d.id==='accounting'?'#accounting':`#dept/${d.id}`;
+    if(d.state==='idle'&&d.id!=='accounting') return `<div class="dept-idle"><span class="tile">${ic(d.icon)}</span><div class="grow col"><b style="font-size:15px;color:#D9DCE8">${d.name}</b><span class="sub">بانتظار أول مهمة</span></div><a class="btn outline" href="#gm" style="font-size:12px">أسند مهمة</a></div>`;
+    if(d.id==='accounting'&&d.state==='idle') return `<div class="dept-idle"><span class="tile">${ic(d.icon)}</span><div class="grow col"><b style="font-size:15px;color:#D9DCE8">${d.name}</b><span class="sub">سجل المدفوعات · ${S.payments.length} مدفوعات</span></div><a class="btn outline" href="#accounting" style="font-size:12px">فتح السجل</a></div>`;
+    return `<a class="dept-card ${d.state==='out'?'hot':''}" href="${href}"><div class="row"><span class="tile">${ic(d.icon)}</span><b class="grow" style="font-size:16px;color:#fff">${d.name}</b>${statusChip(d)}</div>
+      <div class="taskline"><span>${d.state==='out'?'المهمة الحالية':'آخر مهمة'}</span><span>${esc(d.current||'—')}</span></div>
+      <div class="row sub" style="gap:16px"><span><b class="mono" style="font-size:16px;color:#fff">${d.tasks}</b> مهام</span><span>آخر نشاط: ${d.last?relDay(d.last):'—'}</span><span style="margin-right:auto;color:var(--dim);display:flex">${ic('fwd','s18')}</span></div></a>`;}).join('')}</div>`;
+}
+const relDay=d=>{const n=Math.round((new Date(iso(0))-new Date(d))/864e5);return n<=0?'اليوم':n===1?'أمس':`قبل ${n} يوم`};
+function viewDept(id){
+  const d=deptById(id); if(!d) return `<div class="empty">القسم غير موجود. <a href="#depts">ارجع للأقسام</a></div>`;
+  return `${backHead(d.name,null,'depts')}
+  <div>${statusChip(d)}</div>
+  <div class="stats"><div class="stat"><b>${d.tasks}</b><span>مهام منجزة</span></div><div class="stat"><b>${d.state==='out'?1:0}</b><span>قيد التنفيذ</span></div><div class="stat"><b>${d.state==='fail'?1:0}</b><span>فشلت</span></div></div>
+  ${d.state==='fail'?feed():''}
+  <section class="card col" style="gap:10px;padding:16px"><div class="topbar"><span class="row" style="gap:6px;font-size:12px;font-weight:600;color:var(--accent)">${ic('doc','s16')}آخر تقرير</span><span class="sub">${d.last?relDay(d.last):''}</span></div>
+   <h2 class="h2" style="font-size:17px">${esc(d.current||'لا يوجد تقرير بعد')}</h2><p class="sub" style="margin:0;font-size:13px;line-height:1.75">[ملخص التقرير من السيرفر]</p></section>
+  <div class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">مصادر البيانات</h2></div>
+   ${d.sources.length?d.sources.map(s=>`<div class="row card" style="gap:10px;padding:10px 12px;border-radius:14px"><span style="color:var(--muted);display:flex">${ic('db','s18')}</span><span class="grow" style="font-size:13px">${esc(s)}</span><span class="row" style="gap:5px;font-size:11px;color:${offline()?'var(--coral)':'var(--mint)'}"><span class="dot" style="background:currentColor;width:6px;height:6px"></span>${offline()?'غير متصل':'متصل'}</span></div>`).join(''):'<p class="sub" style="margin:0 4px">لا توجد مصادر مربوطة.</p>'}</div>
+  <a class="btn primary block" href="#gm">أسند مهمة عبر المدير العام</a>`;
+}
+
+/* ----- secretary ----- */
+function viewSecretary(){
+  const b=S.briefing;
+  return `<header class="back-head"><a class="icon-btn" href="#home" aria-label="رجوع">${ic('back')}</a><span class="sec-avatar">${ic('sec')}</span><div class="grow col" style="gap:1px"><h1 class="h1" style="font-size:18px">السكرتير الشخصي</h1><span class="sub">مساعدك الخاص · خارج هيكل الأقسام</span></div></header>
+  <section class="brief" aria-label="إحاطة الصباح">
+   <div class="topbar" style="align-items:flex-start"><div class="col" style="gap:3px"><span class="row" style="gap:6px;font-size:12px;font-weight:600;color:var(--amber)">${ic('sun','s16')}إحاطة الصباح</span><h2 class="h1">صباح الخير</h2><span class="sub">${dfmt(b.generatedAt,{weekday:'long',day:'numeric',month:'long'})} · أُعدّت ${dfmt(b.generatedAt,{hour:'numeric',minute:'2-digit'})}</span></div>
+   <div class="row" style="gap:8px"><button class="icon-btn amber" data-brief-audio aria-label="${UI.briefAudio?'إيقاف القراءة':'استمع للإحاطة'}">${UI.briefAudio==='loading'?'<span class="spin" style="border-top-color:var(--amber)"></span>':UI.briefAudio?ic('x'):ic('speaker')}</button><button class="icon-btn amber" data-regen aria-label="إعادة توليد الإحاطة">${UI.regen?'<span class="spin" style="border-top-color:var(--amber)"></span>':ic('refresh')}</button></div></div>
+   <div class="col" style="gap:10px"><h3 class="h2" style="font-size:14px">أهم 3 أشياء اليوم</h3>${b.top.map((t,i)=>`<div class="row" style="align-items:flex-start;gap:10px"><span class="num">${i+1}</span><span style="font-size:14px;line-height:1.7">${esc(t)}</span></div>`).join('')}</div>
+   <div style="height:1px;background:rgba(255,255,255,.08)"></div>
+   <div class="col" style="gap:10px"><h3 class="h2" style="font-size:14px">من الأقسام منذ أمس</h3>${b.fromDepts.map(x=>{const d=deptById(x.dept)||{};return `<div class="row" style="gap:10px"><span class="tile" style="width:30px;height:30px;border-radius:9px">${ic(d.icon||'gm','s14')}</span><span class="grow" style="font-size:13px;color:#D9DCE8"><b style="color:#fff">${d.name||''}</b> ${esc(x.text)}</span>${x.done?`<span style="color:var(--accent);display:flex">${ic('check','s16')}</span>`:'<span class="spin"></span>'}</div>`}).join('')}</div>
+   <a class="row card" href="#approvals" style="gap:10px;padding:12px 14px;border-radius:14px;text-decoration:none;color:inherit"><span class="badge" style="min-width:26px;height:26px;border:none;font-size:12px">${pendingCount()}</span><b class="grow" style="font-size:14px;color:#fff">بانتظار قرارك</b><span style="color:var(--muted);display:flex">${ic('fwd','s18')}</span></a>
+  </section>
+  <div class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">طلبات سريعة</h2></div><div class="row" style="flex-wrap:wrap;gap:8px">${['لخّص لي الأسبوع','ذكّرني بقرار معلّق','جهّز رسالة لعميل'].map(t=>`<button class="chip amber" data-sec-suggest="${t}">${t}</button>`).join('')}</div></div>
+  <form class="composer amber" data-sec-form style="margin-top:8px"><label class="sr" for="secMsg">رسالة للسكرتير</label><input id="secMsg" type="text" placeholder="اطلب من السكرتير…" autocomplete="off"><button class="send" type="submit" aria-label="إرسال">${ic('up')}</button></form>`;
+}
+
+/* ----- approvals ----- */
+function viewApprovals(){
+  return `${backHead('بانتظار قرارك','اقتراحات من المدير والأقسام تحتاج موافقتك')}
+  ${S.approvals.length?S.approvals.map(a=>`<article class="card col" style="gap:12px;padding:16px;border-radius:22px">
+    <div class="row" style="gap:10px"><span class="tile" style="width:34px;height:34px;border-radius:11px">${ic(a.icon,'s16')}</span><span class="grow sub">من <b style="color:#D9DCE8">${esc(a.from)}</b></span><span class="sub" style="font-size:11px">${esc(a.at)}</span></div>
+    <div class="col" style="gap:4px"><h2 class="h2" style="font-size:16px;line-height:1.6">${esc(a.title)}</h2><p class="sub" style="margin:0;font-size:13px;line-height:1.7">${esc(a.why)}</p></div>
+    <div style="padding:10px 12px;border-radius:12px;background:var(--surface-2);font-size:13px;color:#D9DCE8">${esc(a.meta)}</div>
+    <div class="row" style="gap:8px"><button class="btn primary grow" data-decide="${a.id}:approve">${ic('check','s16')}اعتمد</button><button class="btn grow" data-decide="${a.id}:reject">ارفض</button><a class="icon-btn" href="#gm" aria-label="اسأل المدير عن هذا الاقتراح" style="border-color:var(--accent-line);color:var(--accent);background:transparent">${ic('gm')}</a></div>
+  </article>`).join(''):`<div class="empty">لا يوجد شي ينتظر قرارك الحين.</div>`}
+  ${S.decided.length?`<div class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">تم مؤخراً</h2></div>${S.decided.map(d=>`<div class="row card" style="gap:10px;padding:12px 14px;border-radius:16px"><span style="color:${d.ok?'var(--mint)':'var(--coral)'};display:flex">${ic(d.ok?'check':'x','s18')}</span><span class="grow" style="font-size:13px;color:#D9DCE8">${d.ok?'اعتمدت':'رفضت'}: ${esc(d.title)}</span></div>`).join('')}</div>`:''}`;
+}
+
+/* ----- settings ----- */
+function viewSettings(){
+  const h=S.health, sw=(key,on,label)=>`<button class="switch" role="switch" aria-checked="${on}" aria-label="${label}" data-switch="${key}"><span></span></button>`;
+  const sys=(n,ok,t)=>`<div class="set-row"><span class="grow" style="font-size:14px">${n}</span><span class="row" style="gap:6px;font-size:12px;color:${ok?'var(--mint)':'var(--coral)'}"><span class="dot" style="background:currentColor"></span>${ok?t:'متوقف'}</span></div>`;
+  const en=S.settings.enabled, b=S.settings.budget, pct=b.limit?Math.min(100,b.used/b.limit*100):0;
+  return `${backHead('الإعدادات')}
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">حالة النظام</h2><button class="btn" data-reload style="height:36px;border:none;color:var(--accent);font-size:12px">فحص الآن</button></div>
+   <div class="group">${sys('السيرفر (Render)',h.server,'يعمل')}${sys('Claude API',h.claude,'يعمل')}${sys('بيانات المنافسين (Apify)',h.apify,'متصل')}${sys('Google Sheets',h.sheets,'متصل')}</div></section>
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">حد المصاريف الشهري</h2></div>
+   <div class="group"><div class="col" style="gap:10px;padding:14px">
+    <div class="topbar"><span style="font-size:14px">المصروف هذا الشهر</span><span class="mono ltr" style="font-size:13px;color:#fff">${fmt(b.used)} / ${fmt(b.limit)} د.إ</span></div>
+    <div class="meter" aria-hidden="true"><i style="width:${pct}%"></i></div>
+    <div class="row" style="gap:8px;align-items:center"><label class="sub" for="budgetLimit" style="flex-shrink:0">الحد الشهري (د.إ)</label><input id="budgetLimit" type="number" min="0" value="${b.limit||''}" placeholder="بدون حد" class="mono" style="flex:1;height:36px;padding:0 10px;border-radius:10px;border:1px solid var(--line-2);background:var(--bg);color:#D9DCE8;font-size:13px"></div>
+    <span class="sub" style="line-height:1.6">محسوب من سجل المدفوعات الفعلي. عند بلوغ الحد توصلك إشعار.</span>
+   </div></div></section>
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">الأقسام</h2></div>
+   <div class="group">${S.departments.map(d=>`<div class="set-row"><div class="grow col"><span style="font-size:14px">${d.name}</span>${d.state==='idle'?'<span class="sub">بدون مهام حتى الآن</span>':''}</div>${sw('dept:'+d.id,en[d.id]!==false,d.name)}</div>`).join('')}</div></section>
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">السكرتير</h2></div>
+   <div class="group"><div class="set-row"><span style="color:var(--amber);display:flex">${ic('sun','s18')}</span><label class="grow" for="briefTime" style="font-size:14px">وقت إحاطة الصباح</label><input id="briefTime" type="time" value="${S.settings.briefTime}" class="mono" style="height:40px;padding:0 10px;border-radius:10px;border:1px solid var(--amber-line);background:transparent;color:var(--amber)"></div></div></section>
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">التنبيهات</h2></div>
+   <div class="group"><div class="set-row"><span class="grow" style="font-size:14px">عند فشل مهمة</span>${sw('alert:fail',S.settings.alerts.fail,'عند فشل مهمة')}</div><div class="set-row"><span class="grow" style="font-size:14px">عند وصول اقتراح ينتظر قرارك</span>${sw('alert:approval',S.settings.alerts.approval,'عند وصول اقتراح')}</div><div class="set-row"><span class="grow" style="font-size:14px">عند تسليم كل تقرير</span>${sw('alert:report',S.settings.alerts.report,'عند تسليم كل تقرير')}</div>
+   <div class="set-row"><div class="grow col"><span style="font-size:14px">إشعارات على هذا الجهاز</span><span class="sub">${UI.pushStatus==='unsupported'?'غير مدعومة على هذا المتصفح':UI.pushStatus==='subscribed'?'مفعّلة على هذا الجهاز':'غير مفعّلة بعد'}</span></div>
+   ${UI.pushStatus==='unsupported'?'':`<button class="btn ${UI.pushStatus==='subscribed'?'':'primary'}" data-push-toggle style="height:36px;font-size:12px">${UI.pushStatus==='subscribed'?'إيقاف':'تفعيل'}</button>`}</div></div></section>
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">صوت المدير العام</h2></div>
+   <div class="group"><div class="set-row"><div class="grow col"><span style="font-size:14px">الصوت المستخدم بالمحادثة الصوتية</span><span class="sub">${S.health.echonova?'أصوات EchoNova الإماراتية':'غير مفعّل — يُستخدم صوت الجهاز'}</span></div>
+   ${S.health.echonova?(UI.ttsVoices?`<select id="ttsVoice" style="height:36px;border-radius:10px;border:1px solid var(--line-2);background:var(--bg);color:#D9DCE8;font-size:13px;padding:0 8px">${UI.ttsVoices.filter(v=>(v.language||'')==='ar').map(v=>`<option value="${esc(v.id)}" ${(S.settings.ttsVoice===v.id||(!S.settings.ttsVoice&&v.displayName==='Abdulla'))?'selected':''}>${esc(v.displayName||v.name)}${v.gender?' · '+(v.gender==='Male'?'ذكر':'أنثى'):''}</option>`).join('')}</select>`:`<button class="btn" data-load-voices style="height:36px;font-size:12px">عرض الأصوات</button>`):''}
+   </div></div></section>
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">قائمة الباقات</h2></div>
+   <div class="group" style="padding:14px;display:flex;flex-direction:column;gap:10px">
+    <span class="sub">هذي الأسماء اللي تظهر بنموذج الحجز وبالرسوم. احذف المكرر ووحّد الأسماء القديمة من تفاصيل كل حجز.</span>
+    <div class="row" style="flex-wrap:wrap;gap:8px">${(S.packages||[]).map(p=>`<span class="chip" style="display:flex;align-items:center;gap:6px">${esc(p.name)} <span class="sub">(${(S.bookings||[]).filter(b=>pkgName(b.package)===p.name).length})</span><button data-rm-pkg="${p.id}" aria-label="حذف ${esc(p.name)}" style="background:none;border:none;color:var(--coral);padding:0;display:flex">${ic('x','s14')}</button></span>`).join('')||'<span class="sub">ما فيه باقات بعد.</span>'}</div>
+    <form class="row" style="gap:8px" data-add-pkg><input placeholder="اسم باقة جديدة" style="flex:1;height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line-2);background:var(--bg);color:#fff"><button class="btn" type="submit" style="height:40px;font-size:13px">إضافة</button></form>
+   </div></section>
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">حسابات المنافسين المتابَعة</h2></div>
+   <div class="group" style="padding:12px;display:flex;flex-direction:column;gap:8px">
+    <div class="row" style="flex-wrap:wrap;gap:8px">${(S.competitors||[]).map(u=>`<span class="chip" style="display:flex;align-items:center;gap:6px">@${esc(u)}<button data-rm-competitor="${esc(u)}" aria-label="إزالة" style="background:none;border:none;color:var(--coral);display:flex;padding:0">${ic('x','s14')}</button></span>`).join('')||'<span class="sub">لا يوجد منافسون مضافون.</span>'}</div>
+    <form class="row" style="gap:8px" data-add-competitor><input id="newCompetitor" placeholder="اسم المستخدم بانستغرام بدون @" style="flex:1;height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line-2);background:var(--bg);color:#D9DCE8;font-size:13px"><button class="btn primary" type="submit" style="height:40px;font-size:12px">${ic('plus','s16')}إضافة</button></form>
+   </div></section>
+  <section class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">نسخة احتياطية</h2></div>
+   <div class="group"><a class="btn block" href="${API_BASE}/api/export" target="_blank" rel="noopener" style="height:48px;display:flex;align-items:center;justify-content:center;gap:8px">${ic('db','s18')}تصدير كل البيانات (JSON)</a></div></section>`;
+}
+
+/* ----- accounting ----- */
+function inPeriod(d){const days=(new Date(iso(0))-new Date(d))/864e5;return UI.period==='1m'?days<=31:UI.period==='3m'?days<=92:UI.period==='1y'?days<=366:true}
+function viewAccounting(){
+  const scoped=S.payments.filter(p=>inPeriod(p.date));
+  const list=scoped.filter(p=>UI.payFilter==='all'||p.cat===UI.payFilter).sort((a,b)=>b.date.localeCompare(a.date));
+  const total=list.reduce((s,p)=>s+Number(p.amount),0), all=scoped.reduce((s,p)=>s+Number(p.amount),0)||1;
+  const byCat=Object.keys(CATS).map(k=>[k,scoped.filter(p=>p.cat===k).reduce((s,p)=>s+Number(p.amount),0)]).filter(x=>x[1]>0);
+  const groups={}; list.forEach(p=>{const k=p.date.slice(0,7);(groups[k]=groups[k]||[]).push(p)});
+  const periodLabel={'1m':'آخر شهر','3m':'آخر 3 أشهر','1y':'آخر سنة','all':'كل الفترات'}[UI.period];
+  const row=p=>{const c=CATS[p.cat]||CATS.other,open=UI.openPay===p.id;return `<div class="pay ${open?'open':''}"><button aria-expanded="${open}" data-pay="${p.id}"><span class="tile" style="background:${c.soft};color:${c.color}">${ic(p.cat in ICONS?p.cat:'other','s18')}</span><span class="grow col" style="gap:2px"><b style="font-size:14px;color:#fff">${esc(p.title)}</b><span class="sub">${c.label} · ${dfmt(p.date,{day:'numeric',month:'long'})}</span></span>${amt(p.amount)}<span class="chev">${ic('down','s16')}</span></button>
+   ${open?`<div class="pay-detail"><div class="kv"><span>تاريخ الدفع</span><span>${dfmt(p.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</span></div><div class="kv"><span>الجهة المستفيدة</span><span>${esc(p.payee||'—')}</span></div><div class="kv"><span>الفئة</span><span>${c.label}</span></div><div class="kv"><span>طريقة الدفع</span><span>${esc(p.method||'—')}</span></div><div class="kv"><span>رقم الفاتورة</span><span class="mono">${esc(p.invoice||'—')}</span></div>
+   ${p.notes?`<div class="col" style="gap:4px;padding:8px 0"><span class="sub" style="font-size:13px">ملاحظات</span><span style="font-size:13px;line-height:1.7">${esc(p.notes)}</span></div>`:''}
+   ${p.image?`<img src="${p.image}" alt="صورة الفاتورة" style="width:100%;border-radius:12px;margin-top:6px">`:''}
+   <div class="row" style="gap:8px;margin-top:10px"><a class="btn outline grow" href="${API_BASE}/api/payments/${p.id}/invoice" target="_blank" rel="noopener">${ic('doc','s16')}فاتورة PDF</a><button class="btn outline grow" data-edit-pay="${p.id}">${ic('pen','s16')}تعديل</button><button class="btn danger grow" data-del-pay="${p.id}">${ic('trash','s16')}حذف</button></div></div>`:''}</div>`};
+  return `<header class="back-head"><a class="icon-btn" href="#depts" aria-label="رجوع">${ic('back')}</a><div class="grow col" style="gap:1px"><h1 class="h1">المحاسبة</h1><span class="sub">سجل المدفوعات</span></div><a class="btn primary" href="#new-payment" data-new-pay>${ic('plus','s16')}دفعة جديدة</a></header>
+  <section class="card col" style="gap:12px;padding:16px" aria-label="توزيع المصاريف"><div class="topbar"><b style="font-size:13px;color:#fff">توزيع المصاريف</b>
+   <label class="sr" for="period">الفترة</label><select id="period" data-period style="height:36px;padding:0 10px;border-radius:10px;border:1px solid var(--line-2);background:var(--bg);color:#D9DCE8;font-size:12px">${[['1m','آخر شهر'],['3m','آخر 3 أشهر'],['1y','آخر سنة'],['all','كل الفترات']].map(([k,l])=>`<option value="${k}" ${UI.period===k?'selected':''}>${l}</option>`).join('')}</select></div>
+   ${byCat.length?`<div class="catbar" aria-hidden="true">${byCat.map(([k,v])=>`<span style="width:${Math.max(v/all*100,1.5)}%;background:${CATS[k].color}"></span>`).join('')}</div><div class="legend">${byCat.map(([k,v])=>`<div><span class="dot" style="border-radius:2px;background:${CATS[k].color}"></span><span class="grow" style="color:#D9DCE8">${CATS[k].label}</span><span class="mono ltr" style="color:#fff">${fmt(v)}</span></div>`).join('')}</div>`:'<span class="sub">لا توجد مدفوعات في هذه الفترة.</span>'}</section>
+  <div class="chips">${[['all','الكل'],...Object.keys(CATS).map(k=>[k,CATS[k].label])].map(([k,l])=>`<button class="chip" aria-pressed="${UI.payFilter===k}" data-pfilter="${k}">${l}</button>`).join('')}</div>
+  ${list.length?Object.entries(groups).map(([m,ps])=>`<div class="col" style="gap:8px"><div class="sec-head"><h2 class="h2">${dfmt(m+'-01',{month:'long',year:'numeric'})}</h2><span class="sub">${ps.length} ${ps.length===1?'دفعة':'مدفوعات'}</span></div>${ps.map(row).join('')}</div>`).join('')
+   :`<div class="empty">ما فيه مدفوعات هنا. سجّل أول دفعة من زر "دفعة جديدة"، أو أرسل صورة الفاتورة للمدير العام.</div>`}
+  <div class="total-bar" role="status" aria-live="polite"><div class="grow col" style="gap:1px"><b style="font-size:14px;color:#fff">المبلغ الإجمالي</b><span class="sub">${list.length} ${list.length===1?'دفعة':'مدفوعات'} · ${periodLabel}${UI.payFilter!=='all'?' · '+CATS[UI.payFilter].label:''}</span></div>${amt(total)}</div>`;
+}
+function viewNewPayment(){
+  const d=UI.draft||{cat:'sup',title:'',payee:'',amount:'',date:iso(0),method:'تحويل بنكي',invoice:'',notes:'',flags:[]};
+  UI.draft=d;
+  const flag=k=>(d.flags||[]).includes(k);
+  const fld=(id,label,key,type='text',extra='')=>`<div class="field ${flag(key)?'flag':''}"><div class="topbar"><label for="${id}">${label}</label>${flag(key)?`<span class="flag-note">${ic('warn','s14')}غير واضحة في الفاتورة</span>`:''}</div><input id="${id}" type="${type}" data-f="${key}" value="${esc(d[key]??'')}" ${extra}></div>`;
+  const photo=UI.newMode==='photo';
+  return `${backHead(d.id?'تعديل دفعة':'دفعة جديدة','قسم المحاسبة','accounting')}
+  ${d.id?'':`<div class="seg" role="group" aria-label="طريقة الإدخال" style="grid-template-columns:1fr 1fr"><button aria-pressed="${photo}" data-mode="photo">${ic('cam','s16')}صورة فاتورة</button><button aria-pressed="${!photo}" data-mode="manual">${ic('pen','s16')}إدخال يدوي</button></div>`}
+  ${photo&&!d.id?(UI.scanImg?`<div class="scan"><div class="scan-thumb"><img src="${UI.scanImg}" alt="الفاتورة">${UI.scanning?'<span class="beam"></span>':''}</div><div class="grow col" style="gap:6px">${UI.scanning?`<b class="row" style="gap:6px;font-size:14px;color:#fff"><span class="spin"></span>المحاسبة تقرأ الفاتورة…</b>`:`<b class="row" style="gap:6px;font-size:14px;color:#fff"><span style="color:var(--mint);display:flex">${ic('check','s16')}</span>تمت قراءة الفاتورة</b><span class="sub" style="line-height:1.7">راجع البيانات قبل الحفظ.</span>`}<button class="btn" data-scan style="height:36px;font-size:12px;align-self:flex-start">${ic('cam','s16')}صورة ثانية</button></div></div>`
+    :`<button class="drop" data-scan>${ic('cam')}<b style="font-size:15px">صوّر الفاتورة أو اختر صورة</b><span class="sub">المحاسبة تقرأ البيانات وتعبّي الخانات</span></button>`):''}
+  <form class="col" style="gap:14px" data-pay-form>
+   ${fld('f-amt','المبلغ (د.إ)','amount','number','inputmode="decimal" step="0.01" min="0" required')}
+   ${fld('f-title','الوصف','title','text','required placeholder="مثال: رسوم مورد التأشيرات"')}
+   ${fld('f-payee','الجهة المستفيدة','payee')}
+   <div class="field"><span style="font-size:12px;color:var(--muted)" id="catL">الفئة</span><div class="row" role="group" aria-labelledby="catL" style="flex-wrap:wrap;gap:8px">${Object.keys(CATS).map(k=>`<button type="button" class="chip" aria-pressed="${d.cat===k}" data-cat="${k}" style="border-radius:12px">${CATS[k].label}</button>`).join('')}</div></div>
+   ${fld('f-date','تاريخ الدفع','date','date','required')}
+   <div class="field ${flag('method')?'flag':''}"><div class="topbar"><label for="f-method">طريقة الدفع</label>${flag('method')?`<span class="flag-note">${ic('warn','s14')}غير واضحة في الفاتورة</span>`:''}</div><select id="f-method" data-f="method"><option value="">اختر</option>${METHODS.map(m=>`<option ${d.method===m?'selected':''}>${m}</option>`).join('')}</select></div>
+   ${(S.bookings||[]).length?`<div class="field"><label for="f-bk">مرتبطة بحجز (تكلفة رحلة عميل — اختياري)</label><select id="f-bk" data-f="bookingId"><option value="">بدون — مصروف عام</option>${(S.bookings||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).map(b=>`<option value="${b.id}" ${d.bookingId===b.id?'selected':''}>${esc(b.customerName)} · ${esc(pkgName(b.package))}</option>`).join('')}</select></div>`:''}
+   ${fld('f-inv','رقم الفاتورة','invoice')}
+   <div class="field"><label for="f-notes">ملاحظات</label><textarea id="f-notes" data-f="notes">${esc(d.notes||'')}</textarea></div>
+   <div class="row" style="gap:8px;margin-top:4px"><button class="btn primary block grow" type="submit">${ic('check','s18')}حفظ الدفعة</button><a class="btn" href="#accounting" style="height:52px;width:96px" data-cancel>إلغاء</a></div>
+  </form>`;
+}
+
+const DOC_LABELS={passport:'جواز سفر',photo:'صورة شخصية',visa:'تأشيرة'};
+function viewBookings(){
+  const list=(S.bookings||[]).slice().sort((a,b)=>b.date.localeCompare(a.date));
+  const totalRevenue=list.reduce((s,b)=>s+Number(b.amount||0),0);
+  const row=b=>{
+    const open=UI.openBooking===b.id;
+    const docs=b.docs||{passport:false,photo:false,visa:false};
+    const missing=Object.entries(docs).filter(([,v])=>!v).length;
+    return `<div class="pay ${open?'open':''}"><button aria-expanded="${open}" data-booking="${b.id}">
+      <span class="tile" style="background:var(--mint-soft,rgba(52,211,153,.12));color:var(--mint)">${ic('check','s18')}</span>
+      <span class="grow col" style="gap:2px"><b style="font-size:14px;color:#fff">${esc(b.customerName)}</b><span class="sub">${esc(pkgName(b.package))} · ${dfmt(b.date,{day:'numeric',month:'long'})}${missing?` · ${missing} مستند ناقص`:''}${owedOf(b)?` · <span style="color:var(--amber)">باقي ${fmt(Math.round(owedOf(b)))}</span>`:''}</span></span>
+      ${amt(b.amount)}<span class="chev">${ic('down','s16')}</span></button>
+     ${open?`<div class="pay-detail">
+       <div class="kv"><span>المدفوع</span><span>${typeof b.paid==='number'?`${fmt(b.paid)} من ${fmt(b.amount)} د.إ`:'غير مسجّل'}</span></div>
+       ${owedOf(b)?`<div class="kv"><span>المتبقي</span><span style="color:var(--amber);font-weight:700">${fmt(Math.round(owedOf(b)))} د.إ</span></div>`:''}
+       <form class="row" data-add-paid="${b.id}" style="gap:8px;margin:8px 0"><input type="number" inputmode="decimal" step="0.01" min="0" placeholder="${typeof b.paid==='number'?'دفعة جديدة من العميل':'المبلغ المدفوع حتى الآن'}" style="flex:1;height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line-2);background:var(--bg);color:#fff"><button class="btn" type="submit" style="height:40px;font-size:13px">${typeof b.paid==='number'?'إضافة':'حفظ'}</button></form>
+       ${owedOf(b)?`<a class="btn outline block" href="https://wa.me/?text=${encodeURIComponent(reminderText(b))}" target="_blank" rel="noopener" style="height:42px;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:8px">${ic('up','s16')}رسالة تذكير بالمبلغ (واتساب)</a>`:''}
+       <div class="kv"><span>الباقة</span><select data-bk-pkg="${b.id}" style="height:34px;border-radius:10px;border:1px solid var(--line-2);background:var(--bg);color:#D9DCE8;font-size:13px;padding:0 8px;max-width:60%">${[...new Set([...(S.packages||[]).map(p=>p.name),pkgName(b.package)])].map(n=>`<option ${n===pkgName(b.package)?'selected':''}>${esc(n)}</option>`).join('')}</select></div>
+       <div class="kv"><span>تاريخ الحجز</span><span>${dfmt(b.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</span></div>
+       <div class="kv"><span>بداية الرحلة</span><span>${b.tripStartDate?dfmt(b.tripStartDate,{day:'numeric',month:'long'}):'—'}</span></div>
+       <div class="kv"><span>نهاية الرحلة</span><span>${b.tripEndDate?dfmt(b.tripEndDate,{day:'numeric',month:'long'}):'—'}</span></div>
+       ${b.notes?`<div class="col" style="gap:4px;padding:8px 0"><span class="sub" style="font-size:13px">ملاحظات</span><span style="font-size:13px;line-height:1.7">${esc(b.notes)}</span></div>`:''}
+       <div class="col" style="gap:8px;margin-top:10px"><span class="sub" style="font-size:13px">المستندات</span>
+        ${Object.entries(DOC_LABELS).map(([k,label])=>`<label class="row" style="gap:8px;align-items:center;cursor:pointer"><input type="checkbox" data-doc="${b.id}:${k}" ${docs[k]?'checked':''} style="width:18px;height:18px"><span style="font-size:13px;color:#D9DCE8">${label}</span></label>`).join('')}
+       </div>
+       <div class="row" style="gap:8px;margin-top:10px"><button class="btn danger grow" data-del-booking="${b.id}">${ic('trash','s16')}حذف</button></div>
+     </div>`:''}</div>`;
+  };
+  return `${backHead('الحجوزات','سجل الإيرادات الفعلي','home')}
+  <a class="btn primary block" href="#new-booking" style="height:48px;display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:4px">${ic('plus','s18')}حجز جديد</a>
+  ${list.length?list.map(row).join(''):`<div class="empty">ما فيه حجوزات مسجّلة بعد. سجّل أول حجز من الزر فوق، أو اطلب من المدير العام يسجّله.</div>`}
+  ${list.length?`<div class="total-bar" role="status" aria-live="polite"><div class="grow col" style="gap:1px"><b style="font-size:14px;color:#fff">إجمالي الإيرادات</b><span class="sub">${list.length} ${list.length===1?'حجز':'حجوزات'}</span></div>${amt(totalRevenue)}</div>`:''}`;
+}
+function pkgSelect(d){
+  const list=S.packages||[], isNew=d.pkgNew||(!list.length);
+  const known=list.some(p=>p.name===d.package);
+  return `<div class="field"><label for="b-pkgsel">الباقة</label>${list.length?`<select id="b-pkgsel" data-pkgsel><option value="">اختر الباقة</option>${list.map(p=>`<option ${p.name===d.package&&!d.pkgNew?'selected':''}>${esc(p.name)}</option>`).join('')}<option value="__new" ${isNew?'selected':''}>+ باقة جديدة…</option></select>`:''}
+   ${isNew?`<input id="b-pkg" type="text" data-bf="package" value="${esc(known?'':d.package||'')}" placeholder="اسم الباقة الجديدة — تنحفظ بالقائمة" style="margin-top:${list.length?8:0}px">`:''}</div>`;
+}
+function viewNewBooking(){
+  const d=UI.bookingDraft||{customerName:'',package:'',amount:'',paid:'',date:iso(0),tripStartDate:'',tripEndDate:'',notes:''};
+  UI.bookingDraft=d;
+  const fld=(id,label,key,type='text',extra='')=>`<div class="field"><label for="${id}">${label}</label><input id="${id}" type="${type}" data-bf="${key}" value="${esc(d[key]??'')}" ${extra}></div>`;
+  return `${backHead('حجز جديد','سجل الإيرادات','bookings')}
+  <form class="col" style="gap:14px" data-booking-form>
+   ${fld('b-name','اسم العميل','customerName','text','required')}
+   ${pkgSelect(d)}
+   ${fld('b-amt','المبلغ الكامل (د.إ)','amount','number','inputmode="decimal" step="0.01" min="0" required')}
+   ${fld('b-paid','المدفوع حتى الآن / العربون (د.إ)','paid','number','inputmode="decimal" step="0.01" min="0" placeholder="0"')}
+   ${fld('b-date','تاريخ الحجز','date','date','required')}
+   ${fld('b-start','بداية الرحلة (اختياري)','tripStartDate','date')}
+   ${fld('b-end','نهاية الرحلة (اختياري)','tripEndDate','date')}
+   <div class="field"><label for="b-notes">ملاحظات</label><textarea id="b-notes" data-bf="notes">${esc(d.notes||'')}</textarea></div>
+   <div class="row" style="gap:8px;margin-top:4px"><button class="btn primary block grow" type="submit">${ic('check','s18')}حفظ الحجز</button><a class="btn" href="#bookings" style="height:52px;width:96px">إلغاء</a></div>
+  </form>`;
+}
+
+/* =========================================================
+   7) الرسم وربط الأحداث
+   ========================================================= */
+function isTyping(){
+  const a=document.activeElement;
+  return !!(a&&(a.tagName==='TEXTAREA'||(a.tagName==='INPUT'&&!['button','submit','checkbox','radio','file'].includes(a.type))));
+}
+function render(keepScroll){
+  // remember what's typed (and where the cursor is) so a redraw never wipes it
+  const keep=[...document.querySelectorAll('input[id],textarea[id]')].filter(el=>el.type!=='file'&&el.value).map(el=>[el.id,el.value]);
+  const a=document.activeElement, focusId=a&&a.id&&isTyping()?a.id:null;
+  let selS=null,selE=null; try{ if(focusId){ selS=a.selectionStart; selE=a.selectionEnd; } }catch{}
+  const routeBefore=location.hash;
+  _render(keepScroll);
+  if(location.hash!==routeBefore) return;
+  keep.forEach(([id,val])=>{ const el=document.getElementById(id); if(el&&!el.value) el.value=val; });
+  if(focusId){ const el=document.getElementById(focusId); if(el&&document.activeElement!==el){ el.focus({preventScroll:true}); try{ if(selS!=null) el.setSelectionRange(selS,selE); }catch{} } }
+}
+/* المكتب: صفحة /office نفسها داخل اللوحة. الإطار يُنشأ مرة واحدة ولا يُعاد
+   رسمه مع تحديثات اللوحة، حتى لا ينقطع المشهد أو بثّ الأحداث الحي. */
+const viewOffice=()=>`<h1 class="sr">المكتب</h1><iframe class="office-frame" src="/office?embed=1" title="المكتب — نشاط الوكلاء المباشر" allow="autoplay"></iframe>`;
+function _render(keepScroll){
+  if(!S){document.getElementById('view').innerHTML='<div class="empty"><span class="spin" style="display:inline-block"></span></div>';return}
+  const r=route(), v=document.getElementById('view'), y=scrollY;
+  renderChrome(r);
+  v.classList.toggle('office',r.name==='office'); document.body.classList.toggle('office-on',r.name==='office');
+  if(r.name==='office'&&v.querySelector('.office-frame')){ v.classList.remove('has-composer'); document.getElementById('tabbar').hidden=false; return; }
+  const views={home:viewHome,gm:viewChat,depts:viewDepts,dept:()=>viewDept(r.arg),secretary:viewSecretary,approvals:viewApprovals,settings:viewSettings,accounting:viewAccounting,'new-payment':viewNewPayment,bookings:viewBookings,'new-booking':viewNewBooking,office:viewOffice};
+  if(r.name==='gm'&&wide()){/* على الآيباد المحادثة في الشاشة الرئيسية */}
+  v.innerHTML=(views[r.name]||viewHome)();
+  v.classList.toggle('has-composer',['gm','accounting'].includes(r.name));
+  document.getElementById('tabbar').hidden=['new-payment','new-booking'].includes(r.name);
+  bind(v,r);
+  if(r.name==='gm'){bindChat(v); if(keepScroll) scrollTo(0,document.body.scrollHeight);}
+  else if(keepScroll) scrollTo(0,y);
+}
+function bind(v,r){
+  v.querySelectorAll('[data-reload]').forEach(b=>b.onclick=load);
+  v.querySelectorAll('[data-price-refresh]').forEach(b=>b.onclick=async()=>{
+    if(UI.priceRefreshing) return; UI.priceRefreshing=true; render(true);
+    try{ const jobId=await startJobReq('/api/price-history/refresh'); await pollJobReq(jobId,330); const st=await http('/api/state'); S.priceHistory=st.priceHistory||[]; toast('المدير سجّل نقطة هذا الشهر'); }
+    catch(e){ toast('تعذّر التحديث: '+String(e.message||e).slice(0,60)); }
+    UI.priceRefreshing=false; render(true);
+  });
+  v.querySelectorAll('[data-retry]').forEach(b=>b.onclick=async()=>{b.disabled=true;b.textContent='جاري الإعادة…';try{await API.retry(b.dataset.retry);const d=deptById(b.dataset.retry);d.state='active';delete d.error;toast('أُعيدت المهمة')}catch{toast('تعذّرت إعادة المهمة')}render(true)});
+  v.querySelectorAll('[data-dfilter]').forEach(b=>b.onclick=()=>{UI.deptFilter=b.dataset.dfilter;render(true)});
+  v.querySelectorAll('[data-decide]').forEach(b=>b.onclick=async()=>{const [id,dec]=b.dataset.decide.split(':');await API.decide(id,dec);const a=S.approvals.find(x=>x.id===id);S.approvals=S.approvals.filter(x=>x.id!==id);S.decided.unshift({title:a.title,ok:dec==='approve'});toast(dec==='approve'?'تم الاعتماد':'تم الرفض');render(true)});
+  v.querySelectorAll('[data-regen]').forEach(b=>b.onclick=async()=>{UI.regen=true;render(true);S.briefing=await API.generateBriefing();UI.regen=false;toast('تم تحديث الإحاطة');render(true)});
+  v.querySelectorAll('[data-sec-form]').forEach(f=>f.onsubmit=e=>{e.preventDefault();toast('وصل طلبك للسكرتير');f.reset()}); // اربطها بـ POST /api/secretary
+  v.querySelectorAll('[data-sec-suggest]').forEach(b=>b.onclick=()=>toast('وصل طلبك للسكرتير'));
+  v.querySelectorAll('[data-switch]').forEach(b=>b.onclick=async()=>{const on=b.getAttribute('aria-checked')!=='true';b.setAttribute('aria-checked',on);const [t,k]=b.dataset.switch.split(':');if(t==='dept')S.settings.enabled[k]=on;else S.settings.alerts[k]=on;await API.saveSettings(S.settings)});
+  const bt=v.querySelector('#briefTime'); if(bt) bt.onchange=async()=>{S.settings.briefTime=bt.value;await API.saveSettings(S.settings);toast('تم حفظ الوقت')};
+  v.querySelectorAll('[data-load-voices]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{UI.ttsVoices=await http('/api/tts/voices');}catch{toast('تعذّر جلب الأصوات');}render(true)});
+  const tv=v.querySelector('#ttsVoice'); if(tv) tv.onchange=async()=>{S.settings.ttsVoice=tv.value;await API.saveSettings(S.settings);toast('تم اختيار الصوت')};
+  const bl=v.querySelector('#budgetLimit'); if(bl) bl.onchange=async()=>{S.settings.budget.limit=Number(bl.value)||0;await API.saveSettings(S.settings);toast('تم حفظ الحد');render(true)};
+  v.querySelectorAll('[data-rm-competitor]').forEach(b=>b.onclick=async()=>{S.competitors=await http('/api/competitors/'+encodeURIComponent(b.dataset.rmCompetitor),{method:'DELETE'});toast('تمت الإزالة');render(true)});
+  const addComp=v.querySelector('[data-add-competitor]');
+  if(addComp) addComp.onsubmit=async e=>{e.preventDefault();const inp=v.querySelector('#newCompetitor');const val=inp.value.trim();if(!val)return;S.competitors=await http('/api/competitors',{method:'POST',body:JSON.stringify({username:val})});inp.value='';toast('تمت الإضافة');render(true)};
+  v.querySelectorAll('[data-push-toggle]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    if(UI.pushStatus==='subscribed'){ await disablePushNotifications(); UI.pushStatus='not-subscribed'; }
+    else { const ok=await enablePushNotifications(); if(ok) UI.pushStatus='subscribed'; }
+    render(true);
+  });
+  // accounting
+  v.querySelectorAll('[data-pay]').forEach(b=>b.onclick=()=>{UI.openPay=UI.openPay===b.dataset.pay?null:b.dataset.pay;render(true)});
+  v.querySelectorAll('[data-pfilter]').forEach(b=>b.onclick=()=>{UI.payFilter=b.dataset.pfilter;UI.openPay=null;render(true)});
+  const per=v.querySelector('[data-period]'); if(per) per.onchange=()=>{UI.period=per.value;render(true)};
+  v.querySelectorAll('[data-new-pay]').forEach(a=>a.onclick=()=>{UI.draft=null;UI.scanImg=null;UI.newMode='photo'});
+  v.querySelectorAll('[data-del-pay]').forEach(b=>b.onclick=async()=>{if(!confirm('حذف هذه الدفعة نهائياً؟'))return;await API.deletePayment(b.dataset.delPay);S.payments=S.payments.filter(p=>p.id!==b.dataset.delPay);UI.openPay=null;toast('تم حذف الدفعة');render(true)});
+  v.querySelectorAll('[data-booking]').forEach(b=>b.onclick=()=>{UI.openBooking=UI.openBooking===b.dataset.booking?null:b.dataset.booking;render(true)});
+  v.querySelectorAll('[data-doc]').forEach(cb=>cb.onchange=async()=>{
+    const [bid,key]=cb.dataset.doc.split(':');
+    const bk=S.bookings.find(x=>x.id===bid); if(!bk) return;
+    if(!bk.docs) bk.docs={passport:false,photo:false,visa:false};
+    bk.docs[key]=cb.checked;
+    await http('/api/bookings/'+bid,{method:'PATCH',body:JSON.stringify({docs:bk.docs})});
+    toast('تم التحديث');
+  });
+  v.querySelectorAll('[data-del-booking]').forEach(b=>b.onclick=async()=>{if(!confirm('حذف هذا الحجز نهائياً؟'))return;await http('/api/bookings/'+b.dataset.delBooking,{method:'DELETE'});S.bookings=S.bookings.filter(x=>x.id!==b.dataset.delBooking);UI.openBooking=null;toast('تم حذف الحجز');render(true)});
+  v.querySelectorAll('[data-bf]').forEach(inp=>inp.oninput=()=>{UI.bookingDraft[inp.dataset.bf]=inp.value});
+  v.querySelectorAll('[data-pkgsel]').forEach(sel=>sel.onchange=()=>{const d=UI.bookingDraft; v.querySelectorAll('[data-bf]').forEach(i=>d[i.dataset.bf]=i.value); if(sel.value==='__new'){d.pkgNew=true;d.package='';} else {d.pkgNew=false;d.package=sel.value;} render(true);});
+  v.querySelectorAll('[data-add-paid]').forEach(f=>f.onsubmit=async e=>{
+    e.preventDefault(); const bk=S.bookings.find(x=>x.id===f.dataset.addPaid); const val=Number(f.querySelector('input').value);
+    if(!bk||!(val>=0)||f.querySelector('input').value===''){toast('أدخل المبلغ');return}
+    const paid=typeof bk.paid==='number'?bk.paid+val:val;
+    try{ Object.assign(bk,await http('/api/bookings/'+bk.id,{method:'PATCH',body:JSON.stringify({paid})})); toast(Number(bk.amount)-bk.paid>0.5?'تم التسجيل':'الحجز مدفوع بالكامل ✅'); }catch{toast('تعذّر الحفظ');}
+    render(true);
+  });
+  v.querySelectorAll('[data-bk-pkg]').forEach(sel=>sel.onchange=async()=>{const bk=S.bookings.find(x=>x.id===sel.dataset.bkPkg); if(!bk) return; try{Object.assign(bk,await http('/api/bookings/'+bk.id,{method:'PATCH',body:JSON.stringify({package:sel.value})}));toast('تم تغيير الباقة');}catch{toast('تعذّر الحفظ');} render(true);});
+  v.querySelectorAll('[data-brief-audio]').forEach(b=>b.onclick=toggleBriefingAudio);
+  v.querySelectorAll('[data-rm-pkg]').forEach(b=>b.onclick=async()=>{try{S.packages=await http('/api/packages/'+b.dataset.rmPkg,{method:'DELETE'});toast('تمت الإزالة');}catch{toast('تعذّر الحذف');} render(true);});
+  const addPkg=v.querySelector('[data-add-pkg]');
+  if(addPkg) addPkg.onsubmit=async e=>{e.preventDefault();const inp=addPkg.querySelector('input');const val=inp.value.trim();if(!val)return;try{S.packages=await http('/api/packages',{method:'POST',body:JSON.stringify({name:val})});toast('تمت إضافة الباقة');}catch{toast('تعذّر الإضافة');} render(true);};
+  const bForm=v.querySelector('[data-booking-form]');
+  if(bForm) bForm.onsubmit=async e=>{
+    e.preventDefault();
+    const d=UI.bookingDraft;
+    if(!d.customerName||!d.amount){toast('الاسم والمبلغ مطلوبان');return}
+    if(!String(d.package||'').trim()){toast('اختر الباقة');return}
+    if(!(S.packages||[]).some(p=>normPkgKey(p.name)===normPkgKey(d.package))){ try{ S.packages=await http('/api/packages',{method:'POST',body:JSON.stringify({name:d.package.trim()})}); }catch{} }
+    const body={...d,paid:Number(d.paid)||0}; delete body.pkgNew;
+    const saved=await http('/api/bookings',{method:'POST',body:JSON.stringify(body)});
+    S.bookings=[saved,...(S.bookings||[])];
+    UI.bookingDraft=null;
+    toast('تم حفظ الحجز');
+    location.hash='#bookings';
+  };
+  v.querySelectorAll('[data-edit-pay]').forEach(b=>b.onclick=()=>{UI.draft={...S.payments.find(p=>p.id===b.dataset.editPay),flags:[]};UI.newMode='manual';go('new-payment')});
+  // new payment
+  v.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{UI.newMode=b.dataset.mode;render(true)});
+  v.querySelectorAll('[data-scan]').forEach(b=>b.onclick=()=>{UI.attachTarget='form';document.getElementById('invoiceInput').click()});
+  v.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{collect(v);UI.draft.cat=b.dataset.cat;render(true)});
+  v.querySelectorAll('[data-cancel]').forEach(a=>a.onclick=()=>{UI.draft=null;UI.scanImg=null});
+  const pf=v.querySelector('[data-pay-form]');
+  if(pf) pf.onsubmit=async e=>{e.preventDefault();collect(v);const d=UI.draft;if(!(+d.amount>0)){toast('أدخل المبلغ');return}
+    const p={...stripDraft(d),image:UI.scanImg||d.image||null};
+    if(d.id){try{const up=await http('/api/payments/'+d.id,{method:'PATCH',body:JSON.stringify(p)});Object.assign(S.payments.find(x=>x.id===d.id),up);toast('تم حفظ التعديل')}catch{toast('تعذّر حفظ التعديل');return}} else {const saved=await API.addPayment(p);S.payments.unshift(saved);toast('تم تسجيل الدفعة')}
+    UI.draft=null;UI.scanImg=null;UI.openPay=null;go('accounting')};
+}
+function collect(v){v.querySelectorAll('[data-f]').forEach(i=>{UI.draft[i.dataset.f]=i.value;UI.draft.flags=(UI.draft.flags||[]).filter(f=>f!==i.dataset.f||!i.value)})}
+document.getElementById('invoiceInput').onchange=async e=>{
+  const file=e.target.files[0]; e.target.value=''; if(!file) return;
+  const url=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(file)});
+  if(UI.attachTarget==='chat'){ if(route().name!=='gm'&&!wide()) go('gm'); sendChat('',url); return; }
+  const v=document.getElementById('view'); if(UI.draft) collect(v);
+  UI.scanImg=url; UI.scanning=true; render(true);
+  try{ const res=await API.scanInvoice(file); UI.draft={...UI.draft,...Object.fromEntries(Object.entries(res).filter(([,val])=>val!==''&&val!==0)),flags:res.flags||[]}; }
+  catch{ toast('تعذّرت قراءة الفاتورة، عبّي الخانات يدوياً'); }
+  UI.scanning=false; render(true);
+};
+
+/* =========================================================
+   8) التشغيل
+   ========================================================= */
+async function load(){
+  try{ S=await API.getState(); S.chat=S.chat||[]; S.payments=S.payments||[]; S.decided=S.decided||[]; }
+  catch(e){ if(!S){ S=structuredClone(MOCK); } S.health.server=false; }
+  render(true);
+}
+addEventListener('hashchange',()=>{scrollTo(0,0);render()});
+matchMedia('(min-width:1024px)').addEventListener('change',()=>render(true));
+API.subscribe(ev=>{ if(ev.type==='department'){const d=deptById(ev.id);if(d){Object.assign(d,ev);render(true)}} else if(ev.type==='activity'){S.activity=[ev,...S.activity].slice(0,2);render(true)} });
+/* ---- push notifications: service worker + subscribe/unsubscribe ---- */
+function urlBase64ToUint8Array(base64String){
+  const padding='='.repeat((4-base64String.length%4)%4);
+  const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');
+  const raw=atob(base64);
+  return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+}
+async function getPushSubscriptionStatus(){
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)) return 'unsupported';
+  const reg=await navigator.serviceWorker.ready.catch(()=>null);
+  if(!reg) return 'unsupported';
+  const sub=await reg.pushManager.getSubscription();
+  return sub?'subscribed':'not-subscribed';
+}
+async function enablePushNotifications(){
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)){ toast('الإشعارات غير مدعومة على هذا المتصفح'); return false; }
+  try{
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){ toast('لم يتم السماح بالإشعارات'); return false; }
+    const {publicKey}=await http('/api/push/vapid-public-key');
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub) sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(publicKey)});
+    await http('/api/push/subscribe',{method:'POST',body:JSON.stringify(sub)});
+    toast('تم تفعيل الإشعارات');
+    return true;
+  }catch(e){ toast('تعذّر تفعيل الإشعارات'); return false; }
+}
+async function disablePushNotifications(){
+  try{
+    const reg=await navigator.serviceWorker.ready;
+    const sub=await reg.pushManager.getSubscription();
+    if(sub){ await http('/api/push/unsubscribe',{method:'POST',body:JSON.stringify({endpoint:sub.endpoint})}); await sub.unsubscribe(); }
+    toast('تم إيقاف الإشعارات');
+  }catch{}
+}
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js').catch(()=>{}); }
+getPushSubscriptionStatus().then(s=>{ UI.pushStatus=s; render(true); }).catch(()=>{ UI.pushStatus='unsupported'; });
+
+render(); load();
+</script>
+</body>
+</html>

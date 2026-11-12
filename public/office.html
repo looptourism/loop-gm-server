@@ -41,6 +41,11 @@ header > *{pointer-events:auto}
 .brand{display:flex;align-items:baseline;gap:8px;margin-inline-end:auto}
 .brand h1{margin:0;font-size:20px;font-weight:700;letter-spacing:0}
 .brand span{font-size:13px;color:var(--muted)}
+.demo.on{border-style:solid;color:var(--s-idle)}
+.embed .brand{display:none}
+#approvals{max-height:46%;overflow-y:auto;justify-content:flex-start}
+.ap button:disabled{opacity:.55}
+.sheet .reply{white-space:pre-wrap;font-size:14px;line-height:1.8}
 .demo{font-size:12px;padding:3px 9px;border-radius:999px;border:1px dashed var(--line);color:var(--muted);background:var(--panel)}
 .legend{display:flex;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 8px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
 .legend b{display:flex;align-items:center;gap:5px;font-weight:500;font-size:13px;padding:2px 6px}
@@ -132,7 +137,7 @@ footer > *{pointer-events:auto}
 
 <header>
   <div class="brand"><h1>Loop HQ</h1><span>مكتب الوكلاء</span></div>
-  <span class="demo">عرض تجريبي</span>
+  <span class="demo" id="live" role="status">يتصل…</span>
   <div class="legend" aria-label="حالات الموظفين">
     <b style="color:var(--s-work)"><i></i><span style="color:var(--ink)">يشتغل</span><em id="c-working">0</em></b>
     <b style="color:var(--s-idle)"><i></i><span style="color:var(--ink)">فاضي</span><em id="c-idle">0</em></b>
@@ -146,9 +151,7 @@ footer > *{pointer-events:auto}
   <button id="themeBtn" role="menuitem"></button>
   <button id="soundBtn" role="menuitem"></button>
   <button id="fxBtn" role="menuitem"></button>
-  <button id="hireBtn" role="menuitem">وظّف موظف جديد</button>
-  <button id="dashBtn" role="menuitem">لوحة الأداء والتكلفة</button>
-  <button id="clearHires" role="menuitem">حذف الموظفين المضافين</button>
+  <button id="dashBtn" role="menuitem">لوحة الأداء والاستهلاك</button>
   <button id="notifBtn" role="menuitem"></button>
   <button id="resetBtn" role="menuitem">الزاوية الأصلية</button>
 </div>
@@ -184,18 +187,15 @@ footer > *{pointer-events:auto}
 const $ = id => document.getElementById(id);
 const V = (x, z) => new THREE.Vector3(x, 0.25, z);
 const wait = ms => new Promise(r => setTimeout(r, ms));
-const pick = a => a[Math.floor(Math.random() * a.length)];
-const rnd = (a, b) => a + Math.random() * (b - a);
-const now = () => new Date().toLocaleTimeString('ar-AE', {hour:'2-digit', minute:'2-digit'});
 const esc = t => String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmt = n => Math.round(n).toLocaleString('en-US');
-const usd = v => '$' + v.toFixed(2);
+const tok = n => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(Math.round(n || 0));
 const dur = ms => { const s = ms / 1000; return s < 60 ? Math.round(s) + ' ث' : Math.floor(s / 60) + ' د ' + Math.round(s % 60) + ' ث'; };
 let bag = null;
 
 /* ---------- theme (auto by UAE time) ---------- */
 const root = document.documentElement;
-let themeMode = 'auto';
+let themeMode = new URLSearchParams(location.search).has('embed') ? 'dark' : 'auto'; // inside the console, match its dark look
 function dubaiHour(){
   try { return +new Intl.DateTimeFormat('en-GB', {hour:'numeric', hourCycle:'h23', timeZone:'Asia/Dubai'}).format(new Date()) % 24; }
   catch (e){ return new Date().getHours(); }
@@ -490,8 +490,9 @@ function makeAgent(def, restT){
   drawFace(a, 'calm');
   [body, head, face].forEach(x => { x.userData.agent = a; pickables.push(x); });
   A[def.id] = a;
-  a.stats = def.hire ? {done:0, err:0, ms:0} : (() => { const d = Math.round(rnd(3, 11)); return {done:d, err:Math.round(rnd(0, 2)), ms:d * rnd(40, 110) * 1000}; })();
-  a.cost = def.hire ? {day:0, month:0} : {day:rnd(0.15, 1.2), month:rnd(6, 28)};
+  a.stats = {done:0, err:0, ms:0, today:0};
+  a.usage = {day:0, month:0};
+  a.pending = 0;
   return a;
 }
 DEFS.forEach((def, i) => makeAgent(def, REST[i]));
@@ -507,19 +508,9 @@ function makePlate(r){
 const plates = ROOMS.map(makePlate);
 
 /* ---------- live metrics on wall screens ---------- */
-const series = (v, n = 12, j = 0.12) => { const h = []; let x = v; for (let i = 0; i < n; i++){ h.unshift(x); x = x * (1 + rnd(-j, j)); } return h; };
-const MET = {
-  fin:{t:'مصاريف الشهر (درهم)', v:18420, f:v => fmt(v)},
-  mkt:{t:'مشاهدات آخر ريلز', v:12400, f:v => (v / 1000).toFixed(1) + 'K'},
-  str:{t:'سعرنا مقابل المنافسين', v:-8, f:v => (v > 0 ? '+' : '') + Math.round(v) + '%', abs:true},
-  com:{t:'رسائل بانتظار الرد', v:7, f:v => fmt(v)},
-  sec:{t:'مهام اليوم', v:3, f:v => fmt(v)},
-  meeting:{t:'الاجتماع القادم', v:0, f:() => 'الخميس 10:00', nochart:true},
-  break:{t:'أكواب القهوة اليوم', v:12, f:v => fmt(v)},
-};
-Object.entries(MET).forEach(([k, M]) => { M.h = M.nochart ? [] : (M.abs ? Array.from({length:12}, () => Math.round(rnd(-12, 2))).concat([M.v]).slice(1) : series(Math.max(1, M.v))); M.h[M.h.length - 1] = M.v; });
+const MET = {}; // room id -> {t: title, s: value as text, h: numeric history} — filled by the server
 function drawScreen(id){
-  const S = screens[id], M = MET[id]; if (!S) return;
+  const S = screens[id], M = MET[id]; if (!S || !M) return;
   const c = S.ctx, W = 512, H = 256, acc = hex(R[id].a);
   c.clearRect(0, 0, W, H);
   c.fillStyle = 'rgba(8,12,40,0.94)'; rrect(c, 6, 6, W - 12, H - 12, 22); c.fill();
@@ -529,8 +520,8 @@ function drawScreen(id){
   c.fillText(M.t, W - 32, 24);
   c.fillStyle = '#FFFFFF'; c.font = '700 84px "IBM Plex Sans Arabic", system-ui, sans-serif';
   c.direction = 'ltr'; c.textAlign = 'right';
-  c.fillText(M.f(M.v), W - 32, 70);
-  if (!M.nochart && M.h.length > 1){
+  c.fillText(M.s, W - 32, 70);
+  if (M.h.length > 1){
     const mn = Math.min(...M.h), mx = Math.max(...M.h), rg = mx - mn || 1, x0 = 32, x1 = 250, y0 = 210, y1 = 90;
     c.strokeStyle = acc; c.lineWidth = 6; c.lineJoin = 'round'; c.beginPath();
     M.h.forEach((v, i) => { const x = x0 + (x1 - x0) * i / (M.h.length - 1), y = y0 - (y0 - y1) * (v - mn) / rg; i ? c.lineTo(x, y) : c.moveTo(x, y); });
@@ -538,30 +529,31 @@ function drawScreen(id){
   }
   S.tex.needsUpdate = true;
 }
-function bump(id, v){
-  const M = MET[id]; M.v = v; if (!M.nochart){ M.h.push(v); if (M.h.length > 12) M.h.shift(); }
+function setMetric(id, m){
+  const M = MET[id] || (MET[id] = {h:[]});
+  M.t = m.t; M.s = m.s;
+  if (typeof m.v === 'number' && M.h[M.h.length - 1] !== m.v){ M.h.push(m.v); if (M.h.length > 12) M.h.shift(); }
   drawScreen(id);
   if (sel && sel.kind === 'room' && sel.ref.id === id) renderSheet();
 }
 function drawCost(){
   const S = screens.cost; if (!S) return;
   const c = S.ctx, W = 512, H = 256, ag = Object.values(A);
-  const day = ag.reduce((t, a) => t + a.cost.day, 0), mon = ag.reduce((t, a) => t + a.cost.month, 0), mx = Math.max(...ag.map(a => a.cost.day), 0.01);
+  const day = ag.reduce((t, a) => t + a.usage.day, 0), mon = ag.reduce((t, a) => t + a.usage.month, 0), mx = Math.max(...ag.map(a => a.usage.day), 1);
   c.clearRect(0, 0, W, H);
   c.fillStyle = 'rgba(8,12,40,0.94)'; rrect(c, 6, 6, W - 12, H - 12, 22); c.fill();
   c.strokeStyle = '#F5C451'; c.lineWidth = 4; rrect(c, 6, 6, W - 12, H - 12, 22); c.stroke();
   c.textBaseline = 'top'; c.textAlign = 'right';
   c.direction = 'rtl'; c.fillStyle = '#AEB8E8'; c.font = '500 32px "IBM Plex Sans Arabic", system-ui, sans-serif';
-  c.fillText('تكلفة الوكلاء اليوم', W - 32, 22);
+  c.fillText('توكنات الوكلاء اليوم', W - 32, 22);
   c.direction = 'ltr'; c.fillStyle = '#FFFFFF'; c.font = '700 76px "IBM Plex Sans Arabic", system-ui, sans-serif';
-  c.fillText(usd(day), W - 32, 62);
+  c.fillText(tok(day), W - 32, 62);
   c.direction = 'rtl'; c.fillStyle = '#AEB8E8'; c.font = '500 28px "IBM Plex Sans Arabic", system-ui, sans-serif';
-  c.fillText('الشهر: ' + usd(mon), W - 32, 158);
+  c.fillText('الشهر: ' + tok(mon), W - 32, 158);
   const bw = 190 / ag.length;
-  ag.forEach((a, i) => { const h = 120 * a.cost.day / mx + 4; c.fillStyle = hex(a.color); c.fillRect(32 + i * bw, 220 - h, bw * 0.7, h); });
+  ag.forEach((a, i) => { const h = 120 * a.usage.day / mx + 4; c.fillStyle = hex(a.color); c.fillRect(32 + i * bw, 220 - h, bw * 0.7, h); });
   S.tex.needsUpdate = true;
 }
-function spend(a, v){ a.cost.day += v; a.cost.month += v; drawCost(); if (sel && sel.kind !== 'hire') renderSheet(); }
 const redrawAll = () => { Object.keys(MET).forEach(drawScreen); drawCost(); };
 redrawAll();
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(redrawAll);
@@ -618,9 +610,9 @@ function counts(){
   plates.forEach(p => { if (p.dot && A[p.r.id]) p.dot.style.color = p.dot.style.background = statusVar(A[p.r.id].state); });
 }
 const LOG = [];
-function log(who, text){
-  const e = {who, text, t:now()};
-  LOG.unshift(e); if (LOG.length > 50) LOG.pop();
+function log(who, text, ts){
+  const e = {who, text, t:clock(ts || Date.now())};
+  LOG.unshift(e); if (LOG.length > 60) LOG.pop();
   if (A[who]) { A[who].log.unshift(e); if (A[who].log.length > 12) A[who].log.pop(); }
   if (sel) renderSheet();
 }
@@ -640,197 +632,201 @@ function walk(a, dest, face, pose = 'stand'){
   });
 }
 const goDesk = a => walk(a, a.home, a.face, 'desk');
-const claim = a => { a.busy++; };
-function release(a){
-  a.busy = Math.max(0, a.busy - 1);
-  if (!a.busy){
-    setState(a, 'idle'); setThink(a, false);
-    walk(a, a.rest, a.restFace, a.restPose).then(() => { if (!a.busy && a.restPose === 'stand') bump('break', MET.break.v + 1); });
+
+/* ---------- live data: server snapshot + event stream ----------
+   Everything the office shows comes from the server: /api/office/stream
+   (Server-Sent Events) pushes each agent's real state changes, delegations,
+   approvals, log lines and metrics. Nothing here invents activity. */
+const SID = {gm:'gm', finance:'fin', marketing:'mkt', strategy:'str', communication:'com', secretary:'sec', accounting:'acc', sales:'sal'};
+const RID = Object.assign({meeting:'meeting', break:'break'}, SID);
+const agentOf = sid => A[SID[sid]];
+const short = t => { t = String(t || ''); return t.length > 34 ? t.slice(0, 34) + '…' : t; };
+const clock = ts => new Date(ts).toLocaleTimeString('ar-AE', {timeZone:'Asia/Dubai', hour:'numeric', minute:'2-digit'});
+const embedded = new URLSearchParams(location.search).has('embed');
+if (embedded) document.body.classList.add('embed');
+
+async function api(path, opts){
+  const res = await fetch(path, Object.assign({credentials:'same-origin'}, opts));
+  if (res.status === 401){
+    // session ended: send the whole page (the console, when embedded) to the login screen
+    try { (embedded ? window.top : window).location.href = '/login?next=' + (embedded ? '/' : '/office'); } catch (e){ location.href = '/login?next=/office'; }
+    throw new Error('login required');
   }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
 }
 
-/* ---------- approvals ---------- */
-function askApproval(a, detail){
-  return new Promise(res => {
-    SFX.ask();
-    const card = document.createElement('div'); card.className = 'ap';
-    try { if (window.Notification && Notification.permission === 'granted' && document.hidden) new Notification('طلب موافقة من ' + a.name, {body:detail}); } catch (e){}
-    card.innerHTML = '<small>Loop HQ · الآن</small><b><i></i>طلب موافقة من ' + esc(a.name) + '</b><p>' + esc(detail) + '</p><div class="acts"><button class="ok">موافق</button><button class="no">رفض</button></div>';
-    const done = ok => { card.remove(); res(ok); };
-    card.querySelector('.ok').onclick = () => done(true);
-    card.querySelector('.no').onclick = () => done(false);
-    $('approvals').appendChild(card);
+/* each agent plays its events strictly in order, so a walk never fights the next state */
+function enq(a, fn){
+  a.pending = (a.pending || 0) + 1;
+  a.queue = a.queue.then(fn).catch(() => {}).then(() => { a.pending--; });
+}
+const linger = async (a, ms) => { for (let t = 0; t < ms && a.pending <= 1; t += 200) await wait(200); };
+function rest(a){
+  setState(a, 'idle'); setThink(a, false);
+  walk(a, a.rest, a.restFace, a.restPose);
+}
+function takeNumbers(a, ev){
+  if (ev.stats) a.stats = ev.stats;
+  if (ev.usage) a.usage = ev.usage;
+  if (ev.stats || ev.usage) drawCost();
+}
+
+function onAgent(ev){
+  const a = agentOf(ev.id); if (!a) return;
+  if (ev.state === 'working'){
+    enq(a, async () => { setState(a, 'working', short(ev.text)); await goDesk(a); });
+    return;
+  }
+  // 'done' or 'error': show the real outcome, then go back to work (if another run is in flight) or rest
+  enq(a, async () => {
+    takeNumbers(a, ev);
+    await goDesk(a);
+    setState(a, ev.state === 'error' ? 'error' : 'done', ev.text || '');
+    await linger(a, ev.state === 'error' ? 5000 : 4000);
+    if (ev.busy) setState(a, 'working', ''); else if (a.pending <= 1) rest(a);
+  });
+}
+function onDelegate(ev){
+  const d = agentOf(ev.to), gm = A.gm; if (!d) return;
+  say(gm, 'حوّلتها لـ' + d.name);
+  enq(d, async () => {
+    setState(d, 'working', '');
+    await walk(d, DEPTS.includes(d) ? GM_VISIT[DEPTS.indexOf(d)] : GM_VISIT_X[d.slot % 3], Math.PI, 'stand');
+    say(d, 'استلمت المهمة');
+    await linger(d, 1200);
   });
 }
 
-/* ---------- tasks ---------- */
-const RESULTS = {
-  fin:['جهّزت ملخص مصاريف الأسبوع، أكبر بند إعلانات إنستقرام','سجّلت الدفعة في دفتر المدفوعات وحدّثت المجموع','راجعت تجديد الرخصة، باقي عليها 23 يوم'],
-  mkt:['كتبت 3 أفكار ريلز عن باقات العمرة','جهّزت نص إعلان لباقة جورجيا مع عرض محدود','اقترحت جدول نشر للأسبوع: 4 بوستات و2 ريلز'],
-  str:['قارنت أسعار 3 منافسين في العمرة وجهّزت الجدول','رصدت عرض جديد عند منافس على باقات تركيا','اقترحت تسعير موسمي لشهر ديسمبر'],
-  com:['رديت على 5 استفسارات وحوّلت 2 للحجز','جهّزت رد جاهز لأسئلة التأشيرات','أرسلت تذكير للعملاء اللي ما أكدوا الحجز'],
-  sec:['جهّزت إحاطة الصباح: 3 مهام عاجلة','حطيت موعد مع مورّد الفنادق يوم الخميس','ذكّرتك بتجديد اشتراك الاستضافة'],
-};
-const APPROVAL = {fin:'دفع 2,400 درهم لمورّد الفنادق', mkt:'نشر إعلان باقة جورجيا بميزانية 500 درهم'};
-const OPINION = {fin:'نمشي فيه إذا التكلفة تحت الميزانية', mkt:'نقدر نسوي عليه حملة ريلز', str:'المنافسين ما غطّوا هالنقطة', com:'العملاء يسألون عنه كثير'};
-const short = t => t.length > 34 ? t.slice(0, 34) + '…' : t;
-function route(t){
-  if (/اجتماع|الكل|الجميع|ناقشوا/.test(t)) return 'meeting';
-  for (const a of Object.values(A)) if (a.hire && (t.includes(a.name) || a.role.split(/\s+/).some(w => w.length > 2 && t.includes(w)))) return a.id;
-  if (/مالي|دفع|مصاريف|مصروف|فاتور|ميزاني|رسوم|دفتر|سدد|سدّد/.test(t)) return 'fin';
-  if (/تسويق|اعلان|إعلان|محتوى|انستقرام|إنستقرام|ريلز|بوست|حملة|نشر|انشر/.test(t)) return 'mkt';
-  if (/منافس|استراتيج|خطة|تسعير|أسعار|اسعار|سوق/.test(t)) return 'str';
-  if (/عميل|عملاء|رسال|رد |ردود|واتساب|استفسار/.test(t)) return 'com';
-  if (/موعد|تذكير|ذكرني|إحاطة|احاطة|جدول|سكرتير/.test(t)) return 'sec';
-  return pick(['fin','mkt','str','com']);
-}
-function applyResult(where){
-  const M = MET[where];
-  if (where === 'fin') bump('fin', M.v + rnd(300, 1500));
-  if (where === 'mkt') bump('mkt', rnd(8000, 32000));
-  if (where === 'str') bump('str', Math.round(rnd(-12, 3)));
-  if (where === 'com') bump('com', Math.max(0, M.v - Math.round(rnd(2, 5))));
-  if (where === 'sec') bump('sec', Math.max(0, M.v - 1));
-  if (A[where] && A[where].hire) bump(where, M.v + 1);
-}
-async function work(d, text, where, needs){
-  await goDesk(d);
-  const t0 = performance.now();
-  setState(d, 'working', short(text));
-  await wait(rnd(3500, 6000));
-  if (Math.random() < 0.15){
-    d.stats.err++;
-    setState(d, 'error', 'تعذّر جلب البيانات، أعيد المحاولة');
-    log(where, 'تعذّر جلب البيانات، يعيد المحاولة');
-    await wait(2600);
-    setState(d, 'working', 'يعيد المحاولة');
-    await wait(2200);
-  }
-  if (needs){
-    const detail = APPROVAL[where];
-    setState(d, 'working', 'ينتظر موافقتك'); setThink(d, true);
-    log(where, 'طلب موافقتك: ' + detail);
-    waiting++;
-    await walk(d, WAIT[DEPTS.indexOf(d) % 3], Math.PI, 'stand');
-    const ok = await askApproval(d, detail);
-    waiting--; setThink(d, false);
-    log('you', (ok ? 'وافقت على: ' : 'رفضت: ') + detail);
-    say(d, ok ? 'تمام، أنفّذها الحين' : 'تمام، ألغيتها');
-    await goDesk(d);
-    if (!ok){ log(where, 'ألغى المهمة بعد رفضك'); await wait(1200); return; }
-    setState(d, 'working', 'ينفّذ بعد موافقتك');
-    await wait(2500);
-  }
-  const res = needs ? (where === 'fin' ? 'تم الدفع لمورّد الفنادق وسجّلته في الدفتر' : 'نزل الإعلان وبدأ يجمع مشاهدات') : pick(RESULTS[where]);
-  d.stats.done++; d.stats.ms += performance.now() - t0; spend(d, rnd(0.03, 0.18));
-  setState(d, 'done', res); log(where, res); applyResult(where);
-  await wait(4500);
-}
-function runTask(text, user = true){
-  const where = route(text);
-  log('you', text);
-  if (where === 'meeting') return runMeeting(text);
-  const d = A[where], gm = A.gm;
-  const needs = (where === 'fin' && /دفع|سدد|سدّد|حوّل|حول/.test(text)) || (where === 'mkt' && /نشر|انشر/.test(text)) || (user && (where === 'fin' || where === 'mkt') && Math.random() < 0.2);
-  d.queue = d.queue.then(async () => {
-    claim(d);
-    if (where === 'sec'){
-      setState(d, 'working', '');
-      await work(d, text, where, false);
-      release(d); return;
+/* approvals: cards mirror the server's pending list; a decision is a real POST */
+const cards = new Map();
+const agentByName = name => Object.values(A).find(a => a.name === name) || A.gm;
+function addApproval(ap, fresh){
+  if (cards.has(ap.id)) return;
+  const card = document.createElement('div'); card.className = 'ap';
+  card.innerHTML = '<small>Loop HQ · ' + esc(ap.at || '') + '</small><b><i></i>طلب موافقة من ' + esc(ap.from) + '</b><p><strong>' + esc(ap.title) + '</strong><br>' + esc(ap.why || '') + (ap.meta ? '<br><span class="hint">' + esc(ap.meta) + '</span>' : '') + '</p><div class="acts"><button class="ok">موافق</button><button class="no">رفض</button></div><p class="hint" hidden></p>';
+  const btns = card.querySelectorAll('button'), msg = card.querySelector('p.hint[hidden]');
+  const decide = async decision => {
+    btns.forEach(b => b.disabled = true); msg.hidden = true;
+    try {
+      await api('/api/approvals/' + encodeURIComponent(ap.id) + '/decide', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({decision})});
+      removeApproval(ap.id);
+    } catch (e){
+      btns.forEach(b => b.disabled = false);
+      msg.textContent = 'تعذّر إرسال القرار. جرّب مرة ثانية.'; msg.hidden = false;
     }
-    claim(gm);
-    setState(gm, 'working', 'يقرأ المهمة'); setThink(gm, true);
-    setState(d, 'working', '');
-    await goDesk(gm);
-    setThink(gm, false);
-    say(gm, 'حوّلتها لـ' + d.name);
-    log('gm', 'حوّل المهمة لـ' + d.name); spend(gm, rnd(0.005, 0.02));
-    await walk(d, DEPTS.includes(d) ? GM_VISIT[DEPTS.indexOf(d)] : GM_VISIT_X[d.slot % 3], Math.PI, 'stand');
-    say(d, 'استلمت المهمة'); say(gm, short(text));
-    await wait(1700);
-    release(gm);
-    await work(d, text, where, needs);
-    release(d);
-  }).catch(() => {});
+  };
+  card.querySelector('.ok').onclick = () => decide('approve');
+  card.querySelector('.no').onclick = () => decide('reject');
+  $('approvals').appendChild(card);
+  cards.set(ap.id, card); waiting = cards.size;
+  if (fresh){
+    SFX.ask();
+    say(agentByName(ap.from), 'أحتاج موافقتك', 3200);
+    try { if (window.Notification && Notification.permission === 'granted' && document.hidden) new Notification('طلب موافقة من ' + ap.from, {body:ap.title}); } catch (e){}
+  }
 }
-function runMeeting(topic){
-  const ms = [A.gm, ...DEPTS];
-  const p = Promise.all(ms.map(a => a.queue)).then(async () => {
-    ms.forEach(claim);
-    ms.forEach(a => setState(a, 'working', a === A.gm ? 'دعا لاجتماع' : ''));
-    log('gm', 'دعا الأقسام لاجتماع');
-    await Promise.all(ms.map(a => walk(a, SEATS[a.id][0], SEATS[a.id][1], 'sit')));
-    say(A.gm, short(topic.replace(/^اجتماع:?\s*/, '')), 2600);
-    await wait(2600);
-    for (const d of DEPTS){ setThink(d, true); setState(d, 'working', OPINION[d.id]); await wait(2300); setThink(d, false); setState(d, 'working', ''); }
-    const sum = 'خلاصة الاجتماع: الكل موافق، والمالية تراجع التكلفة أول';
-    setState(A.gm, 'done', sum); log('gm', sum); ms.forEach(a => spend(a, rnd(0.02, 0.06)));
-    await wait(3500);
-    ms.forEach(release);
-  }).catch(() => {});
-  ms.forEach(a => a.queue = p);
+function removeApproval(id){
+  const card = cards.get(id); if (!card) return;
+  card.remove(); cards.delete(id); waiting = cards.size;
+}
+function onDecided(ev){
+  removeApproval(ev.id);
+  say(agentByName(ev.from), ev.ok ? 'تمام، اعتُمد' : 'تمام، أُلغي');
+}
+
+function onMetrics(m){ Object.keys(m).forEach(k => { if (RID[k]) setMetric(RID[k], m[k]); }); }
+function onLog(e){ log(SID[e.who] || e.who, e.text, e.ts); }
+
+/* a full snapshot arrives on every (re)connect, so a dropped connection can't leave stale state */
+function applySnapshot(s){
+  s.agents.forEach(sa => {
+    const a = agentOf(sa.id); if (!a) return;
+    a.name = sa.name; a.role = sa.role; a.stats = sa.stats; a.usage = sa.usage;
+    const pl = plates.find(p => p.r.id === a.id); if (pl) pl.el.querySelector('span').textContent = sa.name;
+    if (a.pending) return; // mid-animation: its queued events are newer than this
+    if (sa.state === 'working' && a.state !== 'working') enq(a, async () => { setState(a, 'working', short(sa.text)); await goDesk(a); });
+    if (sa.state === 'idle' && a.state !== 'idle') rest(a);
+  });
+  const ids = new Set(s.approvals.map(ap => ap.id));
+  [...cards.keys()].forEach(id => { if (!ids.has(id)) removeApproval(id); });
+  s.approvals.forEach(ap => addApproval(ap, false));
+  LOG.length = 0; Object.values(A).forEach(a => a.log.length = 0);
+  s.log.slice().reverse().forEach(onLog);
+  onMetrics(s.metrics);
+  drawCost(); counts();
+  if (sel) renderSheet();
+}
+
+let es = null, lastProbe = 0;
+function setLive(on){
+  const el = $('live'); el.textContent = on ? 'مباشر' : 'غير متصل، يعيد المحاولة…'; el.classList.toggle('on', on);
+}
+function connect(){
+  es = new EventSource('/api/office/stream');
+  const on = (type, fn) => es.addEventListener(type, e => { try { fn(JSON.parse(e.data)); } catch (err){} });
+  on('state', applySnapshot); on('agent', onAgent); on('delegate', onDelegate);
+  on('approval', ap => addApproval(ap, true)); on('decided', onDecided);
+  on('log', onLog); on('metrics', onMetrics);
+  es.onopen = () => setLive(true);
+  es.onerror = () => {
+    setLive(false); // EventSource reconnects on its own; this only checks whether the session ended
+    if (Date.now() - lastProbe > 15000){ lastProbe = Date.now(); api('/api/office/state').catch(() => {}); }
+  };
+}
+
+/* ---------- tasks: sent to the real general manager ---------- */
+let sending = false;
+async function sendTask(text){
+  if (sending) return;
+  sending = true; $('send').disabled = true; $('send').textContent = '…';
+  log('you', text, Date.now());
+  try {
+    const {jobId} = await api('/api/chat?message=' + encodeURIComponent(text));
+    let job = {status:'pending'};
+    for (let i = 0; i < 180 && job.status === 'pending'; i++){ await wait(2000); job = await api('/api/job/' + jobId); }
+    if (job.status === 'done') openSheet('reply', {q:text, text:(job.result && job.result.reply) || ''});
+    else if (job.status === 'error') openSheet('reply', {q:text, text:'تعذّر تنفيذ المهمة: ' + (job.error || '')});
+  } catch (e){
+    if (e.message !== 'login required') openSheet('reply', {q:text, text:'تعذّر الاتصال بالسيرفر. تأكد من الاتصال وجرّب مرة ثانية.'});
+  }
+  sending = false; $('send').disabled = false; $('send').textContent = 'أرسل';
 }
 
 /* ---------- UI ---------- */
-const SAMPLES = ['جهّز ملخص مصاريف الأسبوع','اقترح محتوى عن باقات العمرة','شوف أسعار المنافسين في العمرة','رد على استفسارات اليوم','جهّز إحاطة الصباح','ادفع لمورّد الفنادق','انشر إعلان باقة جورجيا','اجتماع: خطة عروض ديسمبر'];
-const AMBIENT = SAMPLES.slice(0, 5);
-let lastUser = 0;
-SAMPLES.forEach(t => {
+['جهّز ملخص مصاريف الأسبوع','اقترح محتوى عن باقات العمرة','شوف أسعار المنافسين في العمرة','من العملاء اللي يحتاجون متابعة؟'].forEach(t => {
   const btn = document.createElement('button'); btn.className = 'chip'; btn.textContent = t;
-  btn.onclick = () => { lastUser = Date.now(); runTask(t); };
+  btn.onclick = () => sendTask(t);
   $('chips').appendChild(btn);
 });
 function submit(){
-  const v = $('task').value.trim(); if (!v) return;
-  lastUser = Date.now(); runTask(v); $('task').value = ''; $('task').blur();
+  const v = $('task').value.trim(); if (!v || sending) return;
+  $('task').value = ''; $('task').blur(); sendTask(v);
 }
 $('send').onclick = submit;
 $('task').addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
 
-const NAMES = {you:'أنت', gm:'المدير العام', fin:'المالية', mkt:'التسويق', str:'الاستراتيجية', com:'التواصل', sec:'السكرتيرة'};
+const nameOf = who => who === 'you' ? 'أنت' : (A[who] ? A[who].name : who);
 const STL = {working:'يشتغل', idle:'فاضي', error:'خطأ', done:'خلص'};
 const stBadge = a => ' <span class="st" style="display:inline-flex;color:' + statusVar(a.state) + '"><i style="background:currentColor"></i><span style="color:var(--muted)">' + STL[a.state] + '</span></span>';
-const li = (e, who) => '<li>' + esc(e.text) + '<small>' + (who ? NAMES[e.who] + '، ' : '') + e.t + '</small></li>';
+const li = (e, who) => '<li>' + esc(e.text) + '<small>' + (who ? esc(nameOf(e.who)) + '، ' : '') + e.t + '</small></li>';
 const errPct = st => { const tot = st.done + st.err; return tot ? Math.round(st.err / tot * 100) : 0; };
 const avgMs = st => st.done ? st.ms / st.done : 0;
 const tile = (k, v) => '<div class="metric"><span>' + k + '</span><b dir="ltr">' + v + '</b></div>';
-const metricHTML = id => MET[id] ? '<div class="metric"><span>' + MET[id].t + '</span><b dir="ltr">' + MET[id].f(MET[id].v) + '</b></div>' : '';
-const statsHTML = a => '<div class="tiles">' + tile('مهام منجزة', a.stats.done) + tile('نسبة الأخطاء', errPct(a.stats) + '%') + tile('متوسط الوقت', dur(avgMs(a.stats))) + tile('تكلفة اليوم', usd(a.cost.day)) + '</div>';
+const metricHTML = id => MET[id] ? '<div class="metric"><span>' + MET[id].t + '</span><b dir="ltr">' + esc(MET[id].s) + '</b></div>' : '';
+const statsHTML = a => '<div class="tiles">' + tile('مهام منجزة', a.stats.done) + tile('نسبة الأخطاء', errPct(a.stats) + '%') + tile('متوسط الوقت', dur(avgMs(a.stats))) + tile('توكنات اليوم', tok(a.usage.day)) + '</div>';
 function dashHTML(){
-  const ag = Object.values(A), day = ag.reduce((t, a) => t + a.cost.day, 0), mon = ag.reduce((t, a) => t + a.cost.month, 0), mx = Math.max(...ag.map(a => a.cost.day), 0.01);
-  let h = '<div class="metric"><span>تكلفة الوكلاء اليوم</span><b dir="ltr">' + usd(day) + '</b><span>هذا الشهر: ' + usd(mon) + '، تقريباً ' + fmt(mon * 3.67) + ' درهم</span></div>';
-  h += '<div class="tbl"><span class="h">الموظف</span><span class="h">منجزة</span><span class="h">أخطاء</span><span class="h">المتوسط</span><span class="h">اليوم</span>';
+  const ag = Object.values(A), day = ag.reduce((t, a) => t + a.usage.day, 0), mon = ag.reduce((t, a) => t + a.usage.month, 0), mx = Math.max(...ag.map(a => a.usage.day), 1);
+  let h = '<div class="metric"><span>توكنات الوكلاء اليوم</span><b dir="ltr">' + tok(day) + '</b><span>هذا الشهر: ' + tok(mon) + ' توكن (استهلاك فعلي من Claude)</span></div>';
+  h += '<div class="tbl"><span class="h">الوكيل</span><span class="h">منجزة</span><span class="h">أخطاء</span><span class="h">المتوسط</span><span class="h">اليوم</span>';
   ag.forEach(a => {
-    h += '<span class="n"><i style="background:' + hex(a.color) + '"></i>' + esc(a.name) + '</span><span>' + a.stats.done + '</span><span>' + errPct(a.stats) + '%</span><span>' + dur(avgMs(a.stats)) + '</span><span class="c"><b dir="ltr">' + usd(a.cost.day) + '</b><em style="width:' + Math.round(a.cost.day / mx * 100) + '%;background:' + hex(a.color) + '"></em></span>';
+    h += '<span class="n"><i style="background:' + hex(a.color) + '"></i>' + esc(a.name) + '</span><span>' + a.stats.done + '</span><span>' + errPct(a.stats) + '%</span><span>' + dur(avgMs(a.stats)) + '</span><span class="c"><b dir="ltr">' + tok(a.usage.day) + '</b><em style="width:' + Math.round(a.usage.day / mx * 100) + '%;background:' + hex(a.color) + '"></em></span>';
   });
   return h + '</div>';
-}
-function renderHire(){
-  if (sel.built) return; sel.built = true;
-  const M = $('sMetric');
-  $('sTitle').textContent = 'وظّف موظف جديد';
-  $('sRole').textContent = 'يطلع له مكتب جديد، والمدير العام يحوّل له أي مهمة فيها اسمه أو كلمة من دوره.';
-  $('sList').innerHTML = '';
-  if (freeSlot() < 0){ M.innerHTML = '<p class="hint">المكاتب الجديدة ممتلئة. أنهِ خدمة موظف عشان تفضى مساحة.</p>'; return; }
-  const used = new Set(Object.values(A).map(a => a.color));
-  const cols = PALETTE.filter(c => !used.has(c));
-  let chosen = cols[0];
-  M.innerHTML = '<div class="form"><label>الاسم<input id="hName" maxlength="18" placeholder="مثلاً: الحجوزات"></label><label>الدور<input id="hRole" maxlength="60" placeholder="مثلاً: تأكيد الحجوزات ومتابعة الفنادق"></label><div class="sw">' +
-    cols.map((c, i) => '<button data-c="' + c + '" aria-label="لون" aria-pressed="' + (i === 0) + '" style="background:' + hex(c) + '"></button>').join('') +
-    '</div><button class="go" id="hGo">وظّف</button><p class="hint" id="hMsg"></p></div>';
-  M.querySelectorAll('.sw button').forEach(bt => bt.onclick = () => { chosen = +bt.dataset.c; M.querySelectorAll('.sw button').forEach(x => x.setAttribute('aria-pressed', x === bt)); });
-  $('hGo').onclick = () => {
-    const name = $('hName').value.trim(), role = $('hRole').value.trim();
-    if (!name || !role) return $('hMsg').textContent = 'اكتب الاسم والدور.';
-    if (Object.values(A).some(a => a.name === name)) return $('hMsg').textContent = 'فيه موظف بنفس الاسم.';
-    hire({name, role, color:chosen}); closeSheet();
-  };
 }
 function renderSheet(){
   if (!sel) return;
   const L = $('sList'), M = $('sMetric');
-  if (sel.kind === 'hire') return renderHire();
   M.innerHTML = '';
   if (sel.kind === 'log'){
     $('sTitle').textContent = 'شنو صار؟';
@@ -838,9 +834,14 @@ function renderSheet(){
     L.innerHTML = LOG.length ? LOG.map(e => li(e, true)).join('') : '<li class="empty">ما صار شي للحين. أرسل مهمة من تحت.</li>';
     return;
   }
+  if (sel.kind === 'reply'){
+    $('sTitle').textContent = 'رد المدير العام';
+    $('sRole').textContent = sel.ref.q;
+    M.innerHTML = '<div class="reply">' + esc(sel.ref.text) + '</div>'; L.innerHTML = ''; return;
+  }
   if (sel.kind === 'stats'){
-    $('sTitle').textContent = 'لوحة الأداء والتكلفة';
-    $('sRole').textContent = 'عند المدير العام: استهلاك كل وكيل وأداؤه';
+    $('sTitle').textContent = 'لوحة الأداء والاستهلاك';
+    $('sRole').textContent = 'أرقام فعلية من السيرفر: استهلاك كل وكيل وأداؤه';
     M.innerHTML = dashHTML(); L.innerHTML = ''; return;
   }
   const r = sel.kind === 'agent' ? R[sel.ref.id] : sel.ref;
@@ -850,9 +851,7 @@ function renderSheet(){
   if (a){
     $('sRole').textContent = a.role;
     let h = a.id === 'gm' ? dashHTML() : metricHTML(a.id) + statsHTML(a);
-    if (a.hire) h += '<button class="pill" id="fireBtn">إنهاء خدمة</button><p class="hint" id="fireMsg"></p>';
     M.innerHTML = h;
-    if (a.hire) $('fireBtn').onclick = () => { if (fire(a)) closeSheet(); else $('fireMsg').textContent = 'مشغول الحين، جرّب بعد ما يخلص مهمته.'; };
     L.innerHTML = a.log.length ? a.log.map(e => li(e)).join('') : '<li class="empty">ما عنده مهام منجزة للحين.</li>';
     return;
   }
@@ -862,9 +861,9 @@ function renderSheet(){
     $('sRole').textContent = here.length ? 'يرتاحون الحين: ' + here.map(x => x.name).join('، ') : 'ما فيه أحد يرتاح الحين، الكل مشغول';
     L.innerHTML = '';
   } else {
-    $('sRole').textContent = 'آخر الاجتماعات وخلاصاتها';
-    const ms = LOG.filter(e => /اجتماع/.test(e.text));
-    L.innerHTML = ms.length ? ms.map(e => li(e)).join('') : '<li class="empty">ما صار اجتماع للحين. جرّب: اجتماع: خطة عروض ديسمبر</li>';
+    $('sRole').textContent = 'القرارات اللي تنتظر موافقتك';
+    const titles = [...cards.values()].map(c => c.querySelector('strong').textContent);
+    L.innerHTML = titles.length ? titles.map(t => '<li>' + esc(t) + '</li>').join('') : '<li class="empty">ما فيه قرارات معلّقة.</li>';
   }
 }
 function closeSheet(){ $('sheet').classList.remove('open'); sel = null; }
@@ -901,10 +900,7 @@ $('fxBtn').onclick = () => {
   labels();
 };
 $('resetBtn').onclick = () => { fit(); closeMenu(); };
-$('hireBtn').onclick = () => { closeMenu(); openSheet('hire'); };
 $('dashBtn').onclick = () => { closeMenu(); openSheet('stats'); };
-const tryFire = a => { if (A[a.id] && !fire(a)) setTimeout(() => tryFire(a), 2000); };
-$('clearHires').onclick = () => { closeMenu(); Object.values(A).filter(a => a.hire).forEach(tryFire); };
 $('notifBtn').onclick = () => { if (!window.Notification) return labels(); try { Notification.requestPermission().then(labels, labels); } catch (e){ labels(); } };
 
 function applyTheme(){
@@ -994,7 +990,7 @@ canvas.addEventListener('pointerup', e => {
     const hit = ray.intersectObjects(pickables)[0];
     if (hit) return openSheet('agent', hit.object.userData.agent);
     const fh = ray.intersectObjects(floors)[0];
-    if (fh) fh.object.userData.room.slot ? openSheet('hire') : openSheet('room', fh.object.userData.room);
+    if (fh) openSheet('room', fh.object.userData.room);
   }
 });
 canvas.addEventListener('pointercancel', e => ptrs.delete(e.pointerId));
@@ -1056,92 +1052,26 @@ function frame(t){
   requestAnimationFrame(frame);
 }
 
-/* ---------- hiring ---------- */
-const PALETTE = [0x5C8DFF, 0xFF6B6B, 0x22D3A6, 0xFFD166, 0xC77DFF, 0x4DD0E1, 0xFF8FAB, 0x9BE15D];
-const HKEY = 'loop-hq-hires-v1';
-let hires = [], ph = null;
-const persist = () => { try { localStorage.setItem(HKEY, JSON.stringify(hires)); } catch (e){} };
+/* ---------- the two remaining real departments: accounting and sales ---------- */
 const mixHex = (c, to, k) => new THREE.Color(c).lerp(new THREE.Color(to), k).getHex();
-function freeSlot(){ for (let i = 0; i < HIRE_SLOTS.length; i++) if (!hires.some(h => h.slot === i)) return i; return -1; }
-function updateBounds(){
-  let mx = 16.8;
-  hires.forEach(h => mx = Math.max(mx, HIRE_SLOTS[h.slot].x1 + 0.6));
-  const f = freeSlot(); if (f >= 0) mx = Math.max(mx, HIRE_SLOTS[f].x1 + 0.6);
-  BOUNDS.x1 = mx; sizeBase();
-}
-function clearPh(){
-  if (!ph) return;
-  ph.objs.forEach(o => scene.remove(o)); ph.plate.el.remove();
-  plates.splice(plates.indexOf(ph.plate), 1); floors.splice(floors.indexOf(ph.floor), 1); ph = null;
-}
-function placePh(){
-  clearPh(); updateBounds();
-  const i = freeSlot(); if (i < 0) return;
-  const {x0, x1} = HIRE_SLOTS[i], z0 = 1.2, z1 = 7, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
-  bag = [];
-  const edge = glow(0x9DA8DA, 0.4);
-  const fl = box(x1 - x0, 0.06, z1 - z0, glow(0x9DA8DA, 0.07), cx, 0.27, cz);
-  box(x1 - x0, 0.04, 0.06, edge, cx, 0.31, z0); box(x1 - x0, 0.04, 0.06, edge, cx, 0.31, z1);
-  box(0.06, 0.04, z1 - z0, edge, x0, 0.31, cz); box(0.06, 0.04, z1 - z0, edge, x1, 0.31, cz);
-  const objs = bag; bag = null;
-  const r = {id:'slot', label:'+ وظّف موظف', x0, x1, z0, z1, cx, cz, slot:true, plateL:new THREE.Vector3(x1 - 1.3, 0.3, z1 + 0.35), plateP:new THREE.Vector3(x1 + 0.25, 0.3, cz)};
-  fl.userData.room = r; floors.push(fl);
-  const plate = makePlate(r); plates.push(plate);
-  ph = {objs, plate, floor:fl};
-}
-function hire(h, fresh = true){
-  if (h.slot == null) h.slot = freeSlot();
-  if (h.slot < 0 || h.slot >= HIRE_SLOTS.length) return false;
-  const sl = HIRE_SLOTS[h.slot], id = 'h' + h.slot;
-  const r = {id, label:h.name, x0:sl.x0, x1:sl.x1, z0:1.2, z1:7, n:mixHex(h.color, 0x10153A, 0.72), d:mixHex(h.color, 0xFFFFFF, 0.78), a:h.color, front:true, hire:true};
-  clearPh();
-  bag = []; buildRoom(r); deptFurniture(r); r.objs = bag; bag = null;
+function addRoom(id, name, role, color, slot){
+  const sl = HIRE_SLOTS[slot];
+  const r = {id, label:name, x0:sl.x0, x1:sl.x1, z0:1.2, z1:7, n:mixHex(color, 0x10153A, 0.72), d:mixHex(color, 0xFFFFFF, 0.78), a:color, front:true};
+  buildRoom(r); deptFurniture(r);
   ROOMS.push(r); R[id] = r;
-  MET[id] = {t:'مهام منجزة اليوم', v:0, f:v => fmt(v), h:[0, 0]};
-  RESULTS[id] = ['خلصت المهمة وأرسلت لك التفاصيل', 'جهّزت المطلوب وحفظته في الملفات', 'راجعت الموضوع ورفعت لك ملاحظاتي'];
-  const a = makeAgent({id, name:h.name, role:h.role, color:h.color, hire:true}, REST_X[h.slot]);
-  a.slot = h.slot;
+  const a = makeAgent({id, name, role, color}, REST_X[slot]);
+  a.slot = slot;
   plates.push(makePlate(r));
-  hires.push(h);
-  drawScreen(id); drawCost();
-  placePh(); fit(); applyTheme();
-  if (fresh){
-    persist();
-    a.grp.position.copy(V(BOUNDS.x1 - 0.3, 0));
-    walk(a, a.rest, a.restFace, a.restPose);
-    log('gm', 'انضم ' + h.name + ' للفريق: ' + h.role);
-    say(a, 'هلا! أنا ' + h.name, 3200);
-  }
-  return true;
 }
-function fire(a){
-  if (a.busy) return false;
-  const r = R[a.id];
-  r.objs.forEach(o => scene.remove(o));
-  scene.remove(a.grp); a.bub.remove();
-  const p = plates.find(x => x.r === r); if (p){ p.el.remove(); plates.splice(plates.indexOf(p), 1); }
-  ROOMS.splice(ROOMS.indexOf(r), 1); delete R[a.id];
-  const fl = floors.find(f => f.userData.room === r); if (fl) floors.splice(floors.indexOf(fl), 1);
-  for (let i = pickables.length - 1; i >= 0; i--) if (pickables[i].userData.agent === a) pickables.splice(i, 1);
-  delete A[a.id]; delete MET[a.id];
-  hires = hires.filter(h => h.slot !== a.slot); persist();
-  log('gm', 'أنهى خدمة ' + a.name);
-  placePh(); fit(); counts(); drawCost();
-  return true;
-}
-try { (JSON.parse(localStorage.getItem(HKEY) || '[]') || []).forEach(h => { if (h && h.name && h.role) hire({name:String(h.name).slice(0, 18), role:String(h.role).slice(0, 60), color:+h.color || PALETTE[0], slot:+h.slot}, false); }); } catch (e){}
-placePh();
+addRoom('acc', 'المحاسبة', 'رئيس المحاسبة والرقابة المالية', 0x5C8DFF, 0);
+addRoom('sal', 'المبيعات', 'رئيس المبيعات وتطوير الأعمال', 0x22D3A6, 1);
+BOUNDS.x1 = HIRE_SLOTS[1].x1 + 0.6; sizeBase();
 
 labels(); fit(); applyTheme();
 requestAnimationFrame(frame);
 
-/* ambient demo activity */
-setTimeout(() => runTask('جهّز إحاطة الصباح', false), 1500);
-setTimeout(() => runTask('اقترح محتوى عن باقات العمرة', false), 3000);
-setInterval(() => {
-  if (Date.now() - lastUser > 20000 && Math.random() < 0.55) runTask(pick(AMBIENT), false);
-}, 9000);
-setInterval(() => bump('com', MET.com.v + 1), 15000);
+/* go live */
+connect();
 })();
 </script>
 </body>
