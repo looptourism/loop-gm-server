@@ -1825,13 +1825,147 @@ const app = express();
 app.use(cors({
   origin: process.env.ALLOWED_ORIGIN || "*",
   methods: ["GET", "POST", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 }));
 // Accept the request body as JSON no matter what Content-Type header the
 // client sent (or omitted) — this lets the frontend send POST requests
 // without a "Content-Type: application/json" header, which avoids the CORS
 // preflight (OPTIONS) round-trip that some free hosting edges mishandle.
 app.use(express.json({ type: () => true, limit: "25mb" })); // voice clips + images arrive as base64
+
+// ---------------------------------------------------------------------------
+// Login — one password (CONSOLE_PASSWORD) for the console, /office and every
+// /api/* route. Everything is closed by default; only the paths in
+// OPEN_PATHS are reachable without a session. The Telegram webhook is one of
+// them because it has its own check (the secret-token header).
+//
+// A session is a signed expiry timestamp, so it survives restarts with no
+// storage, and changing the password signs everyone out. It is accepted as
+// an HttpOnly cookie (pages served from this server), as a Bearer token (a
+// console hosted elsewhere), or as ?token= on GET requests (EventSource and
+// plain links can't send headers).
+//
+// Until CONSOLE_PASSWORD is set the API stays open as before and /office
+// keeps its old OFFICE_USER / OFFICE_PASSWORD prompt, so deploying this
+// doesn't lock out a console that hasn't been taught to log in yet.
+// ---------------------------------------------------------------------------
+const crypto = require("crypto");
+const CONSOLE_PASSWORD = process.env.CONSOLE_PASSWORD || "";
+const AUTH_ON = !!CONSOLE_PASSWORD;
+const SESSION_COOKIE = "loop_session";
+const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_KEY = crypto.createHash("sha256").update("loop-session-v1:" + CONSOLE_PASSWORD).digest();
+if (!AUTH_ON) console.warn("[auth] CONSOLE_PASSWORD is not set — the API is open to anyone with the URL");
+
+app.set("trust proxy", 1); // Render terminates TLS in front of us; needed for req.ip / req.secure
+
+function safeEqual(a, b) {
+  const x = crypto.createHash("sha256").update(String(a)).digest();
+  const y = crypto.createHash("sha256").update(String(b)).digest();
+  return crypto.timingSafeEqual(x, y);
+}
+
+function signSession(exp) {
+  return crypto.createHmac("sha256", SESSION_KEY).update(String(exp)).digest("base64url");
+}
+function issueSession() {
+  const exp = Date.now() + SESSION_MS;
+  return `${exp}.${signSession(exp)}`;
+}
+function validSession(token) {
+  const [exp, sig] = String(token || "").split(".");
+  if (!exp || !sig || !(Number(exp) > Date.now())) return false;
+  return safeEqual(sig, signSession(exp));
+}
+function sessionFrom(req) {
+  const [scheme, value] = (req.get("Authorization") || "").split(" ");
+  if (scheme === "Bearer" && value) return value;
+  for (const part of (req.get("Cookie") || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === SESSION_COOKIE) return part.slice(i + 1).trim();
+  }
+  if (req.method === "GET" && typeof req.query.token === "string") return req.query.token;
+  return "";
+}
+function sessionCookie(req, token, maxAgeSec) {
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${req.secure ? "; Secure" : ""}`;
+}
+
+const OPEN_PATHS = new Set([
+  "/login", "/api/login", "/api/logout", "/api/health",
+  telegram.WEBHOOK_PATH,     // guarded by its own secret-token header
+  "/auth/outlook/callback",  // Microsoft redirects here; it only accepts a valid OAuth code
+  "/assets/logo.png", "/privacy",
+]);
+
+app.use((req, res, next) => {
+  if (!AUTH_ON || req.method === "OPTIONS") return next();
+  const p = req.path.toLowerCase().replace(/\/{2,}/g, "/").replace(/(.)\/$/, "$1");
+  if (OPEN_PATHS.has(p)) return next();
+  if (validSession(sessionFrom(req))) return next();
+  if (p.startsWith("/api/") || req.method !== "GET") return res.status(401).json({ error: "login required" });
+  res.redirect("/login?next=" + encodeURIComponent(p));
+});
+
+// Ten wrong passwords from one address locks that address out for 15 minutes.
+const loginFailures = new Map(); // ip -> { count, until }
+app.post("/api/login", (req, res) => {
+  if (!AUTH_ON) return res.status(503).json({ error: "login is not configured (CONSOLE_PASSWORD)" });
+  const now = Date.now();
+  const f = loginFailures.get(req.ip);
+  if (f && f.count >= 10 && f.until > now) return res.status(429).json({ error: "too many attempts, try again later" });
+  if (!safeEqual(req.body?.password ?? "", CONSOLE_PASSWORD)) {
+    const next = f && f.until > now ? f : { count: 0, until: 0 };
+    loginFailures.set(req.ip, { count: next.count + 1, until: now + 15 * 60 * 1000 });
+    if (loginFailures.size > 5000) loginFailures.clear();
+    return res.status(401).json({ error: "wrong password" });
+  }
+  loginFailures.delete(req.ip);
+  const token = issueSession();
+  res.set("Set-Cookie", sessionCookie(req, token, SESSION_MS / 1000));
+  res.json({ ok: true, token, expiresAt: Number(token.split(".")[0]) });
+});
+
+app.post("/api/logout", (req, res) => {
+  res.set("Set-Cookie", sessionCookie(req, "", 0));
+  res.json({ ok: true });
+});
+
+app.get("/login", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.type("html").send(`<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loop — تسجيل الدخول</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#10153A;color:#EAF0FF;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif}
+  form{width:min(340px,calc(100vw - 32px));display:flex;flex-direction:column;gap:12px;padding:24px;border-radius:18px;background:rgba(22,28,72,.82);border:1px solid rgba(150,170,255,.2)}
+  h1{margin:0 0 4px;font-size:20px} label{font-size:13px;color:#9DA8DA}
+  input{font:inherit;font-size:16px;padding:11px 12px;border-radius:12px;border:1px solid rgba(150,170,255,.25);background:rgba(150,170,255,.1);color:inherit}
+  button{font:inherit;font-weight:700;padding:11px;border:0;border-radius:12px;background:#3EE6FF;color:#0B1240;cursor:pointer}
+  input:focus,button:focus-visible{outline:2px solid #3EE6FF;outline-offset:2px}
+  p{margin:0;min-height:1.4em;font-size:13px;color:#FFB547}
+</style></head><body>
+<form id="f">
+  <h1>Loop — مجلس الإدارة الرقمي</h1>
+  <label for="pw">كلمة المرور</label>
+  <input id="pw" type="password" autocomplete="current-password" required autofocus>
+  <button>دخول</button>
+  <p id="msg" role="alert"></p>
+</form>
+<script>
+  const next = new URLSearchParams(location.search).get("next") || "/";
+  document.getElementById("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById("msg"); msg.textContent = "";
+    try {
+      const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: document.getElementById("pw").value }) });
+      if (r.ok) return location.replace(/^\\/(?![\\/\\\\])/.test(next) ? next : "/");
+      msg.textContent = r.status === 429 ? "محاولات كثيرة، جرّب بعد ربع ساعة." : r.status === 503 ? "تسجيل الدخول غير مفعّل على السيرفر." : "كلمة المرور غير صحيحة.";
+    } catch { msg.textContent = "تعذّر الاتصال بالسيرفر."; }
+  });
+</script></body></html>`);
+});
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
@@ -1848,6 +1982,7 @@ app.get("/api/status", (req, res) => {
     push: !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
     echonova: !!ECHONOVA_API_KEY,
     telegram: telegram.enabled,
+    login: AUTH_ON,
     lastUpdate: new Date().toISOString(),
   });
 });
@@ -1921,44 +2056,47 @@ app.get("/assets/logo.png", (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Loop HQ office page — public/office.html, served only at /office and only
-// after HTTP Basic login (OFFICE_USER / OFFICE_PASSWORD). The file is sent
-// from this one route on purpose: there is no static folder, so the page has
-// no second, unprotected URL. With no credentials configured it stays closed.
+// Pages served by this server, behind the login above: the office page at
+// /office and, once its file is in the repo, the console itself at /. Each
+// file is sent from its one route — there is no static folder, so neither
+// has a second, unprotected URL.
 // ---------------------------------------------------------------------------
-const OFFICE_USER = (process.env.OFFICE_USER || "").trim();
-const OFFICE_PASSWORD = process.env.OFFICE_PASSWORD || "";
 const OFFICE_FILE = path.join(__dirname, "public", "office.html");
+const CONSOLE_FILE = path.join(__dirname, "public", "console.html");
 
-function safeEqual(a, b) {
-  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
-  return x.length === y.length && require("crypto").timingSafeEqual(x, y);
-}
-
-function requireOfficeLogin(req, res, next) {
-  if (!OFFICE_USER || !OFFICE_PASSWORD) {
-    return res.status(503).type("text/plain; charset=utf-8").send("صفحة المكتب مقفلة: أضف OFFICE_USER و OFFICE_PASSWORD في إعدادات السيرفر.");
+// Only used while CONSOLE_PASSWORD is not set yet: the office page's original
+// OFFICE_USER / OFFICE_PASSWORD prompt. Remove once the single login is on.
+function legacyOfficeLogin(req, res, next) {
+  if (AUTH_ON) return next(); // already checked by the login middleware
+  const user = (process.env.OFFICE_USER || "").trim();
+  const pass = process.env.OFFICE_PASSWORD || "";
+  if (!user || !pass) {
+    return res.status(503).type("text/plain; charset=utf-8").send("صفحة المكتب مقفلة: أضف CONSOLE_PASSWORD في إعدادات السيرفر.");
   }
   const [scheme, encoded] = (req.get("Authorization") || "").split(" ");
   if (scheme === "Basic" && encoded) {
     const decoded = Buffer.from(encoded, "base64").toString("utf8");
     const sep = decoded.indexOf(":");
-    const userOk = safeEqual(decoded.slice(0, sep), OFFICE_USER);
-    const passOk = safeEqual(decoded.slice(sep + 1), OFFICE_PASSWORD);
-    if (sep > 0 && userOk && passOk) return next();
+    if (sep > 0 && safeEqual(decoded.slice(0, sep), user) && safeEqual(decoded.slice(sep + 1), pass)) return next();
   }
   res.set("WWW-Authenticate", 'Basic realm="Loop HQ", charset="UTF-8"');
   res.status(401).type("text/plain; charset=utf-8").send("تسجيل الدخول مطلوب.");
 }
 
-// Matches both /office and /office/ (Express ignores the trailing slash).
-app.get("/office", requireOfficeLogin, (req, res) => {
-  if (!fs.existsSync(OFFICE_FILE)) {
-    return res.status(404).type("text/plain; charset=utf-8").send("ملف public/office.html غير موجود في المستودع.");
-  }
-  res.set("Cache-Control", "private, no-store");
-  res.sendFile(OFFICE_FILE);
-});
+function sendPage(file, missing) {
+  return (req, res) => {
+    if (!fs.existsSync(file)) return res.status(404).type("text/plain; charset=utf-8").send(missing);
+    res.set("Cache-Control", "private, no-store");
+    res.sendFile(file);
+  };
+}
+
+// Express ignores the trailing slash, so this is both /office and /office/.
+app.get("/office", legacyOfficeLogin, sendPage(OFFICE_FILE, "ملف public/office.html غير موجود في المستودع."));
+
+// The console is only ever served to a logged-in session.
+app.get("/", (req, res, next) => (AUTH_ON ? next() : res.status(503).type("text/plain; charset=utf-8").send("أضف CONSOLE_PASSWORD في إعدادات السيرفر لفتح اللوحة.")),
+  sendPage(CONSOLE_FILE, "ملف public/console.html غير موجود في المستودع."));
 
 app.get("/privacy", (req, res) => {
   res.set("Content-Type", "text/html; charset=utf-8");
