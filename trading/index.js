@@ -2,6 +2,7 @@
 // Trading Desk — HTTP routes.
 //   /api/trading/test/…   read-only checks against eToro DEMO (Stage 1 + 2)
 //   /api/trading/admin/…  the Trading Desk's own database (Stage 2)
+//   /api/trading/monitor/… Market Monitoring: status, run now, stored data (Stage 3)
 //
 // This is the module's only connection to the rest of the server: server.js
 // calls mount(app, …) once. Nothing here is exposed to the GM, the
@@ -11,15 +12,17 @@
 // They also refuse to run when the login is switched off (no
 // CONSOLE_PASSWORD) — an open server must never expose account data.
 // ---------------------------------------------------------------------------
-const { readConfig } = require("./config");
+const { readConfig, MONITORING } = require("./config");
 const { createClient, EtoroError, CANDLE_INTERVALS } = require("./etoro-client");
 const { summarizeDemoAccount, AccountDataError } = require("./account");
 const { createDb, DbError } = require("./db");
 const { seedAllowlist } = require("./allowlist");
 const { verifyAllowlist } = require("./verify-allowlist");
 const { syncAllowlist, readAllowlists } = require("./db/store");
+const { createMonitor } = require("./monitor");
+const snapshots = require("./db/snapshots");
 
-function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }) } = {}) {
+function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }) } = {}) {
   // Every Trading Desk route: never cached, and closed when the console
   // login is off.
   const loginGuard = (req, res, next) => {
@@ -170,6 +173,44 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   app.get("/api/trading/admin/allowlist", dbGuard, async (req, res) => {
     try { res.json({ ok: true, ...(await readAllowlists(db)) }); } catch (e) { fail(res, e); }
   });
+
+  // --- Stage 3: Market Monitoring ------------------------------------------
+
+  // Is the schedule on, what is running, the last runs, and what is stored
+  // per instrument (with each rate's age by eToro's own timestamp). Read-only.
+  app.get("/api/trading/monitor/status", dbGuard, async (req, res) => {
+    try {
+      const [runs, stored] = await Promise.all([
+        snapshots.recentRuns(db, 12),
+        snapshots.coverage(db, { now: new Date(), rateFreshSec: MONITORING.rateFreshSec }),
+      ]);
+      res.json({ ok: true, ...status(), monitor: monitor.state(), settings: { rateFreshSec: MONITORING.rateFreshSec, candles: MONITORING.candles }, recentRuns: runs, stored });
+    } catch (e) { fail(res, e); }
+  });
+
+  // Collects once, now — also while the schedule is off. Needs ?confirm=yes.
+  // Add &candles=all to collect every candle interval even if it is not due.
+  // It answers at once and works in the background (the first run takes a
+  // few minutes); follow it on /api/trading/monitor/status.
+  app.get("/api/trading/monitor/run", dbGuard, guard, (req, res) => {
+    if (req.query.confirm !== "yes") return fail(res, new EtoroError("nothing was started: add ?confirm=yes", { code: "BadInput" }));
+    const busy = monitor.state().running;
+    if (busy) return res.status(409).json({ ok: false, error: "a run is already in progress", running: busy });
+    monitor.tick("manual", { allCandles: req.query.candles === "all" });
+    res.json({ ok: true, ...status(), started: true, next: "open /api/trading/monitor/status in a minute or two" });
+  });
+
+  // Exactly what an agent will be given for one instrument: stored snapshots
+  // only, each with source and timestamp. ?symbol=BTC
+  app.get("/api/trading/monitor/view", dbGuard, async (req, res) => {
+    try {
+      const view = await snapshots.readMarketView(db, req.query.symbol, { now: new Date(), rateFreshSec: MONITORING.rateFreshSec });
+      res.status(view.ok ? 200 : 404).json(view);
+    } catch (e) { fail(res, e); }
+  });
+
+  monitor.start(); // does nothing unless TRADING_MONITOR_ENABLED is exactly "true"
+  return { monitor };
 }
 
 module.exports = { mount };

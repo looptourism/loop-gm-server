@@ -117,7 +117,7 @@ test("database routes are closed without a login and without TRADING_DATABASE_UR
   assert.strictEqual((await app.call("/api/trading/admin/migrate", { confirm: "001_initial" })).statusCode, 503);
   const s = await app.call("/api/trading/admin/db-status");
   assert.strictEqual(s.body.configured, false);
-  assert.deepStrictEqual(s.body.migrationFiles, ["001_initial"]);
+  assert.deepStrictEqual(s.body.migrationFiles, ["001_initial", "002_monitoring"]);
 });
 
 test("the two new test routes return eToro's raw answer with source and time", async () => {
@@ -155,15 +155,15 @@ if (TEST_URL) {
 dbTest("migration: nothing exists until it is named exactly, then all 11 tables exist", async () => {
   let s = await db.status();
   assert.strictEqual(s.connected, true);
-  assert.deepStrictEqual(s.migrations.pending, ["001_initial"]);
+  assert.deepStrictEqual(s.migrations.pending, ["001_initial", "002_monitoring"]);
   await rejects(db.migrate(""), /confirm=001_initial/);
   await rejects(db.migrate("002_other"), /confirm=001_initial/);
   assert.deepStrictEqual((await db.status()).tables, {});
-  assert.deepStrictEqual(await db.migrate("001_initial"), { applied: "001_initial", remaining: [] });
+  assert.deepStrictEqual(await db.migrate("001_initial"), { applied: "001_initial", remaining: ["002_monitoring"] });
   s = await db.status();
-  assert.deepStrictEqual(s.migrations.pending, []);
+  assert.deepStrictEqual(s.migrations.pending, ["002_monitoring"]); // Stage 3's migration is tested in stage3.test.js
   assert.deepStrictEqual(Object.keys(s.tables), ["analyses", "approvals", "audit_log", "crypto_allowlist", "instruments", "market_snapshots", "orders", "positions", "proposals", "risk_assessments", "schema_migrations", "stock_allowlist"]);
-  await rejects(db.migrate("001_initial"), /already applied/);
+  await rejects(db.migrate("001_initial"), /confirm=002_monitoring/);
   const rls = await db.query("select count(*) as n from pg_tables where schemaname = 'trading' and not rowsecurity");
   assert.strictEqual(Number(rls.rows[0].n), 0);
 });
