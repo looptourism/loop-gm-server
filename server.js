@@ -2326,6 +2326,11 @@ app.get("/login", (req, res) => {
 
 app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
+// Trading Desk (eToro DEMO, read-only for now) — an isolated module. It is
+// mounted here, after the login gate, and is deliberately not connected to
+// the GM, the department agents or the secretary.
+require("./trading").mount(app, { authOn: AUTH_ON });
+
 // Consolidated connectivity flags for the "system status" panel.
 app.get("/api/status", (req, res) => {
   res.json({
