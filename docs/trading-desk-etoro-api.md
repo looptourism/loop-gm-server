@@ -10,8 +10,10 @@ eToro withdrew and restored endpoints several times during 2026.
 `/api/v2/market-data/rates` and candles, for AAPL (instrumentId 1001) and BTC (instrumentId
 100000), plus the `RateLimit-*` headers (60/min account, 120/min market data).
 
-Still verified against the documentation only: `/demo/portfolio`, `/api/v2/market-data/instruments`
-and the order lookup (needs a demo order — Stage 5).
+Confirmed by real calls on 2026-11-13 07:32–07:34 UTC (Stage 2): `/demo/portfolio`,
+`/api/v2/market-data/instruments` and a search for each of the 31 allowlisted symbols.
+
+Still verified against the documentation only: the order lookup (needs a demo order — Stage 5).
 
 ## Base URL and headers
 
@@ -89,6 +91,24 @@ Rate limits are per user key over a rolling 60 seconds. Over the limit → HTTP 
 6. With `desc`, `rangeOpen` / `rangeClose` are the newest candle's open and the oldest
    candle's close — reversed in time. Compute ranges from the candles themselves.
 
+## Observed in the Stage 2 calls (2026-11-13)
+
+1. `/api/v2/market-data/instruments?instrumentsIds=1001,100000` answers
+   `{ results: [{ instrumentId, displayName, type, symbol, exchangeId, image }], pagination }`.
+   `type` is "Stocks" / "Crypto". The exchange comes as a number (`exchangeId`: 4 for AAPL,
+   8 for BTC), not a name — the name is only in the search (`internalExchangeName`).
+   There are NO trading-hours or market-open fields, so this endpoint cannot help with
+   market-open detection.
+2. `/demo/portfolio` answers `{ clientPortfolio: { positions, mirrors, credit, orders,
+   stockOrders, entryOrders, exitOrders, ordersForOpen, ordersForClose,
+   ordersForCloseMultiple, bonusCredit } }` — credit 100000, every list empty.
+   `stockOrders`, `entryOrders`, `exitOrders` and `ordersForClose*` are not part of eToro's
+   published available-cash formula. Whether any of them reserves cash is unknown; Stage 5
+   must measure it with a real demo order before trusting the balance while orders are pending.
+3. Allowlist search: 30 of 31 symbols returned exactly one exact match of the right asset
+   class. **OPTT returned no exact match** and stays untradable. Exchange names seen so far
+   for the stocks: "Nasdaq" and "NYSE".
+
 ## How to test (from a phone)
 
 Log in to the console first, then open in the same browser:
@@ -96,8 +116,8 @@ Log in to the console first, then open in the same browser:
 - `/api/trading/test/demo-account` — balance, PnL, positions (`?raw=1` adds eToro's raw response)
 - `/api/trading/test/market-data?symbol=AAPL` — search + rate + 5 daily candles
 - `/api/trading/test/order-status?orderId=…` — needs an existing demo order
-- `/api/trading/test/demo-portfolio` — eToro's raw answer from `/demo/portfolio` (added in Stage 2, not yet confirmed)
-- `/api/trading/test/instrument?ids=1001,100000` — raw answer from `/api/v2/market-data/instruments` (added in Stage 2, not yet confirmed)
+- `/api/trading/test/demo-portfolio` — eToro's raw answer from `/demo/portfolio`
+- `/api/trading/test/instrument?ids=1001,100000` — raw answer from `/api/v2/market-data/instruments`
 - `/api/trading/test/verify-allowlist` — searches every allowlisted symbol; saves nothing
 
 Database routes and setup: see `docs/trading-desk-database.md`.

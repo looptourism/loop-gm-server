@@ -6,8 +6,8 @@ its own storage (Upstash) and never sees this database: the connection string is
 
 **Status (2026-11-13):** schema written and tested against a local Postgres 16 (28 tests pass).
 Connection from Render to the Supabase project confirmed by a real call at 07:17 UTC: session
-pooler, TLS verified against the bundled root CA, Postgres 17.11, no tables yet.
-**Not yet migrated** — waiting for the owner's approval of the schema.
+pooler, TLS verified against the bundled root CA, Postgres 17.11.
+**Migrated:** `001_initial` applied on Supabase at 07:35 UTC by the owner; all 12 tables exist.
 
 ## The schema
 
@@ -97,6 +97,6 @@ Fail closed: unknown exchange, no calendar for the current year, or the two chec
 Crypto has no calendar (24/7), so only check 2 applies to it.
 
 Open points: holiday dates will be copied from the official exchange pages in Stage 5 (they
-were not reachable from this session, and none are written from memory). If the real answer of
-`/api/v2/market-data/instruments` turns out to carry trading-hours fields, they become a third
-check — not a replacement for the calendar.
+were not reachable from this session, and none are written from memory). The real answer of
+`/api/v2/market-data/instruments` (2026-11-13) carries no trading-hours fields, so eToro offers
+no third check; the two above are the whole design.
