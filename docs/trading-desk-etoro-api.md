@@ -13,6 +13,13 @@ eToro withdrew and restored endpoints several times during 2026.
 Still verified against the documentation only: `/demo/portfolio`, `/api/v2/market-data/instruments`
 and the order lookup (needs a demo order — Stage 5).
 
+**Re-checked for Stage 3 (2026-11-13):** the changelog's newest entry is still 12 Oct 2026
+(v1.393.0); nothing changed for rates or candles. Two things noted:
+- eToro's "Rate Limits" guide says market data is 60 requests/minute, while every reference
+  page and the real headers say 120. The monitoring job uses 30 (see `docs/trading-desk-monitoring.md`).
+- A second candle endpoint exists since 29 Sep 2026 (`GET /api/v1/data/instruments/{id}/candles`,
+  paged full history). Not used: the market-data candle endpoint below is the one confirmed by a real call.
+
 ## Base URL and headers
 
 - Base URL: `https://public-api.etoro.com`
@@ -101,3 +108,4 @@ Log in to the console first, then open in the same browser:
 - `/api/trading/test/verify-allowlist` — searches every allowlisted symbol; saves nothing
 
 Database routes and setup: see `docs/trading-desk-database.md`.
+Market Monitoring routes (`/api/trading/monitor/…`): see `docs/trading-desk-monitoring.md`.
