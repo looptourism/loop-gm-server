@@ -5,8 +5,13 @@ lists, plus builders.etoro.com) on 2026-11-12. OpenAPI version shown by the port
 Re-check the changelog (https://api-portal.etoro.com/core/changelog.md) before each stage —
 eToro withdrew and restored endpoints several times during 2026.
 
-**Status: verified against the documentation only. No real call has succeeded yet** —
-that happens from the Render server (see "How to test" below).
+**Status (2026-11-13): confirmed by real calls from the Render server** — authentication,
+`GET /api/v1/trading/info/demo/pnl` (credit $100,000, no positions), instrument search,
+`/api/v2/market-data/rates` and candles, for AAPL (instrumentId 1001) and BTC (instrumentId
+100000), plus the `RateLimit-*` headers (60/min account, 120/min market data).
+
+Still verified against the documentation only: `/demo/portfolio`, `/api/v2/market-data/instruments`
+and the order lookup (needs a demo order — Stage 5).
 
 ## Base URL and headers
 
@@ -55,8 +60,8 @@ Rate limits are per user key over a rolling 60 seconds. Over the limit → HTTP 
 2. `GET /api/v1/balances` and `GET /api/v1/me` are account-wide (they include live-account
    data), so the Trading Desk does not use them.
 3. The "available cash" guide's JavaScript reads `data.credits` at the top level, but the
-   OpenAPI schema puts `credit` inside `clientPortfolio`. The code follows the schema and
-   fails closed if the field is missing; the first real call settles it.
+   OpenAPI schema puts `credit` inside `clientPortfolio`. The real call on 2026-11-13
+   confirmed the schema is right and the guide's sample code is wrong.
 4. The search reference marks `fields` as required while the guide's example omits it.
    The client always sends it.
 5. `GET /api/v1/trading/info/demo/orders/{orderId}`: restored on 27 Jul 2026, listed as
@@ -66,6 +71,23 @@ Rate limits are per user key over a rolling 60 seconds. Over the limit → HTTP 
 7. Not documented: how long a market order stays pending when the stock market is closed,
    and minimum trade sizes per instrument. To be measured on demo in Stage 5/8.
 8. The portal blocks plain HTTP clients (Cloudflare); it was read with a browser.
+
+## Observed in the real responses (2026-11-13)
+
+1. Search returned only `displayname`, `internalSymbolFull`, `instrumentId`,
+   `internalExchangeName`, `internalAssetClassName`. The requested `isOpen`, `instrumentType`,
+   `instrumentTypeID` and `exchangeID` were NOT returned, so search cannot tell whether a
+   market is open. Asset class comes from `internalAssetClassName` ("Stocks" / "Crypto").
+2. A rate's `date` has no timezone suffix (`2026-11-13T05:41:23.053`). The docs say UTC —
+   parse it as UTC explicitly, never as local time.
+3. `quoteType: "realtime"` does not mean fresh: the rates were 40–70 s older than the call,
+   and AAPL was quoted at 05:41 UTC with the US market closed. A fresh-price check must
+   compare the rate's own `date` with the clock.
+4. Daily candles include today's unfinished candle (first item with `desc`).
+5. Candle `volume` is unreliable: null for every BTC candle and for today's AAPL candle,
+   and identical on adjacent AAPL days. Do not base analysis on it.
+6. With `desc`, `rangeOpen` / `rangeClose` are the newest candle's open and the oldest
+   candle's close — reversed in time. Compute ranges from the candles themselves.
 
 ## How to test (from a phone)
 
