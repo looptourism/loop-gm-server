@@ -96,3 +96,8 @@ Log in to the console first, then open in the same browser:
 - `/api/trading/test/demo-account` — balance, PnL, positions (`?raw=1` adds eToro's raw response)
 - `/api/trading/test/market-data?symbol=AAPL` — search + rate + 5 daily candles
 - `/api/trading/test/order-status?orderId=…` — needs an existing demo order
+- `/api/trading/test/demo-portfolio` — eToro's raw answer from `/demo/portfolio` (added in Stage 2, not yet confirmed)
+- `/api/trading/test/instrument?ids=1001,100000` — raw answer from `/api/v2/market-data/instruments` (added in Stage 2, not yet confirmed)
+- `/api/trading/test/verify-allowlist` — searches every allowlisted symbol; saves nothing
+
+Database routes and setup: see `docs/trading-desk-database.md`.

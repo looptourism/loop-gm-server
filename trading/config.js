@@ -16,10 +16,14 @@ function readConfig(env = process.env) {
     userKey,
     hasKeys: !!(apiKey && userKey),
     // Kill switch for ORDERS. Only the exact string "true" turns it on; a
-    // missing, misspelled or unclear value means off. Stage 1 places no
-    // orders at all, so here it is only reported — read-only calls stay
-    // available so the positions remain visible while trading is stopped.
+    // missing, misspelled or unclear value means off. No stage so far places
+    // orders, so here it is only reported — read-only calls stay available
+    // so the positions remain visible while trading is stopped.
     tradingEnabled: env.TRADING_ENABLED === "true",
+    // The Trading Desk's own Postgres (a Supabase project used by nothing
+    // else). Deliberately not called DATABASE_URL, so no other part of the
+    // server can pick it up by accident.
+    databaseUrl: (env.TRADING_DATABASE_URL || "").trim(),
   };
 }
 
