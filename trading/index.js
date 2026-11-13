@@ -3,6 +3,7 @@
 //   /api/trading/test/…   read-only checks against eToro DEMO (Stage 1 + 2)
 //   /api/trading/admin/…  the Trading Desk's own database (Stage 2)
 //   /api/trading/monitor/… Market Monitoring: status, run now, stored data (Stage 3)
+//   /api/trading/providers/… news / fundamentals providers: status and coverage test
 //
 // This is the module's only connection to the rest of the server: server.js
 // calls mount(app, …) once. Nothing here is exposed to the GM, the
@@ -21,8 +22,11 @@ const { verifyAllowlist } = require("./verify-allowlist");
 const { syncAllowlist, readAllowlists } = require("./db/store");
 const { createMonitor } = require("./monitor");
 const snapshots = require("./db/snapshots");
+const { createProviders, ProviderError } = require("./providers");
+const { createCoverage } = require("./providers/coverage");
 
-function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }) } = {}) {
+function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }), providers = createProviders({ config }),
+  coverage = createCoverage({ providers, symbols: seedAllowlist().filter((s) => s.assetClass === "stock").map((s) => s.symbol) }) } = {}) {
   // Every Trading Desk route: never cached, and closed when the console
   // login is off.
   const loginGuard = (req, res, next) => {
@@ -40,9 +44,9 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   });
 
   const fail = (res, e) => {
-    const known = e instanceof EtoroError || e instanceof AccountDataError || e instanceof DbError;
-    if (!known) console.error("[trading] unexpected error:", db.redact(client.redact(e?.message)));
-    const refused = ["BadInput", "ConfirmMismatch", "NothingPending", "MigrationProblem"].includes(e?.code) && known;
+    const known = e instanceof EtoroError || e instanceof AccountDataError || e instanceof DbError || e instanceof ProviderError;
+    if (!known) console.error("[trading] unexpected error:", providers.redact(db.redact(client.redact(e?.message))));
+    const refused = ["BadInput", "ConfirmMismatch", "NothingPending", "MigrationProblem", "MissingKey", "NotConfigured"].includes(e?.code) && known;
     res.status(refused ? 400 : 502).json({
       ok: false,
       error: known ? e.message : "unexpected error",
@@ -209,8 +213,44 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     } catch (e) { fail(res, e); }
   });
 
+  // --- News / fundamentals providers (chosen: Option A) --------------------
+  // Read-only checks. Nothing is stored and no agent uses this yet.
+
+  // Which provider is configured for what, and whether its key is set. No network.
+  app.get("/api/trading/providers/status", loginGuard, (req, res) => {
+    res.json({ ok: true, ...status(), providers: providers.status() });
+  });
+
+  // One stock, all four capabilities, with the provider's raw answers:
+  // ?symbol=MSTR  (5 calls). For looking at exactly what the provider returns.
+  app.get("/api/trading/providers/test", loginGuard, async (req, res) => {
+    try {
+      const symbol = String(req.query.symbol || "").trim().toUpperCase();
+      if (!symbol) throw new ProviderError("pass ?symbol=MSTR", { code: "BadInput" });
+      const out = {};
+      for (const c of providers.capabilities) {
+        try { out[c] = await coverage.checkOne(symbol, c, { keepRaw: true }); }
+        catch (e) { if (!(e instanceof ProviderError)) throw e; out[c] = { verdict: "error", note: e.message, code: e.code }; }
+      }
+      res.json({ ok: true, symbol, ...out });
+    } catch (e) { fail(res, e); }
+  });
+
+  // Coverage of all 22 allowlisted stocks. ?start=yes begins a run (about
+  // three minutes, in the background); without it, shows progress / the report.
+  app.get("/api/trading/providers/coverage", loginGuard, async (req, res) => {
+    try {
+      if (req.query.start === "yes") {
+        providers.get("stock", "profile"); // refuses here, clearly, if the provider or its key is missing
+        await coverage.run();
+      }
+      const r = coverage.report();
+      res.json({ ok: true, ...r, next: r.started ? (r.running ? "still running — reload in a minute" : "finished") : "add ?start=yes to begin" });
+    } catch (e) { fail(res, e); }
+  });
+
   monitor.start(); // does nothing unless TRADING_MONITOR_ENABLED is exactly "true"
-  return { monitor };
+  return { monitor, providers, coverage };
 }
 
 module.exports = { mount };
