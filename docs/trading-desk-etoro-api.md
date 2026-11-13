@@ -5,8 +5,13 @@ lists, plus builders.etoro.com) on 2026-11-12. OpenAPI version shown by the port
 Re-check the changelog (https://api-portal.etoro.com/core/changelog.md) before each stage —
 eToro withdrew and restored endpoints several times during 2026.
 
-**Status: verified against the documentation only. No real call has succeeded yet** —
-that happens from the Render server (see "How to test" below).
+**Status (2026-11-13):**
+
+- Confirmed by a real call from the Render server: authentication with the three headers,
+  `GET /api/v1/trading/info/demo/pnl`, and the `RateLimit-*` response headers
+  (limit 60, window 60 s). The demo account answered with credit $100,000 and no positions.
+- Still verified against the documentation only: `/demo/portfolio`, instrument search,
+  rates, candles and the order lookup.
 
 ## Base URL and headers
 
@@ -55,8 +60,8 @@ Rate limits are per user key over a rolling 60 seconds. Over the limit → HTTP 
 2. `GET /api/v1/balances` and `GET /api/v1/me` are account-wide (they include live-account
    data), so the Trading Desk does not use them.
 3. The "available cash" guide's JavaScript reads `data.credits` at the top level, but the
-   OpenAPI schema puts `credit` inside `clientPortfolio`. The code follows the schema and
-   fails closed if the field is missing; the first real call settles it.
+   OpenAPI schema puts `credit` inside `clientPortfolio`. The real call on 2026-11-13
+   confirmed the schema is right and the guide's sample code is wrong.
 4. The search reference marks `fields` as required while the guide's example omits it.
    The client always sends it.
 5. `GET /api/v1/trading/info/demo/orders/{orderId}`: restored on 27 Jul 2026, listed as
