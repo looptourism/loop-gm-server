@@ -100,3 +100,37 @@ Open points: holiday dates will be copied from the official exchange pages in St
 were not reachable from this session, and none are written from memory). The real answer of
 `/api/v2/market-data/instruments` (2026-11-13) carries no trading-hours fields, so eToro offers
 no third check; the two above are the whole design.
+
+## Allowlists as stored (synced 2026-11-13 07:38 UTC, from real eToro searches)
+
+Instrument IDs and names are eToro's. 21 stocks and 9 coins are tradable; OPTT is listed but
+has no eToro match, so it is not tradable. Every stock is on Nasdaq or NYSE, so the
+market-hours calendar needs only those two exchanges.
+
+| Symbol | eToro ID | eToro name | Exchange |
+|---|---|---|---|
+| ADBE | 1126 | Adobe Systems Inc | Nasdaq |
+| AMPX | 10722 | Amprius Technologies Inc | NYSE |
+| BABA | 1155 | Alibaba-ADR | NYSE |
+| ENPH | 5634 | Enphase Energy Inc. | Nasdaq |
+| GRAB | 9250 | Grab Holdings Ltd | Nasdaq |
+| GRRR | 14379 | Gorilla Technology Group Inc | Nasdaq |
+| HIMS | 9518 | Hims & Hers Health Inc | NYSE |
+| INOD | 9840 | Innodata Inc | Nasdaq |
+| INTU | 1914 | Intuit Inc | Nasdaq |
+| MRAM | 11043 | Everspin Technologies Inc | Nasdaq |
+| MSTR (crypto_correlated) | 6473 | Strategy Inc | Nasdaq |
+| NEM | 1757 | Newmont Mining Corp | NYSE |
+| NKE | 1042 | NIKE | NYSE |
+| NVO | 6844 | Novo-Nordisk A/S SPONS ADR | NYSE |
+| OPTT | — | no exact match on eToro | — |
+| ORCL | 1135 | Oracle Corporation | NYSE |
+| PLAB | 9642 | Photronics Inc | Nasdaq |
+| SE | 5960 | Sea Ltd-ADR | NYSE |
+| TMDX | 9456 | TransMedics Group Inc | Nasdaq |
+| TTD | 4399 | Trade Desk Inc | Nasdaq |
+| VISN | 4206 | Vistance Networks Inc | Nasdaq |
+| WYFI | 14382 | WhiteFiber Inc | Nasdaq |
+
+Crypto (exchange "Digital Currency"): ADA 100017, ATOM 100047, BTC 100000, DOGE 100043,
+ETH 100001, FET 100079, SOL 100063, SUI 100340, XRP 100003.
