@@ -5,8 +5,9 @@ its own storage (Upstash) and never sees this database: the connection string is
 `trading/config.js`, from `TRADING_DATABASE_URL`.
 
 **Status (2026-11-13):** schema written and tested against a local Postgres 16 (28 tests pass).
-**Not yet migrated on Supabase** — the owner reviews the schema first. The TLS connection to
-Supabase itself has not been tried yet; `/api/trading/admin/db-status` is the real test.
+Connection from Render to the Supabase project confirmed by a real call at 07:17 UTC: session
+pooler, TLS verified against the bundled root CA, Postgres 17.11, no tables yet.
+**Not yet migrated** — waiting for the owner's approval of the schema.
 
 ## The schema
 
