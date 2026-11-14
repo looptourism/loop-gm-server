@@ -2,10 +2,9 @@
 // CoinGecko adapter — READ-ONLY. Crypto fundamentals only (market cap, rank,
 // supply). CoinGecko has nothing for stocks.
 //
-// NOT YET CONFIRMED BY A REAL CALL. CoinGecko's documentation could not be
-// opened from the coding session; the path, header and field names are the
-// publicly known ones and must be proven by /api/trading/providers/test on
-// the Render server before anything relies on this file.
+// Confirmed by a real call from the Render server on 2026-11-14 for BTC
+// (path, header, field names). The other eight coin IDs are confirmed only
+// once the crypto coverage test has run.
 //
 // CoinGecko identifies coins by its own IDs, not by ticker — and several
 // coins can share a ticker. So the mapping below is explicit, and every

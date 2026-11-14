@@ -221,6 +221,7 @@ test("SEC adapter: sends nothing without a User-Agent, maps ticker → CIK, keep
   assert.strictEqual(calls[1].url, "https://data.sec.gov/submissions/CIK0001050446.json");
   assert.deepStrictEqual(r.data.filings.map((f) => f.form), ["8-K", "10-Q"]);         // insider forms etc. are left out
   assert.strictEqual(r.data.filings[1].url, "https://www.sec.gov/Archives/edgar/data/1050446/000105044626000100/mstr-10q.htm");
+  assert.deepStrictEqual(r.data.filings.map((f) => f.kind), ["current", "quarterly"]);
   assert.strictEqual((await sec.getFilings("ZZZZ")).data, null);                      // not in the SEC's list
   await assert.rejects(sec.getFilings("NKE"), (e) => e.code === "WrongCompany");      // the CIK's tickers do not include it
   assert.strictEqual(calls.filter((c) => c.url.endsWith("company_tickers.json")).length, 1); // the list is fetched once
@@ -244,4 +245,16 @@ test("coverage: one provider failing stops only that provider; crypto uses its o
   const c = await wait(coin);
   assert.deepStrictEqual([c.results[0].fundamentals.verdict, c.results[0].fundamentals.filled, c.fullyCovered], ["ok", 5, ["BTC"]]);
   assert.deepStrictEqual(providers.requests(), { finnhub: 5, coingecko: 1 }); // nothing was sent to the SEC without a User-Agent
+});
+
+test("SEC adapter: weekly current reports do not push out the annual and quarterly reports", async () => {
+  // 30 weekly 8-Ks, then a 10-Q, more 8-Ks, a 10-K — as a frequent filer looks.
+  const form = [], filingDate = [], accessionNumber = [], primaryDocument = [];
+  const add = (f, n) => { form.push(f); filingDate.push(`2026-${String(12 - Math.floor(n / 4)).padStart(2, "0")}-01`); accessionNumber.push(`0001-26-${n}`); primaryDocument.push("d.htm"); };
+  for (let n = 0; n < 40; n++) add(n === 30 ? "10-Q" : n === 38 ? "10-K" : "8-K", n);
+  const fetchImpl = async (url) => respond(200, String(url).endsWith("company_tickers.json") ? { 0: { cik_str: 1, ticker: "MSTR" } } : { name: "X", tickers: ["MSTR"], filings: { recent: { form, filingDate, accessionNumber, primaryDocument } } });
+  const r = await createSec({ userAgent: "Owner owner@example.com", fetchImpl }).getFilings("MSTR");
+  const count = (k) => r.data.filings.filter((f) => f.kind === k).length;
+  assert.deepStrictEqual([count("current"), count("quarterly"), count("annual")], [15, 1, 1]);
+  assert.ok(r.data.filings.some((f) => f.form === "10-K"));
 });
