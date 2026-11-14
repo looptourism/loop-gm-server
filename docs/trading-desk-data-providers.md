@@ -8,10 +8,10 @@
 |---|---|---|
 | Provider layer | One interface; `DATA_PROVIDERS` in `trading/config.js` names the provider per capability | — |
 | Finnhub — stocks | Profile, fundamentals, earnings, company news | **Yes** (22 stocks, see below) |
-| Finnhub — crypto | General crypto headlines (not per coin) | No |
-| CoinGecko — crypto | Market cap, rank, supply, volume for the 9 coins | No |
-| SEC EDGAR — stocks | Recent official filings (10-K, 10-Q, 8-K, 20-F, 6-K) with dates and links | No |
-| Research job | Stores all of the above on a schedule; agents will read only the stored rows | No (tested against fakes and a local Postgres) |
+| Finnhub — crypto | General crypto headlines (not per coin) | **Yes** (92 articles, 2026-11-14) |
+| CoinGecko — crypto | Market cap, rank, supply, volume for the 9 coins | **Yes** — all 9 coins fully covered in the real coverage run (2026-11-14 09:19 UTC, 9 calls in 24 s); the hand-written coin IDs, including FET, passed the ticker check |
+| SEC EDGAR — stocks | Official filings with dates and links: the last 2 annual, 4 quarterly and 15 current reports | **Yes** — filings stored for all 21 monitored stocks with no problems (2026-11-14); the list contents were inspected for MSTR only |
+| Research job | Stores all of the above on a schedule; agents will read only the stored rows | **Yes** — two manual runs on 2026-11-14 (09:14 and 09:22 UTC), 30 instruments, no problems: 93 research rows and 2,488 news articles stored; the second run added only what had changed. Runs triggered by the schedule itself have not been observed yet |
 
 Schedule (runs only when `TRADING_MONITOR_ENABLED` is `true`, the same switch as price
 monitoring): profile, fundamentals, earnings and filings once a day; news every 6 hours.

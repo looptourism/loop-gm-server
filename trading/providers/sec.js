@@ -3,9 +3,9 @@
 // filings (annual, quarterly and current reports), each with its date and a
 // link to the document on sec.gov. No news, no ratios, no crypto.
 //
-// NOT YET CONFIRMED BY A REAL CALL. sec.gov could not be opened from the
-// coding session; the two URLs and the field names are the publicly known
-// ones and must be proven by /api/trading/providers/test on the Render server.
+// Confirmed by a real call from the Render server on 2026-11-14 (MSTR:
+// ticker list, submissions, filing links). Foreign issuers (20-F / 6-K)
+// have not been seen in a real answer yet.
 //
 // EDGAR needs no key, but requires every caller to say who they are in the
 // User-Agent header. That text comes from SEC_USER_AGENT and is never
@@ -19,6 +19,9 @@ const TIMEOUT_MS = 20000;
 const TICKER_MAP_TTL_MS = 24 * 60 * 60 * 1000;
 // Annual / quarterly / current reports — US companies and foreign issuers.
 const FORMS = new Set(["10-K", "10-K/A", "10-Q", "10-Q/A", "8-K", "8-K/A", "20-F", "20-F/A", "40-F", "6-K"]);
+const KIND = { "10-K": "annual", "20-F": "annual", "40-F": "annual", "10-Q": "quarterly", "8-K": "current", "6-K": "current" };
+// How many of each kind are kept: the last 2 annual reports, 4 quarterly, 15 current.
+const LIMITS = { annual: 2, quarterly: 4, current: 15 };
 
 function createSec({ userAgent = "", fetchImpl = globalThis.fetch, now = () => new Date() } = {}) {
   const name = "sec";
@@ -53,7 +56,7 @@ function createSec({ userAgent = "", fetchImpl = globalThis.fetch, now = () => n
     return tickerMap.get(symbol) ?? null;
   }
 
-  async function getFilings(symbol, { limit = 20 } = {}) {
+  async function getFilings(symbol, { limits = LIMITS } = {}) {
     const s = String(symbol || "").trim().toUpperCase();
     if (!/^[A-Z0-9.-]{1,12}$/.test(s)) throw new ProviderError("invalid symbol", { provider: name, code: "BadInput" });
     const cik = await cikFor(s);
@@ -65,13 +68,21 @@ function createSec({ userAgent = "", fetchImpl = globalThis.fetch, now = () => n
     if (!tickers.includes(s)) throw new ProviderError(`SEC company ${cik} does not list ticker ${s}`, { provider: name, code: "WrongCompany" });
     const r = j.filings?.recent;
     if (!r || !Array.isArray(r.form) || !Array.isArray(r.filingDate) || !Array.isArray(r.accessionNumber)) throw new ProviderError("the SEC answer has no recent filings list", { provider: name, code: "BadResponse" });
+    // A company that files current reports every week (MSTR does) would
+    // otherwise fill the whole list with 8-Ks and push out its annual and
+    // quarterly reports. So each kind has its own allowance, newest first.
+    const taken = { annual: 0, quarterly: 0, current: 0 };
     const filings = [];
-    for (let i = 0; i < r.form.length && filings.length < limit; i++) {
-      if (!FORMS.has(r.form[i]) || !/^\d{4}-\d{2}-\d{2}$/.test(r.filingDate[i] || "")) continue;
+    for (let i = 0; i < r.form.length; i++) {
+      const form = r.form[i];
+      if (!FORMS.has(form) || !/^\d{4}-\d{2}-\d{2}$/.test(r.filingDate[i] || "")) continue;
+      const kind = KIND[form.replace("/A", "")];
+      if (taken[kind] >= limits[kind]) continue;
+      taken[kind]++;
       const acc = String(r.accessionNumber[i] || "");
       const doc = Array.isArray(r.primaryDocument) ? r.primaryDocument[i] : null;
       filings.push({
-        form: r.form[i], filedOn: r.filingDate[i], periodEnd: (Array.isArray(r.reportDate) && r.reportDate[i]) || null, accessionNumber: acc,
+        form, kind, filedOn: r.filingDate[i], periodEnd: (Array.isArray(r.reportDate) && r.reportDate[i]) || null, accessionNumber: acc,
         url: acc && doc ? `https://www.sec.gov/Archives/edgar/data/${cik}/${acc.replace(/-/g, "")}/${doc}` : null,
       });
     }
@@ -81,4 +92,4 @@ function createSec({ userAgent = "", fetchImpl = globalThis.fetch, now = () => n
   return { name, hasKey: !!userAgent, callsPer: { filings: 2 }, getFilings, redact: (t) => String(t ?? "") };
 }
 
-module.exports = { createSec, FORMS };
+module.exports = { createSec, FORMS, LIMITS };

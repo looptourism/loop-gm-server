@@ -221,6 +221,7 @@ test("SEC adapter: sends nothing without a User-Agent, maps ticker → CIK, keep
   assert.strictEqual(calls[1].url, "https://data.sec.gov/submissions/CIK0001050446.json");
   assert.deepStrictEqual(r.data.filings.map((f) => f.form), ["8-K", "10-Q"]);         // insider forms etc. are left out
   assert.strictEqual(r.data.filings[1].url, "https://www.sec.gov/Archives/edgar/data/1050446/000105044626000100/mstr-10q.htm");
+  assert.deepStrictEqual(r.data.filings.map((f) => f.kind), ["current", "quarterly"]);
   assert.strictEqual((await sec.getFilings("ZZZZ")).data, null);                      // not in the SEC's list
   await assert.rejects(sec.getFilings("NKE"), (e) => e.code === "WrongCompany");      // the CIK's tickers do not include it
   assert.strictEqual(calls.filter((c) => c.url.endsWith("company_tickers.json")).length, 1); // the list is fetched once
@@ -244,4 +245,36 @@ test("coverage: one provider failing stops only that provider; crypto uses its o
   const c = await wait(coin);
   assert.deepStrictEqual([c.results[0].fundamentals.verdict, c.results[0].fundamentals.filled, c.fullyCovered], ["ok", 5, ["BTC"]]);
   assert.deepStrictEqual(providers.requests(), { finnhub: 5, coingecko: 1 }); // nothing was sent to the SEC without a User-Agent
+});
+
+test("SEC adapter: weekly current reports do not push out the annual and quarterly reports", async () => {
+  // 30 weekly 8-Ks, then a 10-Q, more 8-Ks, a 10-K — as a frequent filer looks.
+  const form = [], filingDate = [], accessionNumber = [], primaryDocument = [];
+  const add = (f, n) => { form.push(f); filingDate.push(`2026-${String(12 - Math.floor(n / 4)).padStart(2, "0")}-01`); accessionNumber.push(`0001-26-${n}`); primaryDocument.push("d.htm"); };
+  for (let n = 0; n < 40; n++) add(n === 30 ? "10-Q" : n === 38 ? "10-K" : "8-K", n);
+  const fetchImpl = async (url) => respond(200, String(url).endsWith("company_tickers.json") ? { 0: { cik_str: 1, ticker: "MSTR" } } : { name: "X", tickers: ["MSTR"], filings: { recent: { form, filingDate, accessionNumber, primaryDocument } } });
+  const r = await createSec({ userAgent: "Owner owner@example.com", fetchImpl }).getFilings("MSTR");
+  const count = (k) => r.data.filings.filter((f) => f.kind === k).length;
+  assert.deepStrictEqual([count("current"), count("quarterly"), count("annual")], [15, 1, 1]);
+  assert.ok(r.data.filings.some((f) => f.form === "10-K"));
+});
+
+test("compare route: a foreign company has no quarterly reports at the SEC, and the page says who fills the gap", async () => {
+  const foreign = { name: "Alibaba", tickers: ["BABA"], filings: { recent: { form: ["6-K", "6-K", "20-F", "6-K"], filingDate: ["2026-11-10", "2026-08-20", "2026-06-25", "2026-05-15"], reportDate: ["2026-09-30", "2026-06-30", "2026-03-31", "2026-03-31"], accessionNumber: ["a-1", "a-2", "a-3", "a-4"], primaryDocument: ["d.htm", "d.htm", "d.htm", "d.htm"] } } };
+  const us = { name: "Strategy Inc", tickers: ["MSTR"], filings: { recent: { form: ["8-K", "10-Q", "10-K"], filingDate: ["2026-11-09", "2026-11-02", "2026-02-15"], accessionNumber: ["b-1", "b-2", "b-3"], primaryDocument: ["d.htm", "d.htm", "d.htm"] } } };
+  const secFetch = async (url) => respond(200, String(url).endsWith("company_tickers.json") ? { 0: { cik_str: 1, ticker: "BABA" }, 1: { cik_str: 2, ticker: "MSTR" } } : String(url).includes("CIK0000000001") ? foreign : us);
+  const adapters = { finnhub: (c) => createFinnhub({ apiKey: c.providerKeys.finnhub, fetchImpl: fakeFetch(good).impl, now: () => NOW }), sec: () => createSec({ userAgent: "Owner owner@example.com", fetchImpl: secFetch }) };
+  const cfg = { ...readConfig({}), providerKeys: { finnhub: KEY } };
+  const app = fakeApp();
+  mount(app, { authOn: true, config: cfg, client: { redact: (t) => String(t ?? "") }, db: { configured: false, redact: (t) => String(t ?? "") }, monitor: { start: () => false, state: () => ({}) }, research: { start: () => false, state: () => ({}) }, providers: createProviders({ config: cfg, adapters, limiterFor: fast }) });
+  const res = await app.call("/api/trading/providers/compare", { symbols: "baba,MSTR" });
+  for (let i = 0; i < 100 && !res.body; i++) await new Promise((r) => setTimeout(r, 5));
+  const [baba, mstr] = res.body.results;
+  assert.deepStrictEqual([baba.filings.verdict, baba.filings.annualReports, baba.filings.quarterlyReports, baba.filings.currentReports], ["ok", 1, 0, 3]);
+  assert.match(baba.filings.foreignIssuer, /no quarterly reports exist at the SEC/);
+  assert.match(baba.filings.latestAnnual, /^20-F filed 2026-06-25/);
+  assert.match(baba.summary, /SEC has no quarterly reports; finnhub has 4 quarter\(s\) of earnings/);
+  assert.strictEqual(mstr.summary, "the SEC has quarterly reports for this company");
+  assert.strictEqual(mstr.filings.foreignIssuer, undefined);
+  assert.strictEqual((await app.call("/api/trading/providers/compare")).statusCode, 400);
 });

@@ -42,7 +42,18 @@ const JUDGE = {
   filings: (r) => {
     if (!r.data) return { verdict: "gap", note: "the SEC's ticker list does not have this symbol" };
     const f = r.data.filings;
-    return { verdict: f.length === 0 ? "gap" : "ok", company: r.data.companyName, filings: f.length, latest: f[0] ? `${f[0].form} filed ${f[0].filedOn}` : null, forms: [...new Set(f.map((x) => x.form))] };
+    const newest = (kind) => { const x = f.find((y) => y.kind === kind); return x ? `${x.form} filed ${x.filedOn}${x.periodEnd ? ` (period ${x.periodEnd})` : ""}` : null; };
+    const count = (kind) => f.filter((x) => x.kind === kind).length;
+    const out = {
+      verdict: f.length === 0 ? "gap" : count("annual") === 0 ? "partial" : "ok",
+      company: r.data.companyName, filings: f.length, forms: [...new Set(f.map((x) => x.form))],
+      annualReports: count("annual"), quarterlyReports: count("quarterly"), currentReports: count("current"),
+      latestAnnual: newest("annual"), latestQuarterly: newest("quarterly"), latestCurrent: newest("current"),
+    };
+    if (f.length && count("annual") === 0) out.note = "no annual report among the SEC's recent filings";
+    // Foreign companies file a yearly 20-F and occasional 6-Ks; they do not file quarterly reports with the SEC.
+    else if (count("quarterly") === 0 && f.some((x) => x.form.startsWith("20-F") || x.form === "6-K" || x.form === "40-F")) out.foreignIssuer = "files 20-F / 6-K: no quarterly reports exist at the SEC — quarterly figures must come from another provider";
+    return out;
   },
   marketNews: (r) => ({ verdict: r.data.length === 0 ? "gap" : "ok", articles: r.data.length, latest: r.data[0]?.publishedAt || null, publishers: [...new Set(r.data.map((n) => n.publisher).filter(Boolean))].slice(0, 5), note: "general headlines for the asset class, not per instrument" }),
 };

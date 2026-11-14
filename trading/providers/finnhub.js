@@ -153,7 +153,7 @@ function createFinnhub({ apiKey = "", fetchImpl = globalThis.fetch, now = () => 
   };
 
   // General headlines for a whole asset class — NOT per coin. Only "crypto"
-  // is offered. NOT YET CONFIRMED BY A REAL CALL (path /news?category=crypto).
+  // is offered. Confirmed by a real call on 2026-11-14 (92 articles).
   async function getMarketNews(assetClass) {
     if (assetClass !== "crypto") throw new ProviderError("Finnhub market news is only wired for crypto", { provider: name, code: "BadInput" });
     const r = await get("/news", { category: "crypto" });
