@@ -33,6 +33,8 @@ const analysesStore = require("./db/analyses");
 const { POLICY } = require("./policy");
 const { AGENTS } = require("./config");
 
+const STARTED_AT = new Date().toISOString(); // when this server process started
+
 function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }), providers = createProviders({ config }),
   research = createResearch({ config, providers, db }), agents = createAgents({ config, db, client }) } = {}) {
   // One coverage test per asset class, over the owner's seed lists.
@@ -334,8 +336,14 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   // They analyse stored data and save analyses and DRAFT proposals. Nothing
   // here can place an order, and no run starts by itself.
 
-  app.get("/api/trading/agents/status", loginGuard, (req, res) => {
-    res.json({ ok: true, ...status(), agents: agents.state(), policy: POLICY });
+  // `recentRuns` comes from the database, so it survives a server restart;
+  // `agents.lastResult` is this process's memory only.
+  app.get("/api/trading/agents/status", loginGuard, async (req, res) => {
+    let recentRuns = null, recentRunsError = null;
+    if (db.configured && typeof agents.recentRuns === "function") {
+      try { recentRuns = await agents.recentRuns(6); } catch (e) { recentRunsError = db.redact(e?.message); }
+    }
+    res.json({ ok: true, ...status(), serverStartedAt: STARTED_AT, agents: agents.state(), recentRuns, ...(recentRunsError ? { recentRunsError } : {}), policy: POLICY });
   });
 
   // Starts one run: ?symbols=MSTR,BTC&confirm=yes  or  ?all=yes&confirm=yes
