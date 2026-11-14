@@ -5,8 +5,17 @@ the data the Trading Desk has already stored and save **analyses** and **draft p
 Nothing is executed: there is no order code anywhere, and a draft goes nowhere until Stage 5
 (the code risk engine and your Telegram approval) exists.
 
-**Status (2026-11-14):** built and tested with a scripted stand-in for Claude and a local
-Postgres 16 (83 tests pass). **Not yet run with the real Claude API** — see "First real run".
+**Status (2026-11-14): confirmed by a real run** with the Claude API on the Render server
+(22:04–22:06 UTC, MSTR and BTC): all five agent steps completed with no problems — two
+analyses (both "avoid"), two risk reviews (both "no objection"), one Portfolio Manager output
+(both "no trade", two disagreements recorded for each), no draft proposal, demo portfolio read.
+10 Claude requests, 88,272 input and 13,339 output tokens, estimated $0.62 — about $0.31 per
+instrument and about one minute each. A run that ends in a draft proposal has not been seen yet.
+
+**Server restarts:** the server restarted about 15 minutes after that run with no deploy,
+which is what a hosting plan that puts idle services to sleep looks like. If so, the 15-minute
+price schedule and the research schedule do not run while it sleeps, and a long agent run can
+be cut short. To be confirmed in Render (instance type).
 
 ## Who does what
 
@@ -48,9 +57,9 @@ Portfolio Manager only if both its analysis and its risk review were produced an
   per million input tokens and $20 per million output tokens). The rest of the server uses
   `claude-sonnet-4-6`; the two are independent.
 - It uses the `ANTHROPIC_API_KEY` already set in Render. No new env var.
-- **Cost is not known yet.** My rough expectation is $0.30–$1 per instrument (three agents read
-  each one), so a full run of all 30 could be $10–$30. Every run reports its real token use and
-  an estimated cost — check it after the first small run before starting a large one.
+- **Measured cost:** about $0.31 per instrument in the first real run (two instruments, $0.62),
+  so a full run of all 30 would be roughly $9–10 and take 30–40 minutes. Every run reports its
+  real token use and an estimated cost.
 
 ## First real run (phone)
 
