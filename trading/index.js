@@ -5,6 +5,7 @@
 //   /api/trading/monitor/… Market Monitoring: status, run now, stored data (Stage 3)
 //   /api/trading/providers/… news / fundamentals providers: status and coverage test
 //   /api/trading/research/… scheduled collection of provider data: status, run now, stored data
+//   /api/trading/agents/…  the four Claude agents: status, run, latest analysis, draft proposals (Stage 4)
 //
 // This is the module's only connection to the rest of the server: server.js
 // calls mount(app, …) once. Nothing here is exposed to the GM, the
@@ -27,9 +28,13 @@ const { createProviders, ProviderError } = require("./providers");
 const { createCoverage } = require("./providers/coverage");
 const { createResearch } = require("./research");
 const researchStore = require("./db/research");
+const { createAgents } = require("./agents/pipeline");
+const analysesStore = require("./db/analyses");
+const { POLICY } = require("./policy");
+const { AGENTS } = require("./config");
 
 function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }), providers = createProviders({ config }),
-  research = createResearch({ config, providers, db }) } = {}) {
+  research = createResearch({ config, providers, db }), agents = createAgents({ config, db, client }) } = {}) {
   // One coverage test per asset class, over the owner's seed lists.
   const coverage = Object.fromEntries(["stock", "crypto"].map((assetClass) => [assetClass,
     createCoverage({ providers, assetClass, symbols: seedAllowlist().filter((s) => s.assetClass === assetClass).map((s) => s.symbol) })]));
@@ -325,9 +330,44 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     } catch (e) { fail(res, e); }
   });
 
+  // --- Stage 4: the agents -------------------------------------------------
+  // They analyse stored data and save analyses and DRAFT proposals. Nothing
+  // here can place an order, and no run starts by itself.
+
+  app.get("/api/trading/agents/status", loginGuard, (req, res) => {
+    res.json({ ok: true, ...status(), agents: agents.state(), policy: POLICY });
+  });
+
+  // Starts one run: ?symbols=MSTR,BTC&confirm=yes  or  ?all=yes&confirm=yes
+  // Each instrument costs Claude API money (three agents read it), so it
+  // needs ?confirm=yes. Works in the background; follow it on /agents/status.
+  app.get("/api/trading/agents/run", dbGuard, (req, res) => {
+    const symbols = req.query.all === "yes" ? "all" : String(req.query.symbols || req.query.symbol || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
+    if (req.query.confirm !== "yes" || (symbols !== "all" && symbols.length === 0)) return fail(res, new EtoroError("nothing was started: pass ?symbols=MSTR,BTC&confirm=yes (or ?all=yes&confirm=yes)", { code: "BadInput" }));
+    if (symbols !== "all" && symbols.length > AGENTS.maxSymbolsPerRun) return fail(res, new EtoroError(`at most ${AGENTS.maxSymbolsPerRun} symbols per run`, { code: "BadInput" }));
+    const st = agents.state();
+    if (!st.ready) return res.status(503).json({ ok: false, error: st.notReadyBecause });
+    if (st.running) return res.status(409).json({ ok: false, error: "a run is already in progress", running: st.running });
+    agents.run(symbols, { trigger: "manual" });
+    res.json({ ok: true, ...status(), started: true, symbols, next: "open /api/trading/agents/status — one instrument takes a few minutes" });
+  });
+
+  // The newest analysis, risk review and Portfolio Manager decision for one symbol.
+  app.get("/api/trading/agents/latest", dbGuard, async (req, res) => {
+    try {
+      const out = await analysesStore.latestForSymbol(db, req.query.symbol);
+      res.status(out.ok ? 200 : 404).json(out);
+    } catch (e) { fail(res, e); }
+  });
+
+  // Recent proposals with their status. Stage 4 creates drafts only.
+  app.get("/api/trading/agents/proposals", dbGuard, async (req, res) => {
+    try { res.json({ ok: true, ...status(), proposals: await analysesStore.listProposals(db, 20) }); } catch (e) { fail(res, e); }
+  });
+
   monitor.start();  // both do nothing unless TRADING_MONITOR_ENABLED is exactly "true"
   research.start();
-  return { monitor, providers, coverage, research };
+  return { monitor, providers, coverage, research, agents };
 }
 
 module.exports = { mount };

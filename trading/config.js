@@ -30,6 +30,10 @@ function readConfig(env = process.env) {
     monitorEnabled: env.TRADING_MONITOR_ENABLED === "true",
     // Keys of the news / fundamentals providers, by provider name. A provider
     // without a key is simply unavailable; nothing falls back to another one.
+    // The Claude API key the rest of the server already uses. The Trading Desk
+    // builds its OWN client from it; it shares no agent, tool or conversation
+    // with the GM, the departments or the secretary.
+    anthropicKey: (env.ANTHROPIC_API_KEY || "").trim(),
     providerKeys: {
       finnhub: (env.FINNHUB_API_KEY || "").trim(),
       coingecko: (env.COINGECKO_API_KEY || "").trim(),
@@ -112,4 +116,20 @@ const MONITORING = {
   rateFreshSec: 20 * 60,
 };
 
-module.exports = { ETORO_BASE_URL, MONITORING, DATA_PROVIDERS, PROVIDER_LIMITS, RESEARCH, readConfig };
+// ---------------------------------------------------------------------------
+// The four Trading Desk agents (Stage 4).
+// They run only when the owner starts a run — there is no schedule, because
+// every run costs Claude API money. pricePerMTok is Anthropic's list price for
+// `model` (US dollars per million tokens), used only to ESTIMATE a run's cost;
+// update both together.
+// ---------------------------------------------------------------------------
+const AGENTS = {
+  model: "claude-opus-5-5",
+  pricePerMTok: { input: 4, output: 20 },
+  maxTokens: 16000,
+  maxTurns: 12,             // tool rounds per agent before the run is abandoned
+  timeoutMs: 5 * 60 * 1000, // per Claude request
+  maxSymbolsPerRun: 40,
+};
+
+module.exports = { ETORO_BASE_URL, AGENTS, MONITORING, DATA_PROVIDERS, PROVIDER_LIMITS, RESEARCH, readConfig };
