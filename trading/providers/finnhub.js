@@ -1,11 +1,10 @@
 // ---------------------------------------------------------------------------
 // Finnhub adapter — READ-ONLY. Stocks: profile, fundamentals, earnings, news.
 //
-// NOT YET CONFIRMED BY A REAL CALL. Finnhub's documentation could not be
-// opened from the coding session, so the paths and field names below are the
-// publicly known ones and must be proven by the coverage test on the Render
-// server (docs/trading-desk-data-providers.md) before anything is built on
-// this file. The coverage test exists for exactly that.
+// Confirmed by real calls from the Render server on 2026-11-14 (free key):
+// all five paths and the field names below returned data for the 22
+// allowlisted stocks. Finnhub's documentation itself could not be opened
+// from the coding session, so anything beyond these five calls is unproven.
 //
 // Guards: GET only; only the paths listed in PATHS; only https://finnhub.io;
 // the key travels in a header, never in the URL, and is stripped from every
@@ -19,7 +18,7 @@
 // ---------------------------------------------------------------------------
 const BASE_URL = "https://finnhub.io/api/v1";
 const TIMEOUT_MS = 20000;
-const PATHS = new Set(["/stock/profile2", "/stock/metric", "/stock/earnings", "/calendar/earnings", "/company-news"]);
+const PATHS = new Set(["/stock/profile2", "/stock/metric", "/stock/earnings", "/calendar/earnings", "/company-news", "/news"]);
 
 class ProviderError extends Error {
   constructor(message, { provider = null, status = null, code = null, retryAfterSec = null } = {}) {
@@ -112,7 +111,8 @@ function createFinnhub({ apiKey = "", fetchImpl = globalThis.fetch, now = () => 
     const m = r.json.metric && typeof r.json.metric === "object" ? r.json.metric : {};
     const data = {};
     for (const [ours, theirs] of Object.entries(METRICS)) data[ours] = finite(m[theirs]);
-    return wrap("fundamentals", s, r, Object.keys(m).length ? data : null, { providerFieldCount: Object.keys(m).length });
+    // `raw` keeps Finnhub's metric block only; its long historical `series` is left out.
+    return wrap("fundamentals", s, r, Object.keys(m).length ? data : null, { providerFieldCount: Object.keys(m).length, raw: { metric: m } });
   }
 
   // Past quarters (actual vs estimate) and the next announced date, if any.
@@ -143,14 +143,25 @@ function createFinnhub({ apiKey = "", fetchImpl = globalThis.fetch, now = () => 
     const s = sym(symbol);
     const to = now();
     const r = await get("/company-news", { symbol: s, from: day(new Date(to.getTime() - days * 86400000)), to: day(to) });
-    const items = (Array.isArray(r.json) ? r.json : []).map((n) => {
-      const t = finite(n?.datetime);
-      return { id: n?.id ?? null, headline: text(n?.headline), summary: text(n?.summary), url: text(n?.url), publisher: text(n?.source), publishedAt: t && t > 0 ? new Date(t * 1000).toISOString() : null };
-    }).filter((n) => n.headline && n.publishedAt).sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
-    return wrap("news", s, r, items, { windowDays: days });
+    const items = (Array.isArray(r.json) ? r.json : []).map(newsItem).filter((n) => n.headline && n.publishedAt).sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
+    return wrap("news", s, r, items, { windowDays: days, raw: { count: Array.isArray(r.json) ? r.json.length : null } });
   }
 
-  return { name, hasKey: !!apiKey, callsPer: { profile: 1, fundamentals: 1, earnings: 2, news: 1 }, getProfile, getFundamentals, getEarnings, getNews, redact };
+  const newsItem = (n) => {
+    const t = finite(n?.datetime);
+    return { id: n?.id ?? null, headline: text(n?.headline), summary: text(n?.summary), url: text(n?.url), publisher: text(n?.source), publishedAt: t && t > 0 ? new Date(t * 1000).toISOString() : null, raw: n };
+  };
+
+  // General headlines for a whole asset class — NOT per coin. Only "crypto"
+  // is offered. NOT YET CONFIRMED BY A REAL CALL (path /news?category=crypto).
+  async function getMarketNews(assetClass) {
+    if (assetClass !== "crypto") throw new ProviderError("Finnhub market news is only wired for crypto", { provider: name, code: "BadInput" });
+    const r = await get("/news", { category: "crypto" });
+    const items = (Array.isArray(r.json) ? r.json : []).map(newsItem).filter((n) => n.headline && n.publishedAt).sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
+    return { provider: name, capability: "marketNews", symbol: null, data: items, source: r.source, fetchedAt: r.fetchedAt, raw: { count: Array.isArray(r.json) ? r.json.length : null } };
+  }
+
+  return { name, hasKey: !!apiKey, callsPer: { profile: 1, fundamentals: 1, earnings: 2, news: 1, marketNews: 1 }, getProfile, getFundamentals, getEarnings, getNews, getMarketNews, redact };
 }
 
 module.exports = { createFinnhub, ProviderError, METRICS, PATHS };

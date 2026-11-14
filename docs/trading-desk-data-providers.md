@@ -1,8 +1,66 @@
 # Trading Desk — news, fundamentals and earnings: provider proposal (Stage 3)
 
-**Decision (2026-11-13): Option A.** Built so far: the provider layer, a Finnhub adapter and
-a coverage test for the 22 stocks. Nothing is stored and no agent uses it yet — that waits for
-the two checks below.
+**Decision (2026-11-13): Option A.** Terms of Service read and accepted by the owner (2026-11-14).
+
+## What is built (2026-11-14)
+
+| Piece | What it does | Confirmed by a real call? |
+|---|---|---|
+| Provider layer | One interface; `DATA_PROVIDERS` in `trading/config.js` names the provider per capability | — |
+| Finnhub — stocks | Profile, fundamentals, earnings, company news | **Yes** (22 stocks, see below) |
+| Finnhub — crypto | General crypto headlines (not per coin) | No |
+| CoinGecko — crypto | Market cap, rank, supply, volume for the 9 coins | No |
+| SEC EDGAR — stocks | Recent official filings (10-K, 10-Q, 8-K, 20-F, 6-K) with dates and links | No |
+| Research job | Stores all of the above on a schedule; agents will read only the stored rows | No (tested against fakes and a local Postgres) |
+
+Schedule (runs only when `TRADING_MONITOR_ENABLED` is `true`, the same switch as price
+monitoring): profile, fundamentals, earnings and filings once a day; news every 6 hours.
+Per day: about 180 Finnhub calls (ceiling 40/minute; limit 60), 9 CoinGecko calls (about 270
+a month of the 10,000 allowed), about 45 SEC calls (ceiling 60/minute; limit 10/second).
+An answer identical to the stored one adds no row — only its "last confirmed" time moves.
+
+## Steps to finish the setup (phone)
+
+1. **Merge** the branch on GitHub and wait for Render to deploy.
+2. **CoinGecko key:** coingecko.com → API → create a free Demo account → copy the key. In
+   Render → **loop-gm-server-1** → **Environment**, add `COINGECKO_API_KEY`.
+3. **SEC identification:** the SEC requires every program to say who is calling. In Render add
+   `SEC_USER_AGENT` with your name and an email of your choice, e.g. `Your Name you@example.com`.
+   It is sent only to sec.gov. Without it the SEC part stays off; everything else works.
+4. **Save, rebuild, and deploy.**
+5. Log in to the console, then open `/api/trading/admin/migrate?confirm=003_research` (adds the two tables for research data).
+6. `/api/trading/providers/status` — every line should show `"usable": true`.
+7. `/api/trading/providers/test?symbol=BTC&class=crypto` — **send me the output** (first real CoinGecko and crypto-news call).
+8. `/api/trading/providers/test?symbol=MSTR` — **send me the `filings` part** (first real SEC call).
+9. `/api/trading/providers/coverage?class=crypto&start=yes`, wait a minute, then
+   `/api/trading/providers/coverage?class=crypto` — coverage of the 9 coins.
+10. `/api/trading/research/run?confirm=yes&all=yes`, wait about 5 minutes, then
+    `/api/trading/research/status` — **send me the output**: it shows what was stored and every problem.
+11. `/api/trading/research/view?symbol=MSTR` — exactly what an agent will be given.
+
+## Limitations
+
+1. CoinGecko, SEC EDGAR and Finnhub's crypto headlines are not confirmed by a real call yet;
+   their documentation could not be opened from the coding session. Steps 7–8 are the proof.
+2. The coin-ID mapping for CoinGecko is written by hand (e.g. FET → `fetch-ai`). If CoinGecko
+   returns a different ticker for an ID, the answer is refused and reported — not stored.
+3. SEC EDGAR gives the list of filings with links, not the figures inside them. Financial
+   figures come from Finnhub (a secondary source).
+4. NVO and WYFI have no upcoming earnings date on Finnhub; it is stored as unknown.
+5. News is stored as the provider returns it; whether an article is really about the company
+   is not checked. Crypto news is general, not per coin.
+6. Estimated storage: roughly 100 MB a year for research data, on top of price snapshots.
+
+**Coverage result (real run on the Render server, 2026-11-14 08:30 UTC, Finnhub free key):**
+all 22 stocks checked, 110 calls in 2 min 44 s, no errors and no rate limiting.
+- **Fully covered (20):** MSTR, BABA, ADBE, ORCL, NKE, TTD, HIMS, NEM, INTU, GRAB, TMDX, PLAB,
+  VISN, SE, AMPX, GRRR, MRAM, ENPH, INOD, OPTT.
+- **Gaps (2):** NVO and WYFI — profile, fundamentals, past earnings and news are there, but
+  Finnhub's calendar has no upcoming earnings date for them in the next 120 days.
+- The adapter's paths and field names are confirmed by these real answers.
+- What the test does NOT show: whether the figures are correct, or whether the news articles
+  are really about the company. It measures presence only.
+- Still open: Check 1 below (reading the Terms of Service).
 
 ## Check 1 — Finnhub's free terms (personal investing)
 

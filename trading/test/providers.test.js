@@ -5,6 +5,8 @@ const { createFinnhub, ProviderError } = require("../providers/finnhub");
 const { createProviders } = require("../providers");
 const { createCoverage } = require("../providers/coverage");
 const { createLimiter } = require("../rate-limiter");
+const { createCoinGecko } = require("../providers/coingecko");
+const { createSec } = require("../providers/sec");
 const { readConfig, DATA_PROVIDERS } = require("../config");
 const { mount } = require("../index");
 
@@ -105,7 +107,7 @@ test("provider layer fails closed: unknown name, missing key, missing capability
 });
 
 test("the shipped config is Option A for stocks, and the key comes only from FINNHUB_API_KEY", () => {
-  assert.deepStrictEqual(DATA_PROVIDERS.stock, { profile: "finnhub", fundamentals: "finnhub", earnings: "finnhub", news: "finnhub" });
+  assert.deepStrictEqual(DATA_PROVIDERS, { stock: { profile: "finnhub", fundamentals: "finnhub", earnings: "finnhub", news: "finnhub", filings: "sec" }, crypto: { fundamentals: "coingecko", marketNews: "finnhub" } });
   assert.strictEqual(readConfig({}).providerKeys.finnhub, "");
   assert.strictEqual(readConfig({ FINNHUB_API_KEY: " abc " }).providerKeys.finnhub, "abc");
   assert.strictEqual(createProviders({ config: readConfig({ FINNHUB_API_KEY: KEY }) }).status().stock.news.usable, true);
@@ -113,6 +115,7 @@ test("the shipped config is Option A for stocks, and the key comes only from FIN
 
 const wait = async (cov) => { for (let i = 0; i < 200 && cov.report().running; i++) await new Promise((r) => setTimeout(r, 5)); return cov.report(); };
 const fast = () => createLimiter({ perMinute: 100000, minGapMs: 0, reserve: 0 });
+const STOCK4 = { stock: { profile: "finnhub", fundamentals: "finnhub", earnings: "finnhub", news: "finnhub" } };
 
 test("coverage: reports gaps per stock and capability, and explains a missing P/E for a loss-maker", async () => {
   const answers = {
@@ -123,8 +126,8 @@ test("coverage: reports gaps per stock and capability, and explains a missing P/
     "/company-news": (s) => (s === "BABA" ? { status: 403, body: { error: "You don't have access to this resource." } } : { body: s === "WYFI" ? [] : good["/company-news"].body }),
   };
   const f = fakeFetch(answers);
-  const providers = createProviders({ config: { providerKeys: { finnhub: KEY } }, adapters: { finnhub: (c) => createFinnhub({ apiKey: c.providerKeys.finnhub, fetchImpl: f.impl, now: () => NOW }) }, table: DATA_PROVIDERS });
-  const cov = createCoverage({ providers, symbols: ["MSTR", "OPTT", "WYFI", "BABA"], limiter: fast() });
+  const providers = createProviders({ config: { providerKeys: { finnhub: KEY } }, adapters: { finnhub: (c) => createFinnhub({ apiKey: c.providerKeys.finnhub, fetchImpl: f.impl, now: () => NOW }) }, table: STOCK4, limiterFor: fast });
+  const cov = createCoverage({ providers, symbols: ["MSTR", "OPTT", "WYFI", "BABA"] });
   await cov.run();
   const r = await wait(cov);
   assert.strictEqual(f.calls.length, 20);                         // 4 stocks × 5 calls
@@ -143,12 +146,12 @@ test("coverage: reports gaps per stock and capability, and explains a missing P/
 test("coverage: a 429 stops the test and the rest is 'not checked', never 'no data'", async () => {
   let n = 0;
   const impl = async () => { n++; return n > 2 ? { ok: false, status: 429, headers: { get: () => "60" }, text: async () => "{}" } : { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(n === 1 ? good["/stock/profile2"].body : good["/stock/metric"].body) }; };
-  const providers = createProviders({ config: { providerKeys: { finnhub: KEY } }, adapters: { finnhub: (c) => createFinnhub({ apiKey: c.providerKeys.finnhub, fetchImpl: impl }) }, table: DATA_PROVIDERS });
-  const cov = createCoverage({ providers, symbols: ["MSTR", "NKE"], limiter: fast() });
+  const providers = createProviders({ config: { providerKeys: { finnhub: KEY } }, adapters: { finnhub: (c) => createFinnhub({ apiKey: c.providerKeys.finnhub, fetchImpl: impl }) }, table: STOCK4, limiterFor: fast });
+  const cov = createCoverage({ providers, symbols: ["MSTR", "NKE"] });
   await cov.run();
   const r = await wait(cov);
   assert.strictEqual(n, 3);                                       // nothing was sent after the 429
-  assert.match(r.stopped, /MSTR earnings/);
+  assert.match(r.stopped[0], /MSTR earnings/);
   assert.strictEqual(r.results[0].news.verdict, "not_checked");
   assert.deepStrictEqual(Object.values(r.results[1]).slice(1).map((x) => x.verdict), ["not_checked", "not_checked", "not_checked", "not_checked"]);
 });
@@ -168,7 +171,7 @@ function fakeApp() {
 
 test("provider routes: closed without a login, refuse clearly without a key, and are not wired to anything else", async () => {
   const cfg = { ...readConfig({}), hasKeys: false };
-  const stubs = { client: { redact: (t) => String(t ?? "") }, db: { configured: false, redact: (t) => String(t ?? "") }, monitor: { start: () => false, state: () => ({}) } };
+  const stubs = { client: { redact: (t) => String(t ?? "") }, db: { configured: false, redact: (t) => String(t ?? "") }, monitor: { start: () => false, state: () => ({}) }, research: { start: () => false, state: () => ({}) } };
   const open = fakeApp();
   mount(open, { authOn: false, config: cfg, ...stubs });
   for (const p of ["/api/trading/providers/status", "/api/trading/providers/test", "/api/trading/providers/coverage"]) assert.strictEqual((await open.call(p, { start: "yes", symbol: "MSTR" })).statusCode, 503);
@@ -177,9 +180,68 @@ test("provider routes: closed without a login, refuse clearly without a key, and
   assert.strictEqual((await app.call("/api/trading/providers/status")).body.providers.stock.news.keySet, false);
   const start = await app.call("/api/trading/providers/coverage", { start: "yes" });
   assert.strictEqual(start.statusCode, 400);
-  assert.match(start.body.error, /key for "finnhub" is not set/);
+  assert.match(start.body.error, /no provider for stock is usable/);
   assert.strictEqual((await app.call("/api/trading/providers/coverage")).body.started, false);
   const one = await app.call("/api/trading/providers/test", { symbol: "MSTR" });
   for (let i = 0; i < 100 && !one.body; i++) await new Promise((r) => setTimeout(r, 5)); // the handler answers asynchronously
   assert.strictEqual(one.body.news.code, "MissingKey");
+});
+
+// ---- CoinGecko and SEC adapters ---------------------------------------------
+const respond = (status, body) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, text: async () => JSON.stringify(body) });
+
+test("CoinGecko adapter: explicit coin IDs, key in a header, and a wrong coin is refused", async () => {
+  const calls = [];
+  const coin = { id: "bitcoin", symbol: "btc", name: "Bitcoin", current_price: 90000, market_cap: 1.8e12, market_cap_rank: 1, fully_diluted_valuation: 1.9e12, total_volume: 4e10, circulating_supply: 19.9e6, total_supply: 19.9e6, max_supply: 21e6, ath: 126000, ath_date: "2025-10-06T18:57:42.558Z", last_updated: "2026-11-14T09:00:00.000Z" };
+  const cg = createCoinGecko({ apiKey: "CG-KEY-123456", now: () => NOW, fetchImpl: async (url, opts) => { calls.push({ url: String(url), opts }); return respond(200, String(url).includes("ids=bitcoin") ? [coin] : String(url).includes("ids=ethereum") ? [{ ...coin, id: "ethereum", symbol: "eth", max_supply: null }] : String(url).includes("ids=fetch-ai") ? [{ ...coin, id: "fetch-ai", symbol: "asi" }] : []); } });
+  const btc = await cg.getFundamentals("btc");
+  assert.strictEqual(calls[0].url, "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=bitcoin");
+  assert.strictEqual(calls[0].opts.headers["x-cg-demo-api-key"], "CG-KEY-123456");
+  assert.strictEqual(calls[0].opts.method, "GET");
+  assert.deepStrictEqual([btc.data.marketCapRank, btc.data.maxSupply, btc.source], [1, 21e6, "CoinGecko GET /api/v3/coins/markets"]);
+  assert.strictEqual((await cg.getFundamentals("ETH")).data.maxSupply, null);        // no fixed maximum: null, not 0
+  await assert.rejects(cg.getFundamentals("FET"), (e) => e.code === "WrongCoin");    // the ID returned another ticker
+  assert.strictEqual((await cg.getFundamentals("SUI")).data, null);                  // unknown to the provider
+  await assert.rejects(cg.getFundamentals("SHIB"), (e) => e.code === "BadInput");    // not mapped → nothing is sent
+  await assert.rejects(createCoinGecko({}).getFundamentals("BTC"), (e) => e.code === "MissingKey");
+});
+
+test("SEC adapter: sends nothing without a User-Agent, maps ticker → CIK, keeps only report forms", async () => {
+  await assert.rejects(createSec({}).getFilings("MSTR"), (e) => e.code === "MissingKey");
+  const calls = [];
+  const fetchImpl = async (url, opts) => {
+    calls.push({ url: String(url), ua: opts.headers["User-Agent"] });
+    if (String(url).endsWith("company_tickers.json")) return respond(200, { 0: { cik_str: 1050446, ticker: "MSTR", title: "Strategy Inc" }, 1: { cik_str: 320187, ticker: "NKE", title: "NIKE" } });
+    if (String(url).includes("CIK0001050446")) return respond(200, { name: "Strategy Inc", tickers: ["MSTR", "STRK"], filings: { recent: { form: ["8-K", "4", "10-Q", "SC 13G"], filingDate: ["2026-11-03", "2026-11-02", "2026-10-30", "2026-10-01"], reportDate: ["2026-11-03", "", "2026-09-30", ""], accessionNumber: ["0001050446-26-000111", "x", "0001050446-26-000100", "y"], primaryDocument: ["mstr-8k.htm", "a.xml", "mstr-10q.htm", "b.htm"] } } });
+    return respond(200, { name: "NIKE", tickers: ["XXX"], filings: { recent: { form: [], filingDate: [], accessionNumber: [] } } });
+  };
+  const sec = createSec({ userAgent: "Owner Name owner@example.com", fetchImpl, now: () => NOW });
+  const r = await sec.getFilings("MSTR");
+  assert.ok(calls.every((c) => c.ua === "Owner Name owner@example.com"));
+  assert.strictEqual(calls[1].url, "https://data.sec.gov/submissions/CIK0001050446.json");
+  assert.deepStrictEqual(r.data.filings.map((f) => f.form), ["8-K", "10-Q"]);         // insider forms etc. are left out
+  assert.strictEqual(r.data.filings[1].url, "https://www.sec.gov/Archives/edgar/data/1050446/000105044626000100/mstr-10q.htm");
+  assert.strictEqual((await sec.getFilings("ZZZZ")).data, null);                      // not in the SEC's list
+  await assert.rejects(sec.getFilings("NKE"), (e) => e.code === "WrongCompany");      // the CIK's tickers do not include it
+  assert.strictEqual(calls.filter((c) => c.url.endsWith("company_tickers.json")).length, 1); // the list is fetched once
+});
+
+test("coverage: one provider failing stops only that provider; crypto uses its own core fields", async () => {
+  const adapters = {
+    finnhub: (c) => createFinnhub({ apiKey: c.providerKeys.finnhub, fetchImpl: fakeFetch(good).impl, now: () => NOW }),
+    sec: () => createSec({ userAgent: "" }),                                           // not set up
+    coingecko: () => createCoinGecko({ apiKey: "CG-KEY-123456", fetchImpl: async () => respond(200, [{ id: "bitcoin", symbol: "btc", name: "Bitcoin", market_cap: 1, market_cap_rank: 1, circulating_supply: 1, total_supply: 1, total_volume: 1 }]) }),
+  };
+  const providers = createProviders({ config: { providerKeys: { finnhub: KEY } }, adapters, limiterFor: fast });
+  const stock = createCoverage({ providers, symbols: ["MSTR"], assetClass: "stock" });
+  await stock.run();
+  const s = await wait(stock);
+  assert.deepStrictEqual(["profile", "fundamentals", "earnings", "news", "filings"].map((c) => s.results[0][c].verdict), ["ok", "ok", "ok", "ok", "error"]);
+  assert.match(s.stopped[0], /MSTR filings/);
+  const coin = createCoverage({ providers, symbols: ["BTC"], assetClass: "crypto" });
+  assert.deepStrictEqual(coin.capabilities(), ["fundamentals"]);                       // marketNews is per class, not per coin
+  await coin.run();
+  const c = await wait(coin);
+  assert.deepStrictEqual([c.results[0].fundamentals.verdict, c.results[0].fundamentals.filled, c.fullyCovered], ["ok", 5, ["BTC"]]);
+  assert.deepStrictEqual(providers.requests(), { finnhub: 5, coingecko: 1 }); // nothing was sent to the SEC without a User-Agent
 });

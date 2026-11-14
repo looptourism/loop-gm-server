@@ -4,6 +4,7 @@
 //   /api/trading/admin/…  the Trading Desk's own database (Stage 2)
 //   /api/trading/monitor/… Market Monitoring: status, run now, stored data (Stage 3)
 //   /api/trading/providers/… news / fundamentals providers: status and coverage test
+//   /api/trading/research/… scheduled collection of provider data: status, run now, stored data
 //
 // This is the module's only connection to the rest of the server: server.js
 // calls mount(app, …) once. Nothing here is exposed to the GM, the
@@ -24,9 +25,15 @@ const { createMonitor } = require("./monitor");
 const snapshots = require("./db/snapshots");
 const { createProviders, ProviderError } = require("./providers");
 const { createCoverage } = require("./providers/coverage");
+const { createResearch } = require("./research");
+const researchStore = require("./db/research");
 
 function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }), providers = createProviders({ config }),
-  coverage = createCoverage({ providers, symbols: seedAllowlist().filter((s) => s.assetClass === "stock").map((s) => s.symbol) }) } = {}) {
+  research = createResearch({ config, providers, db }) } = {}) {
+  // One coverage test per asset class, over the owner's seed lists.
+  const coverage = Object.fromEntries(["stock", "crypto"].map((assetClass) => [assetClass,
+    createCoverage({ providers, assetClass, symbols: seedAllowlist().filter((s) => s.assetClass === assetClass).map((s) => s.symbol) })]));
+  const classOf = (req) => (req.query.class === "crypto" ? "crypto" : "stock");
   // Every Trading Desk route: never cached, and closed when the console
   // login is off.
   const loginGuard = (req, res, next) => {
@@ -221,36 +228,80 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     res.json({ ok: true, ...status(), providers: providers.status() });
   });
 
-  // One stock, all four capabilities, with the provider's raw answers:
-  // ?symbol=MSTR  (5 calls). For looking at exactly what the provider returns.
+  // One instrument, every capability configured for its class, with the
+  // provider's raw answers: ?symbol=MSTR  or  ?symbol=BTC&class=crypto
+  // For crypto it also fetches the general crypto headlines.
   app.get("/api/trading/providers/test", loginGuard, async (req, res) => {
     try {
       const symbol = String(req.query.symbol || "").trim().toUpperCase();
-      if (!symbol) throw new ProviderError("pass ?symbol=MSTR", { code: "BadInput" });
+      if (!symbol) throw new ProviderError("pass ?symbol=MSTR (or ?symbol=BTC&class=crypto)", { code: "BadInput" });
+      const assetClass = classOf(req);
       const out = {};
-      for (const c of providers.capabilities) {
-        try { out[c] = await coverage.checkOne(symbol, c, { keepRaw: true }); }
+      const attempt = async (c, fn) => {
+        try { out[c] = await fn(); }
         catch (e) { if (!(e instanceof ProviderError)) throw e; out[c] = { verdict: "error", note: e.message, code: e.code }; }
+      };
+      for (const c of providers.capabilitiesFor(assetClass)) await attempt(c, () => coverage[assetClass].checkOne(symbol, c, { keepRaw: true }));
+      for (const c of providers.capabilitiesFor(assetClass, { perClass: true })) {
+        await attempt(c, async () => {
+          const r = await providers.call(assetClass, c, assetClass);
+          return { provider: r.provider, articles: r.data.length, latest: r.data[0]?.publishedAt || null, firstThree: r.data.slice(0, 3).map(({ raw, ...n }) => n), source: r.source, fetchedAt: r.fetchedAt, note: "general headlines, not per instrument" };
+        });
       }
-      res.json({ ok: true, symbol, ...out });
+      res.json({ ok: true, symbol, assetClass, ...out });
     } catch (e) { fail(res, e); }
   });
 
-  // Coverage of all 22 allowlisted stocks. ?start=yes begins a run (about
-  // three minutes, in the background); without it, shows progress / the report.
+  // Coverage of every allowlisted stock (default) or coin (?class=crypto).
+  // ?start=yes begins a run in the background; without it, shows progress / the report.
   app.get("/api/trading/providers/coverage", loginGuard, async (req, res) => {
     try {
+      const cov = coverage[classOf(req)];
       if (req.query.start === "yes") {
-        providers.get("stock", "profile"); // refuses here, clearly, if the provider or its key is missing
-        await coverage.run();
+        if (!cov.capabilities().some((c) => { try { providers.get(classOf(req), c); return true; } catch { return false; } })) {
+          throw new ProviderError(`no provider for ${classOf(req)} is usable: check /api/trading/providers/status`, { code: "NotConfigured" });
+        }
+        await cov.run();
       }
-      const r = coverage.report();
+      const r = cov.report();
       res.json({ ok: true, ...r, next: r.started ? (r.running ? "still running — reload in a minute" : "finished") : "add ?start=yes to begin" });
     } catch (e) { fail(res, e); }
   });
 
-  monitor.start(); // does nothing unless TRADING_MONITOR_ENABLED is exactly "true"
-  return { monitor, providers, coverage };
+  // --- Research collection (stores what the providers return) --------------
+
+  // Schedule state, the last runs, and what is stored per instrument. Read-only.
+  app.get("/api/trading/research/status", dbGuard, async (req, res) => {
+    try {
+      const [runs, stored] = await Promise.all([
+        db.query("select kind, trigger, status, started_at, finished_at, instruments, requests, rows_inserted, rows_unchanged, problems from trading.monitor_runs where kind in ('research', 'news') order by started_at desc limit 8"),
+        researchStore.researchCoverage(db),
+      ]);
+      res.json({ ok: true, ...status(), research: research.state(), providers: providers.status(), recentRuns: runs.rows, stored });
+    } catch (e) { fail(res, e); }
+  });
+
+  // Collects once, now — whatever is due; &all=yes collects everything.
+  // Needs ?confirm=yes. Works in the background (a full run takes about 5 minutes).
+  app.get("/api/trading/research/run", dbGuard, (req, res) => {
+    if (req.query.confirm !== "yes") return fail(res, new ProviderError("nothing was started: add ?confirm=yes", { code: "BadInput" }));
+    const busy = research.state().running;
+    if (busy) return res.status(409).json({ ok: false, error: "a run is already in progress", running: busy });
+    research.tick("manual", { all: req.query.all === "yes" });
+    res.json({ ok: true, ...status(), started: true, next: "open /api/trading/research/status in a few minutes" });
+  });
+
+  // Exactly what an agent will be given for one instrument: ?symbol=MSTR
+  app.get("/api/trading/research/view", dbGuard, async (req, res) => {
+    try {
+      const view = await researchStore.readResearchView(db, req.query.symbol);
+      res.status(view.ok ? 200 : 404).json(view);
+    } catch (e) { fail(res, e); }
+  });
+
+  monitor.start();  // both do nothing unless TRADING_MONITOR_ENABLED is exactly "true"
+  research.start();
+  return { monitor, providers, coverage, research };
 }
 
 module.exports = { mount };
