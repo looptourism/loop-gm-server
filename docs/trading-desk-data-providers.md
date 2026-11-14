@@ -1,8 +1,18 @@
 # Trading Desk — news, fundamentals and earnings: provider proposal (Stage 3)
 
 **Decision (2026-11-13): Option A.** Built so far: the provider layer, a Finnhub adapter and
-a coverage test for the 22 stocks. Nothing is stored and no agent uses it yet — that waits for
-the two checks below.
+a coverage test for the 22 stocks. Nothing is stored and no agent uses it yet.
+
+**Coverage result (real run on the Render server, 2026-11-14 08:30 UTC, Finnhub free key):**
+all 22 stocks checked, 110 calls in 2 min 44 s, no errors and no rate limiting.
+- **Fully covered (20):** MSTR, BABA, ADBE, ORCL, NKE, TTD, HIMS, NEM, INTU, GRAB, TMDX, PLAB,
+  VISN, SE, AMPX, GRRR, MRAM, ENPH, INOD, OPTT.
+- **Gaps (2):** NVO and WYFI — profile, fundamentals, past earnings and news are there, but
+  Finnhub's calendar has no upcoming earnings date for them in the next 120 days.
+- The adapter's paths and field names are confirmed by these real answers.
+- What the test does NOT show: whether the figures are correct, or whether the news articles
+  are really about the company. It measures presence only.
+- Still open: Check 1 below (reading the Terms of Service).
 
 ## Check 1 — Finnhub's free terms (personal investing)
 

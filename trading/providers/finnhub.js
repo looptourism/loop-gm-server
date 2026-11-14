@@ -1,11 +1,10 @@
 // ---------------------------------------------------------------------------
 // Finnhub adapter — READ-ONLY. Stocks: profile, fundamentals, earnings, news.
 //
-// NOT YET CONFIRMED BY A REAL CALL. Finnhub's documentation could not be
-// opened from the coding session, so the paths and field names below are the
-// publicly known ones and must be proven by the coverage test on the Render
-// server (docs/trading-desk-data-providers.md) before anything is built on
-// this file. The coverage test exists for exactly that.
+// Confirmed by real calls from the Render server on 2026-11-14 (free key):
+// all five paths and the field names below returned data for the 22
+// allowlisted stocks. Finnhub's documentation itself could not be opened
+// from the coding session, so anything beyond these five calls is unproven.
 //
 // Guards: GET only; only the paths listed in PATHS; only https://finnhub.io;
 // the key travels in a header, never in the URL, and is stripped from every
