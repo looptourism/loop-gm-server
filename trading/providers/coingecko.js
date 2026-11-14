@@ -2,9 +2,8 @@
 // CoinGecko adapter — READ-ONLY. Crypto fundamentals only (market cap, rank,
 // supply). CoinGecko has nothing for stocks.
 //
-// Confirmed by a real call from the Render server on 2026-11-14 for BTC
-// (path, header, field names). The other eight coin IDs are confirmed only
-// once the crypto coverage test has run.
+// Confirmed by real calls from the Render server on 2026-11-14: path,
+// header, field names, and all nine coin IDs below.
 //
 // CoinGecko identifies coins by its own IDs, not by ticker — and several
 // coins can share a ticker. So the mapping below is explicit, and every
@@ -16,7 +15,7 @@ const { ProviderError } = require("./finnhub");
 const BASE_URL = "https://api.coingecko.com/api/v3";
 const TIMEOUT_MS = 20000;
 
-// Our ticker (eToro's symbol) → CoinGecko coin ID. To be confirmed by the test route.
+// Our ticker (eToro's symbol) → CoinGecko coin ID.
 const COIN_IDS = {
   BTC: "bitcoin", ETH: "ethereum", SOL: "solana", XRP: "ripple", ADA: "cardano",
   DOGE: "dogecoin", ATOM: "cosmos", SUI: "sui", FET: "fetch-ai",

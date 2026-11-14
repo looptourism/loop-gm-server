@@ -9,7 +9,7 @@
 | Provider layer | One interface; `DATA_PROVIDERS` in `trading/config.js` names the provider per capability | — |
 | Finnhub — stocks | Profile, fundamentals, earnings, company news | **Yes** (22 stocks, see below) |
 | Finnhub — crypto | General crypto headlines (not per coin) | **Yes** (92 articles, 2026-11-14) |
-| CoinGecko — crypto | Market cap, rank, supply, volume for the 9 coins | **Yes for BTC** (2026-11-14); the other 8 coins pending the crypto coverage test |
+| CoinGecko — crypto | Market cap, rank, supply, volume for the 9 coins | **Yes** — all 9 coins fully covered in the real coverage run (2026-11-14 09:19 UTC, 9 calls in 24 s); the hand-written coin IDs, including FET, passed the ticker check |
 | SEC EDGAR — stocks | Official filings with dates and links: the last 2 annual, 4 quarterly and 15 current reports | **Yes for MSTR** (2026-11-14); foreign issuers not seen yet |
 | Research job | Stores all of the above on a schedule; agents will read only the stored rows | No (tested against fakes and a local Postgres) |
 
