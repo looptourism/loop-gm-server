@@ -32,6 +32,10 @@ function readConfig(env = process.env) {
     // without a key is simply unavailable; nothing falls back to another one.
     providerKeys: {
       finnhub: (env.FINNHUB_API_KEY || "").trim(),
+      coingecko: (env.COINGECKO_API_KEY || "").trim(),
+      // SEC EDGAR has no key. It requires every caller to identify itself in
+      // the User-Agent header ("Name email"); that text is the owner's to set.
+      sec: (env.SEC_USER_AGENT || "").trim(),
     },
   };
 }
@@ -48,8 +52,31 @@ function readConfig(env = process.env) {
 // back). Crypto capabilities are added when CoinGecko is integrated.
 // ---------------------------------------------------------------------------
 const DATA_PROVIDERS = {
-  stock: { profile: "finnhub", fundamentals: "finnhub", earnings: "finnhub", news: "finnhub" },
-  crypto: {},
+  stock: { profile: "finnhub", fundamentals: "finnhub", earnings: "finnhub", news: "finnhub", filings: "sec" },
+  crypto: { fundamentals: "coingecko", marketNews: "finnhub" },
+};
+
+// Request ceilings per provider — every call to a provider (collection job,
+// coverage test, test routes) goes through the same limiter.
+//   Finnhub free: 60 calls/minute          → we use at most 40
+//   CoinGecko Demo: reported 30–100/minute, 10,000/month → at most 10/minute
+//   SEC EDGAR: 10 requests/second          → at most 60/minute
+const PROVIDER_LIMITS = {
+  finnhub: { perMinute: 40, minGapMs: 1500 },
+  coingecko: { perMinute: 10, minGapMs: 3000 },
+  sec: { perMinute: 60, minGapMs: 500 },
+};
+
+// The research collection job (news, fundamentals, earnings, filings).
+// It runs under the same switch as price monitoring (TRADING_MONITOR_ENABLED).
+// Per day with 22 stocks and 9 coins: about 180 Finnhub calls, 9 CoinGecko
+// calls (≈270 a month of the 10,000 allowed) and 23 SEC calls.
+const RESEARCH = {
+  cron: "40 * * * *",                    // UTC; each run only does what is due
+  dailyEveryMs: 24 * 60 * 60 * 1000,              // profile, fundamentals, earnings, filings
+  newsEveryMs: 6 * 60 * 60 * 1000,                // company news + general crypto news
+  newsDaysFirstRun: 30,
+  newsDays: 3,
 };
 
 // ---------------------------------------------------------------------------
@@ -85,4 +112,4 @@ const MONITORING = {
   rateFreshSec: 20 * 60,
 };
 
-module.exports = { ETORO_BASE_URL, MONITORING, DATA_PROVIDERS, readConfig };
+module.exports = { ETORO_BASE_URL, MONITORING, DATA_PROVIDERS, PROVIDER_LIMITS, RESEARCH, readConfig };

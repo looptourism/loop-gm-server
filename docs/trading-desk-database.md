@@ -30,6 +30,9 @@ Security on and access revoked from Supabase's `anon` / `authenticated` roles.
 | `schema_migrations` | Which migration files were applied | — |
 | `monitor_runs` (migration `002_monitoring`, Stage 3) | One row per collection run: requests sent, rows stored, problems | status is `ok`, `partial` or `failed` |
 
+| `research_snapshots` (migration `003_research`) | Provider answers per instrument: profile, fundamentals, earnings, filings — with provider, source, time | one row per different answer; unchanged answers only move `last_confirmed_at` |
+| `news_items` (migration `003_research`) | News articles per instrument, plus general crypto headlines | one row per article per instrument |
+
 Migration `002_monitoring` also makes `market_snapshots` refuse duplicates (one rate per
 instrument and eToro timestamp, one candle per instrument, interval and start time) and adds
 `revised_at`. How to apply it: `docs/trading-desk-monitoring.md`.

@@ -11,8 +11,6 @@
 // take about three minutes. A 429 or a rejected key stops the test and the
 // remaining stocks are reported as not checked — never as "no data".
 // ---------------------------------------------------------------------------
-const { createLimiter } = require("../rate-limiter");
-
 const CORE_FUNDAMENTALS = ["marketCapUsdMillions", "peTtm", "epsTtm", "priceToSalesTtm", "grossMarginTtmPct", "netMarginTtmPct", "revenueGrowthTtmYoyPct", "debtToEquity", "week52High", "week52Low"];
 
 // Turns one answer into a verdict: "ok", "partial" or "gap", with the facts.
@@ -20,13 +18,16 @@ const JUDGE = {
   profile: (r) => (r.data
     ? { verdict: "ok", name: r.data.name, exchange: r.data.exchange, country: r.data.country }
     : { verdict: "gap", note: "the provider does not know this symbol" }),
-  fundamentals: (r) => {
+  fundamentals: (r, core = CORE_FUNDAMENTALS) => {
     if (!r.data) return { verdict: "gap", note: "no figures returned" };
-    const missing = CORE_FUNDAMENTALS.filter((k) => r.data[k] === null);
+    const missing = core.filter((k) => r.data[k] === null || r.data[k] === undefined);
     // A loss-making company has no P/E — that is not a gap in the data.
     const explained = missing.filter((k) => k === "peTtm" && typeof r.data.epsTtm === "number" && r.data.epsTtm <= 0);
     const real = missing.filter((k) => !explained.includes(k));
-    return { verdict: real.length === 0 ? "ok" : real.length <= 3 ? "partial" : "gap", filled: CORE_FUNDAMENTALS.length - missing.length, of: CORE_FUNDAMENTALS.length, missing: real, noPeBecauseLossMaking: explained.length > 0, providerFieldCount: r.providerFieldCount ?? null };
+    const out = { verdict: real.length === 0 ? "ok" : real.length <= core.length * 0.3 ? "partial" : "gap", filled: core.length - missing.length, of: core.length, missing: real };
+    if (core === CORE_FUNDAMENTALS) { out.noPeBecauseLossMaking = explained.length > 0; out.providerFieldCount = r.providerFieldCount ?? null; }
+    else out.name = r.data.name ?? null;
+    return out;
   },
   earnings: (r) => {
     const h = r.data.history, u = r.data.upcoming;
@@ -38,36 +39,43 @@ const JUDGE = {
     };
   },
   news: (r) => ({ verdict: r.data.length === 0 ? "gap" : r.data.length < 5 ? "partial" : "ok", articles: r.data.length, windowDays: r.windowDays, latest: r.data[0]?.publishedAt || null, publishers: [...new Set(r.data.map((n) => n.publisher).filter(Boolean))].slice(0, 5) }),
+  filings: (r) => {
+    if (!r.data) return { verdict: "gap", note: "the SEC's ticker list does not have this symbol" };
+    const f = r.data.filings;
+    return { verdict: f.length === 0 ? "gap" : "ok", company: r.data.companyName, filings: f.length, latest: f[0] ? `${f[0].form} filed ${f[0].filedOn}` : null, forms: [...new Set(f.map((x) => x.form))] };
+  },
+  marketNews: (r) => ({ verdict: r.data.length === 0 ? "gap" : "ok", articles: r.data.length, latest: r.data[0]?.publishedAt || null, publishers: [...new Set(r.data.map((n) => n.publisher).filter(Boolean))].slice(0, 5), note: "general headlines for the asset class, not per instrument" }),
 };
 
-function createCoverage({ providers, symbols, assetClass = "stock", limiter = createLimiter({ perMinute: 40, minGapMs: 1500, reserve: 0 }), now = () => new Date() }) {
+const STOPS = ["RateLimited", "BadKey", "MissingKey", "NotConfigured", "UnknownProvider", "RateBudgetPaused", "NotOffered"];
+
+function createCoverage({ providers, symbols, assetClass = "stock", now = () => new Date() }) {
   let job = null; // the current or last run, kept in memory only
+  const capabilities = () => providers.capabilitiesFor(assetClass);
 
   async function checkOne(symbol, capability, { keepRaw = false } = {}) {
-    const a = providers.get(assetClass, capability); // throws when not usable
-    for (let i = 0; i < (a.callsPer?.[capability] || 1); i++) await limiter.take();
-    const r = await a[providers.method(capability)](symbol);
-    const out = { provider: r.provider, ...JUDGE[capability](r), source: r.source, fetchedAt: r.fetchedAt };
+    const r = await providers.call(assetClass, capability, symbol); // throws when not usable
+    const core = capability === "fundamentals" ? providers.coreFundamentals(assetClass) || CORE_FUNDAMENTALS : undefined;
+    const out = { provider: r.provider, ...JUDGE[capability](r, core), source: r.source, fetchedAt: r.fetchedAt };
     if (keepRaw) { out.data = r.data; out.raw = r.raw; }
     return out;
   }
 
   async function run() {
     if (job?.running) return job;
-    job = { running: true, startedAt: now().toISOString(), finishedAt: null, total: symbols.length, done: 0, stopped: null, results: [] };
+    job = { running: true, startedAt: now().toISOString(), finishedAt: null, total: symbols.length, done: 0, stopped: {}, results: [] };
     (async () => {
       for (const symbol of symbols) {
         const row = { symbol };
-        for (const capability of providers.capabilities) {
-          if (job.stopped) { row[capability] = { verdict: "not_checked", note: job.stopped }; continue; }
+        for (const capability of capabilities()) {
+          const provider = providers.providerOf(assetClass, capability);
+          if (job.stopped[provider]) { row[capability] = { verdict: "not_checked", note: job.stopped[provider] }; continue; }
           try { row[capability] = await checkOne(symbol, capability); }
           catch (e) {
             const msg = providers.redact(e?.message || String(e));
             row[capability] = { verdict: e?.code === "NotInPlan" ? "gap" : "error", note: e?.code === "NotInPlan" ? `not available on this plan (${msg})` : msg };
-            if (["RateLimited", "BadKey", "MissingKey", "NotConfigured", "UnknownProvider", "RateBudgetPaused"].includes(e?.code)) {
-              if (e.code === "RateLimited") limiter.pause(5 * 60 * 1000);
-              job.stopped = `stopped at ${symbol} ${capability}: ${msg}`;
-            }
+            // One provider failing stops only that provider; the others carry on.
+            if (STOPS.includes(e?.code)) job.stopped[provider] = `stopped at ${symbol} ${capability}: ${msg}`;
           }
         }
         job.results.push(row);
@@ -79,19 +87,21 @@ function createCoverage({ providers, symbols, assetClass = "stock", limiter = cr
     return job;
   }
 
-  // The report: every stock, plus the list of gaps in plain words.
+  // The report: every instrument, plus the list of gaps in plain words.
   function report() {
-    if (!job) return { started: false };
+    if (!job) return { started: false, assetClass };
+    const caps = capabilities();
     const gaps = [];
-    for (const row of job.results) for (const c of providers.capabilities) {
+    for (const row of job.results) for (const c of caps) {
       const v = row[c]?.verdict;
       if (v && v !== "ok") gaps.push(`${row.symbol} ${c}: ${v}${row[c].missing?.length ? ` (missing ${row[c].missing.join(", ")})` : row[c].note ? ` (${row[c].note})` : ""}`);
     }
-    const fully = job.results.filter((row) => providers.capabilities.every((c) => row[c]?.verdict === "ok")).map((r) => r.symbol);
-    return { started: true, running: job.running, startedAt: job.startedAt, finishedAt: job.finishedAt, progress: `${job.done} of ${job.total}`, stopped: job.stopped, fullyCovered: fully, gaps, results: job.results };
+    const fully = job.results.filter((row) => caps.every((c) => row[c]?.verdict === "ok")).map((r) => r.symbol);
+    const stopped = Object.values(job.stopped);
+    return { started: true, assetClass, running: job.running, startedAt: job.startedAt, finishedAt: job.finishedAt, progress: `${job.done} of ${job.total}`, stopped: stopped.length ? stopped : null, fullyCovered: fully, gaps, results: job.results };
   }
 
-  return { run, report, checkOne };
+  return { run, report, checkOne, capabilities };
 }
 
-module.exports = { createCoverage, CORE_FUNDAMENTALS, JUDGE };
+module.exports = { createCoverage, CORE_FUNDAMENTALS, JUDGE, STOPS };
