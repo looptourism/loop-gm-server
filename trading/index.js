@@ -252,6 +252,32 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     } catch (e) { fail(res, e); }
   });
 
+  // Side by side for a few stocks: what the SEC has (filings by kind) and what
+  // Finnhub has (fundamentals, quarterly earnings) — to see whether one fills
+  // the other's gaps. ?symbols=BABA,NVO,GRAB,SE  (5 calls per symbol, no raw data)
+  app.get("/api/trading/providers/compare", loginGuard, async (req, res) => {
+    try {
+      const symbols = String(req.query.symbols || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
+      if (!symbols.length || symbols.length > 6) throw new ProviderError("pass ?symbols=BABA,NVO,GRAB,SE (1 to 6 symbols)", { code: "BadInput" });
+      const results = [];
+      for (const symbol of symbols) {
+        const row = { symbol };
+        for (const c of ["filings", "fundamentals", "earnings"]) {
+          try { row[c] = await coverage.stock.checkOne(symbol, c); }
+          catch (e) { if (!(e instanceof ProviderError)) throw e; row[c] = { verdict: "error", note: e.message, code: e.code }; }
+        }
+        const quarterlyAtSec = row.filings.quarterlyReports > 0;
+        const quarterlyElsewhere = row.earnings.pastQuartersWithActual > 0 && row.fundamentals.verdict !== "gap" && row.fundamentals.verdict !== "error";
+        row.summary = row.filings.verdict === "error" || row.earnings.verdict === "error" ? "could not be checked — see the errors"
+          : quarterlyAtSec ? "the SEC has quarterly reports for this company"
+          : quarterlyElsewhere ? `the SEC has no quarterly reports; ${row.earnings.provider} has ${row.earnings.pastQuartersWithActual} quarter(s) of earnings (latest ${row.earnings.latestPeriod}) and ${row.fundamentals.filled} of ${row.fundamentals.of} core figures`
+          : "GAP: no quarterly reports at the SEC and no quarterly figures from the other provider";
+        results.push(row);
+      }
+      res.json({ ok: true, results });
+    } catch (e) { fail(res, e); }
+  });
+
   // Coverage of every allowlisted stock (default) or coin (?class=crypto).
   // ?start=yes begins a run in the background; without it, shows progress / the report.
   app.get("/api/trading/providers/coverage", loginGuard, async (req, res) => {
