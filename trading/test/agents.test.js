@@ -324,6 +324,14 @@ dbTest("a full run: analysis → risk review → portfolio manager, saved with s
   assert.strictEqual(await count("select count(*) as n from trading.audit_log where event_type = 'analysis.created'"), 5);
   assert.strictEqual(await count("select count(*) as n from trading.audit_log where event_type = 'proposal.created'"), 1);
   assert.ok(out.usage.estimatedCostUsd > 0 && out.usage.requests === claude.calls.length);
+  // the run itself is in the permanent log, so it survives a server restart
+  const runs = await agents.recentRuns();
+  assert.deepStrictEqual(runs.map((r) => r.event), ["finished", "started"]);
+  assert.deepStrictEqual([runs[0].proposals.length, runs[0].usage.requests, runs[1].symbols], [1, claude.calls.length, ["MSTR", "BTC"]]);
+  assert.strictEqual(runs[0].warning, undefined);
+  await db.query("insert into trading.audit_log (event_type, entity_type, actor, data) values ('agents.run_started', 'agents_run', 'system:agents', '{\"symbols\":[\"NVO\"]}')");
+  assert.match((await agents.recentRuns())[0].warning, /server restarted while it was working/); // a start with no finish
+  await db.query("insert into trading.audit_log (event_type, entity_type, actor, data) values ('agents.run_finished', 'agents_run', 'system:agents', '{}')");
   assert.match(out.orderPlacement, /none/);
 });
 

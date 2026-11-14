@@ -147,6 +147,7 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
     if (running) return { ok: false, skipped: "a run is already in progress", running };
     running = { trigger, startedAt: now().toISOString(), step: "starting", symbols };
     const totals = { inputTokens: 0, outputTokens: 0, requests: 0 };
+    let started = false;
     const result = { ok: false, trigger, startedAt: running.startedAt, model: settings.model, instruments: [], proposals: [], problems: [] };
     try {
       const notReady = ready();
@@ -156,6 +157,10 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
       for (const w of wanted.filter((x) => typeof x === "string")) result.problems.push(`${w}: not an allowlisted, verified instrument — skipped`);
       const instruments = wanted.filter((x) => typeof x !== "string");
       if (!instruments.length) { result.skipped = "no allowlisted, verified instrument to analyse"; return result; }
+      // Written to the permanent log before any money is spent, so a run that
+      // is cut short by a server restart still leaves a trace.
+      await record("agents.run_started", { trigger, symbols: instruments.map((i) => i.symbol), model: settings.model, startedAt: result.startedAt });
+      started = true;
       running.step = "reading the demo account";
       const account = await readAccount();
       if (!account.ok) result.problems.push(account.reason);
@@ -192,14 +197,29 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
       result.usage = { ...totals, estimatedCostUsd: Math.round(((totals.inputTokens * settings.pricePerMTok.input + totals.outputTokens * settings.pricePerMTok.output) / 1e6) * 100) / 100, note: `estimate at list price for ${settings.model}` };
       result.orderPlacement = "none — proposals are saved as drafts only";
       log(result.skipped ? `skipped: ${result.skipped}` : result.error ? `failed: ${result.error}` : `${result.instruments.length} instrument(s), ${result.proposals.length} draft proposal(s), ${result.problems.length} problem(s), about $${result.usage.estimatedCostUsd}`);
+      if (started) await record("agents.run_finished", result);
       lastResult = result;
       running = null;
     }
     return result;
   }
 
+  // The run log lives in the database, not in memory: the server can restart
+  // (a deploy, or the host putting an idle service to sleep) and memory is lost.
+  async function record(eventType, data) {
+    try { await appendAudit(db, { eventType, entityType: "agents_run", actor: "system:agents", data }); }
+    catch (e) { log(`could not record ${eventType}:`, clean(e?.message)); }
+  }
+  async function recentRuns(limit = 6) {
+    const r = await db.query("select event_type, data, created_at from trading.audit_log where event_type in ('agents.run_started', 'agents.run_finished') order by seq desc limit $1", [limit]);
+    const rows = r.rows.map((x) => ({ event: x.event_type === "agents.run_started" ? "started" : "finished", at: new Date(x.created_at).toISOString(), ...x.data }));
+    // A "started" with no "finished" after it means the run was cut short.
+    if (rows.length && rows[0].event === "started" && !running) rows[0].warning = "this run has no finish record: the server restarted while it was working. Analyses saved before the restart are kept; start the run again.";
+    return rows;
+  }
+
   const state = () => ({ ready: ready() === null, notReadyBecause: ready(), model: settings.model, schedule: "none — runs only when started by the owner", running, lastResult });
-  return { run, state, readAccount };
+  return { run, state, readAccount, recentRuns };
 }
 
 module.exports = { createAgents };
