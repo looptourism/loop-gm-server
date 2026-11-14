@@ -1,7 +1,60 @@
 # Trading Desk — news, fundamentals and earnings: provider proposal (Stage 3)
 
-**Nothing here is integrated.** This is a proposal for you to choose from. eToro's API gives
-prices only; news, company fundamentals and earnings dates need another source.
+**Decision (2026-11-13): Option A.** Built so far: the provider layer, a Finnhub adapter and
+a coverage test for the 22 stocks. Nothing is stored and no agent uses it yet — that waits for
+the two checks below.
+
+## Check 1 — Finnhub's free terms (personal investing)
+
+What could be established without opening finnhub.io (it stayed unreachable from the coding
+session; these are search-result snippets of Finnhub's own pages, 2026-11-13):
+
+- Pricing page: the Free plan's licence line reads "Personal Use", "Terms apply"; 60 API calls/minute.
+- Sign-up page: you confirm you are either "a qualified non-professional (personal use)" or a
+  commercial / professional user with written approval.
+
+That matches your use (your own investing decisions, nothing shown or sold to others). **It is
+not a full confirmation: the Terms of Service text itself was not read.** Please read it once
+on your phone (finnhub.io → footer → Terms of Service) and check three points:
+1. the definition of "non-professional" — whether it fits someone investing only their own money;
+2. nothing forbids storing the data on your own server for your own use;
+3. nothing forbids feeding the data to an AI model or an automated tool.
+If any of the three is unclear, send me the paragraph.
+
+## Check 2 — coverage of your 22 stocks (phone)
+
+1. finnhub.io → **Get free API key** → sign up (choose the personal / non-professional option) → copy the key.
+2. Render → **loop-gm-server-1** → **Environment** → add `FINNHUB_API_KEY` = the key → **Save, rebuild, and deploy**.
+3. Log in to the console, then open `/api/trading/providers/status` — expect `"usable": true` four times under `stock`.
+4. Open `/api/trading/providers/test?symbol=MSTR` — one stock with Finnhub's raw answers.
+   **Send me this output first**: the adapter's paths and field names have not been proven by a
+   real call yet, and this shows whether they are right.
+5. Open `/api/trading/providers/coverage?start=yes`, wait about 3 minutes, then open
+   `/api/trading/providers/coverage` and send me the output. `gaps` lists every stock and
+   capability that is missing or thin; `fullyCovered` lists the rest.
+
+The test makes 110 calls at no more than 40 per minute (Finnhub's free limit: 60).
+What counts as a gap: profile — symbol unknown; fundamentals — more than 3 of 10 core figures
+missing (a missing P/E for a loss-making company is not counted); earnings — no past quarter
+with an actual figure (`partial`: fewer than 4 quarters, or no upcoming date); news — no
+article in 30 days (`partial`: fewer than 5).
+
+## Switching to Option B later
+
+`DATA_PROVIDERS` in `trading/config.js` is the only place that names a provider, per
+capability (`profile`, `fundamentals`, `earnings`, `news`). Everything else asks the layer for
+a capability. Switching the stock side to FMP is then: change `"finnhub"` to `"fmp"` on the
+lines you want, add `FMP_API_KEY` in Render, deploy. It can be partial (e.g. only `fundamentals`).
+
+**One honest caveat:** the FMP adapter itself (one file, `trading/providers/fmp.js`, plus one
+line registering it) is **not written yet**. FMP's documentation could not be opened from the
+coding session and there is no key to test with; an adapter written blind would be untested
+code. Until it exists, naming `"fmp"` in the config makes that capability unavailable (it
+fails closed, with no silent fallback to Finnhub). The coverage test runs unchanged against any provider.
+
+---
+
+# The original proposal (for reference)
 
 **How reliable the figures below are:** the providers' own websites could not be opened from
 this session (blocked by its network settings), so prices and limits come from web search

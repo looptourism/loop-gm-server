@@ -28,8 +28,29 @@ function readConfig(env = process.env) {
     // collects prices, it cannot trade. Same rule as the kill switch — only
     // the exact string "true" turns it on.
     monitorEnabled: env.TRADING_MONITOR_ENABLED === "true",
+    // Keys of the news / fundamentals providers, by provider name. A provider
+    // without a key is simply unavailable; nothing falls back to another one.
+    providerKeys: {
+      finnhub: (env.FINNHUB_API_KEY || "").trim(),
+    },
   };
 }
+
+// ---------------------------------------------------------------------------
+// News, fundamentals and earnings: WHICH provider answers WHICH question.
+// This table is the only place that names a provider. The rest of the code
+// asks for a capability ("stock" + "news") and gets whatever is named here.
+//
+// Owner's choice (2026-11-13): Option A — Finnhub for stocks.
+// To move a capability to another provider, change its name here. The name
+// must be one registered in trading/providers/index.js; an unknown name or a
+// missing key makes that capability unavailable (it never silently falls
+// back). Crypto capabilities are added when CoinGecko is integrated.
+// ---------------------------------------------------------------------------
+const DATA_PROVIDERS = {
+  stock: { profile: "finnhub", fundamentals: "finnhub", earnings: "finnhub", news: "finnhub" },
+  crypto: {},
+};
 
 // ---------------------------------------------------------------------------
 // Market Monitoring settings (Stage 3) — everything the job does is decided
@@ -64,4 +85,4 @@ const MONITORING = {
   rateFreshSec: 20 * 60,
 };
 
-module.exports = { ETORO_BASE_URL, MONITORING, readConfig };
+module.exports = { ETORO_BASE_URL, MONITORING, DATA_PROVIDERS, readConfig };

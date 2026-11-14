@@ -5,9 +5,12 @@ is on an allowlist, active and verified, and stores them as timestamped snapshot
 Trading Desk database. Agents (Stage 4) will read **only** these stored snapshots.
 The job can only read market data; the client it uses has no order call.
 
-**Status (2026-11-13):** written and tested against a fake eToro and a local Postgres 16
-(47 tests pass). **Not yet run against the real eToro API or Supabase** — that needs the steps
-under "Turning it on" below, from your phone. Until then nothing here counts as working.
+**Status (2026-11-13): confirmed by a real run** on the Render server against the eToro demo
+API and Supabase (manual run at 12:29 UTC): 30 instruments, 61 requests, all three collections
+`ok` with no problems — 30 rates, 11,681 daily candles, 7,182 hourly candles; each batch of 30
+candle requests took 60 seconds (the 30-per-minute ceiling). The schedule itself
+(`TRADING_MONITOR_ENABLED`) had not been switched on at that point. One allowlisted symbol is
+not verified on eToro and is therefore not monitored (30 of 31).
 
 ## What is collected
 
@@ -69,7 +72,7 @@ It is separate from `TRADING_ENABLED` (the order kill switch), which stays `fals
 
 ## Limitations
 
-1. Not yet confirmed against the real API (see Status).
+1. The 15-minute schedule has not been observed running yet (only the manual run).
 2. Stock rates outside market hours simply stop changing; they are stored once and shown as
    not fresh. The job does not know market hours — that is the Stage 5 calendar.
 3. Daily candles are assumed to start at 00:00 UTC (as seen in Stage 1). If eToro still adjusts
