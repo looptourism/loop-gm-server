@@ -72,7 +72,7 @@ It is separate from `TRADING_ENABLED` (the order kill switch), which stays `fals
 
 ## Limitations
 
-1. The 15-minute schedule has not been observed running yet (only the manual run).
+1. The 15-minute schedule is confirmed running without gaps (2026-11-15, after the Render service was moved off the plan that sleeps when idle).
 2. Stock rates outside market hours simply stop changing; they are stored once and shown as
    not fresh. The job does not know market hours — that is the Stage 5 calendar.
 3. Daily candles are assumed to start at 00:00 UTC (as seen in Stage 1). If eToro still adjusts
