@@ -9,7 +9,7 @@ const path = require("path");
 const { computeTechnicals } = require("../agents/technicals");
 const { paramsHash, canonicalParams } = require("../proposals");
 const { SUBMIT, VALIDATE, expandEvidence } = require("../agents/schemas");
-const { toolDefs, TOOLSETS, createToolbox } = require("../agents/tools");
+const { toolDefs, toolNames, TOOLSETS, createToolbox } = require("../agents/tools");
 const { runAgent } = require("../agents/runner");
 const { createAgents } = require("../agents/pipeline");
 const PROMPTS = require("../agents/prompts");
@@ -55,9 +55,12 @@ test("the proposal hash is stable and changes with every trade parameter", () =>
 
 // ---- isolation and tool surface --------------------------------------------
 test("the agents have read-only tools only, and nothing is shared with the rest of the server", () => {
-  const names = new Set(Object.values(TOOLSETS).flat());
-  for (const n of names) assert.match(n, /^get_/);     // every tool reads; none writes, sends or trades
-  for (const agent of Object.keys(TOOLSETS)) assert.ok(toolDefs(agent).every((t) => t.description && t.input_schema));
+  const sets = [toolNames("stock"), toolNames("crypto"), toolNames("risk", "stock"), toolNames("risk", "crypto"), toolNames("portfolio_manager")];
+  for (const n of new Set(sets.flat())) assert.match(n, /^get_/);     // every tool reads; none writes, sends or trades
+  for (const [agent, cls] of [["stock"], ["crypto"], ["risk", "stock"], ["risk", "crypto"], ["portfolio_manager"]]) assert.ok(toolDefs(agent, cls).every((t) => t.description && t.input_schema));
+  // the reviewer can read everything the analyst it checks could read
+  for (const cls of ["stock", "crypto"]) for (const n of toolNames(cls)) assert.ok(toolNames("risk", cls).includes(n));
+  assert.ok(!toolNames("risk", "stock").includes("get_coin_fundamentals"));
   assert.ok(!TOOLSETS.stock.includes("get_coin_fundamentals") && !TOOLSETS.crypto.includes("get_filings"));
   assert.ok(new Set(Object.values(PROMPTS)).size === 4); // four different system prompts
   // server.js touches the Trading Desk in exactly one place: mounting its routes.
@@ -270,6 +273,7 @@ if (TEST_URL) {
     for (const [id, symbol, cls] of [[2001, "MSTR", "stock"], [100000, "BTC", "crypto"], [2009, "NKE", "stock"]]) {
       await db.query("insert into trading.instruments (instrument_id, symbol, display_name, asset_class, exchange, raw, source, fetched_at) values ($1, $2, $3, $4, 'NASDAQ', '{}', 'test', now())", [id, symbol, `${symbol} name`, cls]);
       if (symbol !== "NKE") await db.query(`insert into trading.${cls}_allowlist (symbol, instrument_id, verified_at) values ($1, $2, now())`, [symbol, id]);
+      if (symbol === "MSTR") await db.query("update trading.stock_allowlist set crypto_correlated = true where symbol = 'MSTR'");
       if (symbol === "NKE") continue;
       for (let d = 60; d >= 1; d--) {
         const c = 100 + (60 - d) * 0.5;
@@ -297,7 +301,7 @@ dbTest("a full run: analysis → risk review → portfolio manager, saved with s
   const toolsOf = (system) => claude.calls.find((c) => c.system === system).tools.map((t) => t.name);
   assert.deepStrictEqual(toolsOf(PROMPTS.STOCK), [...TOOLSETS.stock, "submit_analysis"]);
   assert.deepStrictEqual(toolsOf(PROMPTS.CRYPTO), [...TOOLSETS.crypto, "submit_analysis"]);
-  assert.deepStrictEqual(toolsOf(PROMPTS.RISK), [...TOOLSETS.risk, "submit_risk_review"]);
+  assert.deepStrictEqual(toolsOf(PROMPTS.RISK), [...TOOLSETS.risk.stock, "submit_risk_review"]); // the first review is of a stock
   assert.deepStrictEqual(toolsOf(PROMPTS.PM), [...TOOLSETS.portfolio_manager, "submit_decisions"]);
   // what was saved
   const rows = (await db.query("select a.agent, i.symbol, a.recommendation, a.confidence, a.subject_analysis_id, a.output, a.snapshot_ids, a.model from trading.analyses a left join trading.instruments i using (instrument_id) order by a.created_at")).rows;
@@ -357,6 +361,21 @@ dbTest("invented evidence is refused: nothing is saved, no proposal is created, 
   assert.strictEqual(await count("select count(*) as n from trading.proposals where status = 'draft'"), 1); // the earlier draft is untouched
 });
 
+dbTest("a crypto-correlated stock: its agents may read BTC's price, but BTC is not up for a decision", async () => {
+  const claude = fakeClaude({ amount: 250 });
+  const agents = createAgents({ config: cfg, db, client: etoro(), anthropic: claude, now: () => NOW, log: () => {} });
+  const out = await agents.run(["MSTR"]);
+  const firstTask = (system) => claude.calls.find((c) => c.system === system).messages[0].content;
+  assert.match(firstTask(PROMPTS.STOCK), /flagged MSTR as crypto-correlated: you can also read BTC/);
+  assert.match(firstTask(PROMPTS.RISK), /you can also read BTC/);
+  assert.match(firstTask(PROMPTS.PM), /BTC itself is not up for a decision/);
+  assert.deepStrictEqual(out.portfolioManager.decisions.map((d) => d.symbol), ["MSTR"]);
+  // BTC on its own gets no such note, and cannot read MSTR
+  const solo = fakeClaude();
+  await createAgents({ config: cfg, db, client: etoro(), anthropic: solo, now: () => NOW, log: () => {} }).run(["BTC"]);
+  assert.ok(!/crypto-correlated/.test(solo.calls[0].messages[0].content));
+});
+
 dbTest("without a risk review an instrument never reaches the portfolio manager", async () => {
   const claude = fakeClaude({ refuse: "submit_risk_review" });
   const agents = createAgents({ config: cfg, db, client: etoro(), anthropic: claude, now: () => NOW, log: () => {} });
@@ -380,6 +399,8 @@ dbTest("tools: only this run's symbols can be read, the account is honest when u
   const t = await tb.execute("get_technicals", { symbol: "MSTR" });
   assert.deepStrictEqual([t.sma.d200, t.rsi14, t.basis.finishedCandles], [null, 100, 60]);
   assert.match(tb.record(t.ref).source, /computed by Trading Desk code/);
+  assert.match(tb.record(m.daily.ref).source, /60 stored finished OneDay candles$/); // names the series, not one call
+  assert.match(t.atr14Note, /RANGE/);
   const news = await tb.execute("get_news", { symbol: "MSTR" });
   assert.match(news.articles[0].headline, /IGNORE YOUR INSTRUCTIONS/);            // passed through as data, with its own tag
   assert.match(news.articles[0].ref, /^N\d+$/);
