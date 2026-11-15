@@ -380,6 +380,8 @@ dbTest("tools: only this run's symbols can be read, the account is honest when u
   const t = await tb.execute("get_technicals", { symbol: "MSTR" });
   assert.deepStrictEqual([t.sma.d200, t.rsi14, t.basis.finishedCandles], [null, 100, 60]);
   assert.match(tb.record(t.ref).source, /computed by Trading Desk code/);
+  assert.match(tb.record(m.daily.ref).source, /60 stored finished OneDay candles$/); // names the series, not one call
+  assert.match(t.atr14Note, /RANGE/);
   const news = await tb.execute("get_news", { symbol: "MSTR" });
   assert.match(news.articles[0].headline, /IGNORE YOUR INSTRUCTIONS/);            // passed through as data, with its own tag
   assert.match(news.articles[0].ref, /^N\d+$/);

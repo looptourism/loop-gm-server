@@ -21,6 +21,10 @@ const { POLICY } = require("../policy");
 const { MONITORING } = require("../config");
 
 const DAY = 86400000;
+// A candle series is many stored rows collected by several calls. The stored
+// source of one row names a single call (".../desc/OneDay/6"), which reads as
+// if six candles were used; this names the whole series instead.
+const seriesSource = (rowSource, interval, count) => `${String(rowSource).replace(/\/(asc|desc)\/[A-Za-z]+\/\d+$/, "")} — ${count} stored finished ${interval} candles`;
 const symbolParam = { type: "object", properties: { symbol: { type: "string", description: "Ticker exactly as given to you, e.g. MSTR or BTC" } }, required: ["symbol"] };
 const none = { type: "object", properties: {} };
 
@@ -93,7 +97,7 @@ function createToolbox({ db, instruments, account, now = () => new Date(), seedR
         const last = daily[daily.length - 1], lastT = Date.parse(last.asOf);
         const span = (days) => candleRange(daily.filter((c) => lastT - Date.parse(c.asOf) < days * DAY));
         out.daily = {
-          ref: add("R", { kind: "candles", ids: [last.snapshotId], source: last.source, timestamp: last.asOf, label: `${i.symbol} daily candles ${daily[0].asOf.slice(0, 10)} to ${last.asOf.slice(0, 10)} (${daily.length})` }),
+          ref: add("R", { kind: "candles", ids: [last.snapshotId], source: seriesSource(last.source, "OneDay", daily.length), timestamp: last.asOf, label: `${i.symbol} daily candles ${daily[0].asOf.slice(0, 10)} to ${last.asOf.slice(0, 10)} (${daily.length})` }),
           finishedCandles: daily.length, oldest: daily[0].asOf, newest: last.asOf,
           last30d: span(30), last90d: span(90), last365d: span(365),
           last10: daily.slice(-10).map((c) => ({ date: c.asOf.slice(0, 10), open: c.open, high: c.high, low: c.low, close: c.close })),
@@ -102,7 +106,7 @@ function createToolbox({ db, instruments, account, now = () => new Date(), seedR
       const hourly = v.hourly.candles;
       if (hourly.length) {
         const last = hourly[hourly.length - 1];
-        out.hourly = { ref: add("R", { kind: "candles", ids: [last.snapshotId], source: last.source, timestamp: last.asOf, label: `${i.symbol} hourly candles to ${last.asOf}` }), finishedCandles: hourly.length, range: candleRange(hourly) };
+        out.hourly = { ref: add("R", { kind: "candles", ids: [last.snapshotId], source: seriesSource(last.source, "OneHour", hourly.length), timestamp: last.asOf, label: `${i.symbol} hourly candles to ${last.asOf}` }), finishedCandles: hourly.length, range: candleRange(hourly) };
       } else out.hourly = { available: false, reason: "no hourly candles are stored" };
       out.notes = ["Ranges are computed from finished candles only; the candle still forming is excluded.", "Volume is not provided."];
       return out;
@@ -115,7 +119,7 @@ function createToolbox({ db, instruments, account, now = () => new Date(), seedR
       const t = computeTechnicals(v.daily.candles, { periodsPerYear: i.assetClass === "crypto" ? 365 : 252 });
       if (!t) return { symbol: i.symbol, available: false, reason: "fewer than two daily candles are stored" };
       const last = v.daily.candles[v.daily.candles.length - 1];
-      return { symbol: i.symbol, available: true, ref: add("R", { kind: "technicals", ids: [last.snapshotId], source: `computed by Trading Desk code from ${last.source}`, timestamp: last.asOf, label: `${i.symbol} technicals from ${t.basis.finishedCandles} daily candles` }), ...t };
+      return { symbol: i.symbol, available: true, ref: add("R", { kind: "technicals", ids: [last.snapshotId], source: `computed by Trading Desk code from ${seriesSource(last.source, "OneDay", t.basis.finishedCandles)}`, timestamp: last.asOf, label: `${i.symbol} technicals from ${t.basis.finishedCandles} daily candles` }), ...t };
     },
 
     async get_fundamentals(input) {

@@ -64,6 +64,7 @@ function computeTechnicals(candles, { periodsPerYear }) {
     rsi14: round(rsi(closes, 14), 1),
     volatility30dAnnualizedPct: round(vol, 1),
     atr14Pct: trs.length === 14 ? round((mean(trs) / last.close) * 100, 2) : null,
+    atr14Note: "average daily trading RANGE (high to low, including overnight gaps) over 14 days, as % of the last close. It is not the typical close-to-close move; use volatility30dAnnualizedPct for that.",
     range365d: { high, low, belowHighPct: round(((last.close - high) / high) * 100, 2), aboveLowPct: round(((last.close - low) / low) * 100, 2), coversFullYear: coversYear },
     maxDrawdown90dPct: round(maxDd * 100, 2),
   };
