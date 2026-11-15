@@ -106,6 +106,20 @@ const SUBMIT = {
   },
 };
 
+SUBMIT.screen = {
+  name: "submit_screen",
+  description: "Hand in your screening score for this instrument. Call exactly once.",
+  input_schema: {
+    type: "object",
+    properties: {
+      score: { type: "integer", description: "0 to 10: how strongly the data suggests a buy case worth a full analysis today" },
+      reason: str("Why, in one or two plain sentences"),
+      data_concerns: list("Missing or stale data that limited your judgement. Empty if none."),
+    },
+    required: ["score", "reason", "data_concerns"],
+  },
+};
+
 // ---- validators -------------------------------------------------------------
 const isStr = (v) => typeof v === "string" && v.trim().length > 0;
 const isList = (v, check = isStr) => Array.isArray(v) && v.every(check);
@@ -135,6 +149,14 @@ const checkAmount = (v, buying, errors, where, name) => {
 };
 
 const VALIDATE = {
+  screen(x) {
+    const errors = [];
+    if (!x || typeof x !== "object") return ["the submission must be an object"];
+    if (!(Number.isInteger(x.score) && x.score >= 0 && x.score <= 10)) errors.push("score must be a whole number from 0 to 10");
+    if (!isStr(x.reason)) errors.push("reason is required");
+    if (!isList(x.data_concerns)) errors.push("data_concerns must be a list of strings");
+    return errors;
+  },
   analysis(x, toolbox) {
     const errors = [];
     if (!x || typeof x !== "object") return ["the submission must be an object"];

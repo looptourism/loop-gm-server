@@ -343,21 +343,27 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     if (db.configured && typeof agents.recentRuns === "function") {
       try { recentRuns = await agents.recentRuns(6); } catch (e) { recentRunsError = db.redact(e?.message); }
     }
-    res.json({ ok: true, ...status(), serverStartedAt: STARTED_AT, agents: agents.state(), recentRuns, ...(recentRunsError ? { recentRunsError } : {}), policy: POLICY });
+    const budget = db.configured && agents.budget ? await agents.budget.status() : null;
+    res.json({ ok: true, ...status(), serverStartedAt: STARTED_AT, agents: agents.state(), budget, recentRuns, ...(recentRunsError ? { recentRunsError } : {}), policy: POLICY });
   });
 
-  // Starts one run: ?symbols=MSTR,BTC&confirm=yes  or  ?all=yes&confirm=yes
-  // Each instrument costs Claude API money (three agents read it), so it
-  // needs ?confirm=yes. Works in the background; follow it on /agents/status.
+  // Starts one run. Always needs &confirm=yes, because it costs Claude API money.
+  //   ?screened=yes                 the cheap model scores every instrument, the best few get the full analysis
+  //   ?screened=yes&class=crypto    the same, coins only
+  //   ?symbols=MSTR,BTC             full analysis of exactly these, no screen
+  //   ?all=yes                      full analysis of EVERY instrument, no screen (expensive)
+  // Works in the background; follow it on /agents/status.
   app.get("/api/trading/agents/run", dbGuard, (req, res) => {
-    const symbols = req.query.all === "yes" ? "all" : String(req.query.symbols || req.query.symbol || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
-    if (req.query.confirm !== "yes" || (symbols !== "all" && symbols.length === 0)) return fail(res, new EtoroError("nothing was started: pass ?symbols=MSTR,BTC&confirm=yes (or ?all=yes&confirm=yes)", { code: "BadInput" }));
+    const screened = req.query.screened === "yes";
+    const symbols = screened || req.query.all === "yes" ? "all" : String(req.query.symbols || req.query.symbol || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
+    if (req.query.confirm !== "yes" || (symbols !== "all" && symbols.length === 0)) return fail(res, new EtoroError("nothing was started: pass ?screened=yes&confirm=yes (or ?symbols=MSTR,BTC&confirm=yes)", { code: "BadInput" }));
     if (symbols !== "all" && symbols.length > AGENTS.maxSymbolsPerRun) return fail(res, new EtoroError(`at most ${AGENTS.maxSymbolsPerRun} symbols per run`, { code: "BadInput" }));
     const st = agents.state();
     if (!st.ready) return res.status(503).json({ ok: false, error: st.notReadyBecause });
     if (st.running) return res.status(409).json({ ok: false, error: "a run is already in progress", running: st.running });
-    agents.run(symbols, { trigger: "manual" });
-    res.json({ ok: true, ...status(), started: true, symbols, next: "open /api/trading/agents/status — one instrument takes a few minutes" });
+    const options = { trigger: "manual", screened, scope: req.query.class === "crypto" ? "crypto" : "all" };
+    agents.run(symbols, options);
+    res.json({ ok: true, ...status(), started: true, symbols, mode: screened ? "screened" : "direct", scope: symbols === "all" ? options.scope : "named symbols", next: "open /api/trading/agents/status" });
   });
 
   // The newest analysis, risk review and Portfolio Manager decision for one symbol.
@@ -375,6 +381,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
 
   monitor.start();  // both do nothing unless TRADING_MONITOR_ENABLED is exactly "true"
   research.start();
+  if (typeof agents.start === "function") agents.start(); // does nothing unless TRADING_AGENTS_SCHEDULE_ENABLED is exactly "true"
   return { monitor, providers, coverage, research, agents };
 }
 

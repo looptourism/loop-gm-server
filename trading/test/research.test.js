@@ -94,7 +94,7 @@ if (TEST_URL) {
     const u = new URL(TEST_URL); u.pathname = "/trading_research_test";
     db = createDb({ config: { databaseUrl: u.toString() } });
     await db.migrate("001_initial"); await db.migrate("002_monitoring");
-    assert.deepStrictEqual(await db.migrate("003_research"), { applied: "003_research", remaining: [] });
+    assert.deepStrictEqual(await db.migrate("003_research"), { applied: "003_research", remaining: ["004_api_usage"] });
     for (const [id, symbol, cls] of [[2001, "MSTR", "stock"], [2003, "WYFI", "stock"], [100000, "BTC", "crypto"]]) {
       await db.query("insert into trading.instruments (instrument_id, symbol, asset_class, raw, source, fetched_at) values ($1, $2, $3, '{}', 'test', now())", [id, symbol, cls]);
       await db.query(`insert into trading.${cls}_allowlist (symbol, instrument_id, verified_at) values ($1, $2, now())`, [symbol, id]);

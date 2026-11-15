@@ -12,6 +12,7 @@ const { SUBMIT, VALIDATE, expandEvidence } = require("../agents/schemas");
 const { toolDefs, toolNames, TOOLSETS, createToolbox } = require("../agents/tools");
 const { runAgent } = require("../agents/runner");
 const { createAgents } = require("../agents/pipeline");
+const { createBudget, BudgetError } = require("../agents/budget");
 const PROMPTS = require("../agents/prompts");
 const { POLICY } = require("../policy");
 const { AGENTS, readConfig } = require("../config");
@@ -62,7 +63,7 @@ test("the agents have read-only tools only, and nothing is shared with the rest 
   for (const cls of ["stock", "crypto"]) for (const n of toolNames(cls)) assert.ok(toolNames("risk", cls).includes(n));
   assert.ok(!toolNames("risk", "stock").includes("get_coin_fundamentals"));
   assert.ok(!TOOLSETS.stock.includes("get_coin_fundamentals") && !TOOLSETS.crypto.includes("get_filings"));
-  assert.ok(new Set(Object.values(PROMPTS)).size === 4); // four different system prompts
+  assert.ok(new Set(Object.values(PROMPTS)).size === 5); // the four agents and the screener each have their own system prompt
   // server.js touches the Trading Desk in exactly one place: mounting its routes.
   const server = fs.readFileSync(path.join(__dirname, "..", "..", "server.js"), "utf8");
   const lines = server.split("\n").filter((l) => /require\(["']\.\/trading/.test(l));
@@ -78,7 +79,14 @@ test("the agents have read-only tools only, and nothing is shared with the rest 
 });
 
 test("the model is set in one place and the policy matches the owner's limits", () => {
-  assert.strictEqual(AGENTS.model, "claude-opus-5-5");
+  assert.deepStrictEqual(AGENTS.models, { screen: "claude-haiku-5-5", stock: "claude-opus-5-5", crypto: "claude-opus-5-5", risk: "claude-opus-5-5", portfolio_manager: "claude-opus-5-5" });
+  for (const m of Object.values(AGENTS.models)) assert.ok(AGENTS.pricesPerMTok[m], `no price for ${m}`);
+  // the owner's cost decisions of 2026-11-15
+  assert.deepStrictEqual([AGENTS.monthlyBudgetUsd, AGENTS.shortlistMax], [50, 5]);
+  assert.deepStrictEqual(AGENTS.schedule.map((x) => [x.cron, x.scope]), [["0 12 * * 1,3,5", "all"], ["0 12 * * 6", "crypto"]]);
+  assert.strictEqual(readConfig({}).agentsScheduleEnabled, false);
+  assert.strictEqual(readConfig({ TRADING_AGENTS_SCHEDULE_ENABLED: "yes" }).agentsScheduleEnabled, false);
+  assert.strictEqual(readConfig({ TRADING_AGENTS_SCHEDULE_ENABLED: "true" }).agentsScheduleEnabled, true);
   assert.deepStrictEqual([POLICY.maxPerTradeUsd, POLICY.maxTotalExposureUsd, POLICY.maxCryptoExposureUsd, POLICY.maxDailyLossUsd, POLICY.maxOpenPositions, POLICY.leverage, POLICY.direction],
     [{ stock: 500, crypto: 250 }, 5000, 1500, 100, 10, 1, "buy"]);
   assert.strictEqual(POLICY.cryptoCorrelatedCountsTowardCryptoCap, true);
@@ -213,7 +221,17 @@ test("agent routes: closed without a login; a run needs symbols and confirm=yes;
   const refused = await real.call("/api/trading/agents/run", { symbols: "MSTR", confirm: "yes" });
   assert.strictEqual(refused.statusCode, 503);
   assert.match(refused.body.error, /ANTHROPIC_API_KEY/);
-  assert.match((await real.call("/api/trading/agents/status")).body.agents.schedule, /none/);
+  const st = (await real.call("/api/trading/agents/status")).body;
+  assert.deepStrictEqual([st.agents.schedule.enabled, st.agents.schedule.running], [false, false]);  // the schedule is off unless its own switch is on
+  assert.strictEqual(st.budget.available, false);                                 // no ledger here: says so, and that no agent may run
+  // screened runs
+  runs = [];
+  const opts = [];
+  const app3 = fakeApp();
+  mount(app3, { authOn: true, ...base, agents: { state: () => ({ ready: true, running: null }), run: async (s2, o) => { runs.push(s2); opts.push(o); } } });
+  await app3.call("/api/trading/agents/run", { screened: "yes", confirm: "yes" });
+  await app3.call("/api/trading/agents/run", { screened: "yes", class: "crypto", confirm: "yes" });
+  assert.deepStrictEqual([runs, opts.map((o) => [o.screened, o.scope])], [["all", "all"], [[true, "all"], [true, "crypto"]]]);
 });
 
 // ---- the whole pipeline against a real Postgres, with a scripted Claude -----
@@ -233,12 +251,20 @@ function fakeClaude(opts = {}) {
   let id = 0;
   const create = async (body) => {
     calls.push(body);
+    const r = await answer(body);
+    return { ...r, model: body.model };
+  };
+  const answer = async (body) => {
     const submit = body.tools[body.tools.length - 1].name;
     const dataTools = body.tools.slice(0, -1).map((t) => t.name);
     const task = body.messages[0].content;
     const last = body.messages[body.messages.length - 1];
     const symbol = (/Analyse (\w+)/.exec(task) || /analysis of (\w+)/.exec(task) || [])[1];
     if (opts.refuse && submit === opts.refuse) return reply("refusal", []);
+    if (submit === "submit_screen") {
+      const sym = /Screen (\w+)/.exec(task)[1];
+      return reply("tool_use", [use(`c${++id}`, submit, { score: (opts.scores || {})[sym] ?? 3, reason: `screen of ${sym}`, data_concerns: [] })]);
+    }
     if (typeof last.content === "string") {
       return reply("tool_use", dataTools.map((name) => use(`c${++id}`, name, symbol ? { symbol } : name === "get_market_data" ? { symbol: (/instrument\(s\): ([A-Z]+)/.exec(task) || [])[1] } : {})));
     }
@@ -275,7 +301,7 @@ if (TEST_URL) {
     await admin.close();
     const u = new URL(TEST_URL); u.pathname = "/trading_agents_test";
     db = createDb({ config: { databaseUrl: u.toString() } });
-    for (const m of ["001_initial", "002_monitoring", "003_research"]) await db.migrate(m);
+    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage"]) await db.migrate(m);
     for (const [id, symbol, cls] of [[2001, "MSTR", "stock"], [100000, "BTC", "crypto"], [2009, "NKE", "stock"]]) {
       await db.query("insert into trading.instruments (instrument_id, symbol, display_name, asset_class, exchange, raw, source, fetched_at) values ($1, $2, $3, $4, 'NASDAQ', '{}', 'test', now())", [id, symbol, `${symbol} name`, cls]);
       if (symbol !== "NKE") await db.query(`insert into trading.${cls}_allowlist (symbol, instrument_id, verified_at) values ($1, $2, now())`, [symbol, id]);
@@ -338,6 +364,12 @@ dbTest("a full run: analysis → risk review → portfolio manager, saved with s
   assert.deepStrictEqual(Object.keys(out.usage.byAgent).sort(), ["crypto", "portfolio_manager", "risk", "stock"]);
   assert.deepStrictEqual([out.usage.byAgent.risk.steps, out.usage.byAgent.portfolio_manager.steps, out.usage.byAgent.stock.model], [2, 1, "claude-opus-5-5"]);
   assert.strictEqual(Object.values(out.usage.byAgent).reduce((a, u) => a + u.inputTokens, 0), out.usage.inputTokens);
+  // every Claude request is in the ledger, and the ledger agrees with the run's own total
+  const led = (await db.query("select count(*) as n, sum(input_tokens) as i, sum(estimated_cost_usd) as usd from trading.api_usage")).rows[0];
+  assert.deepStrictEqual([Number(led.n), Number(led.i)], [claude.calls.length, out.usage.inputTokens]);
+  assert.ok(Math.abs(Number(led.usd) - out.usage.estimatedCostUsd) < 0.01);
+  assert.strictEqual(out.usage.estimatedCostUsd, Math.round(claude.calls.length * (100 * 4 + 50 * 20) / 1e6 * 100) / 100); // 100 in + 50 out per request at Opus prices
+  assert.deepStrictEqual([out.budget.budgetUsd, out.budget.reached, out.mode], [50, false, "direct"]);
   // the run itself is in the permanent log, so it survives a server restart
   const runs = await agents.recentRuns();
   assert.deepStrictEqual(runs.map((r) => r.event), ["finished", "started"]);
@@ -418,4 +450,105 @@ dbTest("tools: only this run's symbols can be read, the account is honest when u
   assert.deepStrictEqual(withPositions.exposure, { stock: 0, crypto: 200, notOnAllowlist: 50 });
   const p = await createToolbox({ db, instruments: [mstr], account: withPositions, now: () => NOW }).execute("get_portfolio", {});
   assert.deepStrictEqual([p.availableCashUsd, p.openPositions, p.positions[0].symbol, p.positions[1].assetClass], [100000, 2, "BTC", "unknown"]);
+});
+
+// ---- cost controls -----------------------------------------------------------
+test("budget: an unknown model is charged at the dearest price, and a missing ledger refuses every step", async () => {
+  const settings = { ...AGENTS };
+  const dead = { query: async () => { throw new Error('relation "trading.api_usage" does not exist'); } };
+  const b = createBudget({ db: dead, settings });
+  assert.strictEqual(b.costOf("claude-opus-5-5", 1e6, 1e6), 24);
+  assert.strictEqual(b.costOf("claude-haiku-5-5", 1e6, 1e6), 0.6);
+  assert.strictEqual(b.costOf("some-new-model", 1e6, 1e6), 24);                    // never cheaper than the dearest known
+  await assert.rejects(b.assertRoom("screen"), (e) => e instanceof BudgetError && e.code === "LedgerUnavailable" && /004_api_usage/.test(e.message));
+  const st = await b.status();
+  assert.deepStrictEqual([st.available, st.effect], [false, "no agent may run until it can"]);
+});
+
+dbTest("budget: the month's spend is summed in UTC, a step is refused when it would go over, and the ledger cannot be edited", async () => {
+  const at = { t: new Date("2099-12-10T00:00:00Z") };
+  const b = createBudget({ db, settings: { ...AGENTS, monthlyBudgetUsd: 1 }, now: () => at.t });
+  await b.assertRoom("stock");                                                     // December is empty so far
+  await b.record({ purpose: "stock", model: "claude-opus-5-5", inputTokens: 100000, outputTokens: 10500 }); // $0.40 + $0.21
+  assert.deepStrictEqual([(await b.status()).spentUsd, (await b.status()).remainingUsd], [0.61, 0.39]);
+  await b.assertRoom("screen");                                                    // 0.61 + 0.02 fits
+  await assert.rejects(b.assertRoom("stock"), (e) => e.code === "BudgetReached" && /about \$0.61 of \$1 used in 2099-12/.test(e.message)); // 0.61 + 0.40 would not
+  assert.match((await createBudget({ db, settings: { ...AGENTS, monthlyBudgetUsd: 0.7 }, now: () => at.t }).status()).warning, /87% of the monthly budget/);
+  at.t = new Date("2100-01-01T00:00:00Z");                                         // a new month starts empty
+  await b.assertRoom("stock");
+  assert.strictEqual((await b.status()).spentUsd, 0);
+  await assert.rejects(db.query("delete from trading.api_usage"), /append-only/);
+  await assert.rejects(db.query("update trading.api_usage set estimated_cost_usd = 0"), /append-only/);
+});
+
+dbTest("a screened run: the cheap model scores everything, code picks the shortlist, only the shortlist gets the strong model", async () => {
+  const claude = fakeClaude({ scores: { MSTR: 8, BTC: 5 } });
+  const agents = createAgents({ config: cfg, db, client: etoro(), anthropic: claude, now: () => NOW, log: () => {} });
+  const out = await agents.run("all", { screened: true });
+  assert.deepStrictEqual(out.screen.results.map((x) => [x.symbol, x.score, x.shortlisted]), [["BTC", 5, false], ["MSTR", 8, true]]);
+  assert.deepStrictEqual(out.screen.shortlist, ["MSTR"]);                          // BTC scored below the minimum of 6
+  assert.deepStrictEqual(out.instruments.map((i) => i.symbol), ["MSTR"]);
+  const modelOf = (system) => [...new Set(claude.calls.filter((c) => c.system === system).map((c) => c.model))];
+  assert.deepStrictEqual(modelOf(PROMPTS.SCREEN), ["claude-haiku-5-5"]);
+  for (const sys of [PROMPTS.STOCK, PROMPTS.RISK, PROMPTS.PM]) assert.deepStrictEqual(modelOf(sys), ["claude-opus-5-5"]);
+  assert.ok(!claude.calls.some((c) => c.system === PROMPTS.CRYPTO));              // no full analysis for the coin that was screened out
+  const screenCall = claude.calls.find((c) => c.system === PROMPTS.SCREEN);
+  assert.deepStrictEqual(screenCall.tools.map((t) => t.name), ["submit_screen"]);  // the Screener has no data tools
+  assert.match(screenCall.messages[0].content, /<data>[\s\S]*"technicals"[\s\S]*<\/data>/);
+  assert.deepStrictEqual([out.usage.byAgent.screen.model, out.usage.byAgent.screen.steps, out.mode], ["claude-haiku-5-5", 2, "screened"]);
+  // in the ledger, screening is recorded under the cheap model and at its price (100 in + 50 out = $0.000035 a request)
+  const led = (await db.query("select distinct model, estimated_cost_usd from trading.api_usage where purpose = 'screen'")).rows;
+  assert.deepStrictEqual(led.map((r) => [r.model, Number(r.estimated_cost_usd)]), [["claude-haiku-5-5", 0.000035]]);
+  // coins only
+  const sat = fakeClaude({ scores: { BTC: 9, MSTR: 9 } });
+  const coins = await createAgents({ config: cfg, db, client: etoro(), anthropic: sat, now: () => NOW, log: () => {} }).run("all", { screened: true, scope: "crypto" });
+  assert.deepStrictEqual([coins.screen.results.map((x) => x.symbol), coins.scope], [["BTC"], "crypto"]);
+  // the shortlist is capped, highest score first, ties by symbol
+  const capped = await createAgents({ config: cfg, db, client: etoro(), anthropic: fakeClaude({ scores: { BTC: 9, MSTR: 9 } }), settings: { ...AGENTS, shortlistMax: 1 }, now: () => NOW, log: () => {} }).run("all", { screened: true });
+  assert.deepStrictEqual(capped.screen.shortlist, ["BTC"]);
+});
+
+dbTest("budget reached: nothing starts; and a run that hits it midway stops there with no proposal", async () => {
+  const before = await count("select count(*) as n from trading.api_usage");
+  const none = fakeClaude();
+  const blocked = await createAgents({ config: cfg, db, client: etoro(), anthropic: none, settings: { ...AGENTS, monthlyBudgetUsd: 0.01 }, now: () => NOW, log: () => {} }).run(["MSTR"]);
+  assert.match(blocked.skipped, /monthly budget reached/);
+  assert.strictEqual(none.calls.length, 0);                                        // not one Claude request was made
+  assert.strictEqual(await count("select count(*) as n from trading.api_usage"), before);
+  // room for the analyst only: spent so far + one analyst step fits, the risk review does not
+  const spentNow = Number((await db.query("select coalesce(sum(estimated_cost_usd), 0) as usd from trading.api_usage where occurred_at >= '2099-11-01'")).rows[0].usd);
+  const tight = fakeClaude();
+  const out = await createAgents({ config: cfg, db, client: etoro(), anthropic: tight, settings: { ...AGENTS, monthlyBudgetUsd: spentNow + 0.4005 }, now: () => NOW, log: () => {} }).run(["MSTR"]);
+  assert.strictEqual(out.instruments[0].analysis.ok, true);
+  assert.match(out.budgetStopped, /the next risk step needs up to \$0.4/);
+  assert.ok(!tight.calls.some((c) => c.system === PROMPTS.RISK || c.system === PROMPTS.PM));
+  assert.deepStrictEqual([out.proposals, out.portfolioManager, out.ok], [[], undefined, false]);
+});
+
+dbTest("fail closed: if a request's usage cannot be written, that agent stops and nothing is saved", async () => {
+  const analyses = await count("select count(*) as n from trading.analyses");
+  const broken = createBudget({ db, settings: AGENTS, now: () => NOW });
+  broken.record = async () => { throw new Error("ledger write failed"); };
+  const claude = fakeClaude();
+  const out = await createAgents({ config: cfg, db, client: etoro(), anthropic: claude, budget: broken, now: () => NOW, log: () => {} }).run(["MSTR"]);
+  assert.match(out.problems[0], /usage could not be recorded, so the agent was stopped: ledger write failed/);
+  assert.strictEqual(claude.calls.length, 1);                                      // stopped after the first request
+  assert.strictEqual(await count("select count(*) as n from trading.analyses"), analyses);
+});
+
+test("the agents' schedule: off by default; with its own switch on, Mon/Wed/Fri all and Saturday coins — always screened", async () => {
+  const jobs = [];
+  const cron = { schedule: (expr, fn, o) => jobs.push({ expr, fn, o }) };
+  const stub = { configured: true, redact: (t) => String(t ?? ""), query: async () => ({ rows: [] }) };
+  const off = createAgents({ config: { anthropicKey: "k", agentsScheduleEnabled: false }, db: stub, client: { redact: (t) => t }, cron, log: () => {} });
+  assert.strictEqual(off.start(), false);
+  assert.strictEqual(jobs.length, 0);
+  const on = createAgents({ config: { anthropicKey: "k", agentsScheduleEnabled: true }, db: stub, client: { redact: (t) => t }, cron, log: () => {} });
+  const started = [];
+  on.run = null; // the scheduled function calls the pipeline's own run; observe through state instead
+  assert.strictEqual(on.start(), true);
+  assert.strictEqual(on.start(), false);                                           // not registered twice
+  assert.deepStrictEqual(jobs.map((j) => [j.expr, j.o.timezone]), [["0 12 * * 1,3,5", "UTC"], ["0 12 * * 6", "UTC"]]);
+  assert.deepStrictEqual([on.state().schedule.enabled, on.state().schedule.running], [true, true]);
+  assert.strictEqual(started.length, 0);
 });

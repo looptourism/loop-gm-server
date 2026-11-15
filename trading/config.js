@@ -38,6 +38,9 @@ function readConfig(env = process.env) {
     // ANTHROPIC_API_KEY is used and anthropicKeySource says so.
     anthropicKey: (env.TRADING_ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY || "").trim(),
     anthropicKeySource: (env.TRADING_ANTHROPIC_API_KEY || "").trim() ? "TRADING_ANTHROPIC_API_KEY (the desk's own key)" : (env.ANTHROPIC_API_KEY || "").trim() ? "ANTHROPIC_API_KEY (shared with the rest of the server)" : "none",
+    // Switch for the agents' own schedule. Separate from monitoring because
+    // it spends Claude API money. Only the exact string "true" turns it on.
+    agentsScheduleEnabled: env.TRADING_AGENTS_SCHEDULE_ENABLED === "true",
     providerKeys: {
       finnhub: (env.FINNHUB_API_KEY || "").trim(),
       coingecko: (env.COINGECKO_API_KEY || "").trim(),
@@ -121,15 +124,43 @@ const MONITORING = {
 };
 
 // ---------------------------------------------------------------------------
-// The four Trading Desk agents (Stage 4).
-// They run only when the owner starts a run — there is no schedule, because
-// every run costs Claude API money. pricePerMTok is Anthropic's list price for
-// `model` (US dollars per million tokens), used only to ESTIMATE a run's cost;
-// update both together.
+// The Trading Desk agents (Stage 4) — models, cost controls and schedule.
+// Owner's decisions of 2026-11-15 are marked.
+//
+// Two tiers, to keep the cost down:
+//   1. SCREEN  — a cheap model looks at every instrument (one short request
+//                each, on a data pack built by code) and scores it 0–10.
+//   2. ANALYSE — the strong model runs the full analyst → risk reviewer →
+//                portfolio manager chain, only for the best-scored few.
+// A screen can only cause an instrument to be skipped; it can never cause a
+// trade.
 // ---------------------------------------------------------------------------
+const OPUS = "claude-opus-5-5";
+const HAIKU = "claude-haiku-5-5";
 const AGENTS = {
-  model: "claude-opus-5-5",
-  pricePerMTok: { input: 4, output: 20 },
+  models: { screen: HAIKU, stock: OPUS, crypto: OPUS, risk: OPUS, portfolio_manager: OPUS },
+  // Anthropic's list prices, US dollars per million tokens. Used only to
+  // ESTIMATE cost; update when a model or its price changes. (Haiku's price
+  // is for prompts up to 100K tokens; a screen prompt is a few thousand.)
+  pricesPerMTok: { [OPUS]: { input: 4, output: 20 }, [HAIKU]: { input: 0.1, output: 0.5 } },
+
+  shortlistMax: 5,            // owner: at most 5 instruments get the full analysis per run
+  shortlistMinScore: 6,       // a screen score below this is never analysed, even if fewer than 5 qualify
+
+  monthlyBudgetUsd: 50,       // owner: hard stop for the calendar month (UTC)
+  warnAtFraction: 0.8,
+  // What one step is assumed to cost at most. A step is refused if the
+  // month's spend plus this would exceed the budget.
+  stepReserveUsd: { screen: 0.02, stock: 0.4, crypto: 0.4, risk: 0.4, portfolio_manager: 1.5 },
+
+  // owner: screened runs on Monday, Wednesday and Friday at 12:00 UTC (all
+  // instruments), and on Saturday at 12:00 UTC (coins only). They run only
+  // when TRADING_AGENTS_SCHEDULE_ENABLED is exactly "true".
+  schedule: [
+    { cron: "0 12 * * 1,3,5", scope: "all", label: "Mon/Wed/Fri 12:00 UTC — all instruments, screened" },
+    { cron: "0 12 * * 6", scope: "crypto", label: "Sat 12:00 UTC — coins only, screened" },
+  ],
+
   maxTokens: 16000,
   maxTurns: 12,             // tool rounds per agent before the run is abandoned
   timeoutMs: 5 * 60 * 1000, // per Claude request
