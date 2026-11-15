@@ -67,6 +67,8 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
       validate: (input) => VALIDATE[kind](input, toolbox, validateExtra), redact: clean,
     });
     totals.inputTokens += res.usage.inputTokens; totals.outputTokens += res.usage.outputTokens; totals.requests += res.usage.requests;
+    const who = (totals.byAgent[agent] ||= { steps: 0, requests: 0, inputTokens: 0, outputTokens: 0 });
+    who.steps++; who.requests += res.usage.requests; who.inputTokens += res.usage.inputTokens; who.outputTokens += res.usage.outputTokens;
     const meta = { model: res.model, usage: res.usage, toolCalls: res.toolCalls, turns: res.turns ?? null, startedAt, finishedAt: now().toISOString() };
     if (!res.ok) {
       try { await appendAudit(db, { eventType: "analysis.rejected", entityType: "instrument", entityId: instrument?.instrumentId ?? null, actor: `agent:${agent}`, data: { symbol: instrument?.symbol ?? null, error: res.error, ...meta } }); }
@@ -153,7 +155,7 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
   async function run(symbols, { trigger = "manual" } = {}) {
     if (running) return { ok: false, skipped: "a run is already in progress", running };
     running = { trigger, startedAt: now().toISOString(), step: "starting", symbols };
-    const totals = { inputTokens: 0, outputTokens: 0, requests: 0 };
+    const totals = { inputTokens: 0, outputTokens: 0, requests: 0, byAgent: {} };
     let started = false;
     const result = { ok: false, trigger, startedAt: running.startedAt, model: settings.model, instruments: [], proposals: [], problems: [] };
     try {
@@ -205,7 +207,9 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
       result.error = clean(e?.message);
     } finally {
       result.finishedAt = now().toISOString();
-      result.usage = { ...totals, estimatedCostUsd: Math.round(((totals.inputTokens * settings.pricePerMTok.input + totals.outputTokens * settings.pricePerMTok.output) / 1e6) * 100) / 100, note: `estimate at list price for ${settings.model}` };
+      const cost = (u) => Math.round(((u.inputTokens * settings.pricePerMTok.input + u.outputTokens * settings.pricePerMTok.output) / 1e6) * 100) / 100;
+      const byAgent = Object.fromEntries(Object.entries(totals.byAgent).map(([agent, u]) => [agent, { model: settings.model, ...u, estimatedCostUsd: cost(u) }]));
+      result.usage = { inputTokens: totals.inputTokens, outputTokens: totals.outputTokens, requests: totals.requests, estimatedCostUsd: cost(totals), byAgent, note: `estimate at list price for ${settings.model}` };
       result.orderPlacement = "none — proposals are saved as drafts only";
       log(result.skipped ? `skipped: ${result.skipped}` : result.error ? `failed: ${result.error}` : `${result.instruments.length} instrument(s), ${result.proposals.length} draft proposal(s), ${result.problems.length} problem(s), about $${result.usage.estimatedCostUsd}`);
       if (started) await record("agents.run_finished", result);
@@ -229,7 +233,7 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
     return rows;
   }
 
-  const state = () => ({ ready: ready() === null, notReadyBecause: ready(), model: settings.model, schedule: "none — runs only when started by the owner", running, lastResult });
+  const state = () => ({ ready: ready() === null, notReadyBecause: ready(), model: settings.model, modelPerAgent: { stock: settings.model, crypto: settings.model, risk: settings.model, portfolio_manager: settings.model }, claudeKey: config.anthropicKeySource || null, schedule: "none — runs only when started by the owner", running, lastResult });
   return { run, state, readAccount, recentRuns };
 }
 

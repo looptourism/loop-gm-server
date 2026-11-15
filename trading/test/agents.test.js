@@ -83,6 +83,10 @@ test("the model is set in one place and the policy matches the owner's limits", 
     [{ stock: 500, crypto: 250 }, 5000, 1500, 100, 10, 1, "buy"]);
   assert.strictEqual(POLICY.cryptoCorrelatedCountsTowardCryptoCap, true);
   assert.strictEqual(readConfig({ ANTHROPIC_API_KEY: " k " }).anthropicKey, "k");
+  assert.match(readConfig({ ANTHROPIC_API_KEY: "shared" }).anthropicKeySource, /shared with the rest of the server/);
+  const own = readConfig({ ANTHROPIC_API_KEY: "shared", TRADING_ANTHROPIC_API_KEY: " desk " });   // the desk's own key wins
+  assert.deepStrictEqual([own.anthropicKey, /the desk's own key/.test(own.anthropicKeySource)], ["desk", true]);
+  assert.strictEqual(readConfig({}).anthropicKeySource, "none");
 });
 
 // ---- validators -------------------------------------------------------------
@@ -329,6 +333,10 @@ dbTest("a full run: analysis → risk review → portfolio manager, saved with s
   assert.strictEqual(await count("select count(*) as n from trading.audit_log where event_type = 'analysis.created'"), 5);
   assert.strictEqual(await count("select count(*) as n from trading.audit_log where event_type = 'proposal.created'"), 1);
   assert.ok(out.usage.estimatedCostUsd > 0 && out.usage.requests === claude.calls.length);
+  // cost is broken down by agent, and the parts add up to the total
+  assert.deepStrictEqual(Object.keys(out.usage.byAgent).sort(), ["crypto", "portfolio_manager", "risk", "stock"]);
+  assert.deepStrictEqual([out.usage.byAgent.risk.steps, out.usage.byAgent.portfolio_manager.steps, out.usage.byAgent.stock.model], [2, 1, "claude-opus-5-5"]);
+  assert.strictEqual(Object.values(out.usage.byAgent).reduce((a, u) => a + u.inputTokens, 0), out.usage.inputTokens);
   // the run itself is in the permanent log, so it survives a server restart
   const runs = await agents.recentRuns();
   assert.deepStrictEqual(runs.map((r) => r.event), ["finished", "started"]);

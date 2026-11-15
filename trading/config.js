@@ -30,10 +30,14 @@ function readConfig(env = process.env) {
     monitorEnabled: env.TRADING_MONITOR_ENABLED === "true",
     // Keys of the news / fundamentals providers, by provider name. A provider
     // without a key is simply unavailable; nothing falls back to another one.
-    // The Claude API key the rest of the server already uses. The Trading Desk
-    // builds its OWN client from it; it shares no agent, tool or conversation
-    // with the GM, the departments or the secretary.
-    anthropicKey: (env.ANTHROPIC_API_KEY || "").trim(),
+    // Claude API key for the Trading Desk's own client. It shares no agent,
+    // tool or conversation with the GM, the departments or the secretary.
+    // TRADING_ANTHROPIC_API_KEY — a key of its own (ideally from its own
+    // Anthropic workspace), so the desk's cost is billed and limited apart
+    // from the rest of the server. Until it is set, the server's shared
+    // ANTHROPIC_API_KEY is used and anthropicKeySource says so.
+    anthropicKey: (env.TRADING_ANTHROPIC_API_KEY || env.ANTHROPIC_API_KEY || "").trim(),
+    anthropicKeySource: (env.TRADING_ANTHROPIC_API_KEY || "").trim() ? "TRADING_ANTHROPIC_API_KEY (the desk's own key)" : (env.ANTHROPIC_API_KEY || "").trim() ? "ANTHROPIC_API_KEY (shared with the rest of the server)" : "none",
     providerKeys: {
       finnhub: (env.FINNHUB_API_KEY || "").trim(),
       coingecko: (env.COINGECKO_API_KEY || "").trim(),
