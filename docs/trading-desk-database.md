@@ -28,6 +28,7 @@ Security on and access revoked from Supabase's `anon` / `authenticated` roles.
 | `positions` | Demo positions synced from eToro | demo, buy, leverage 1 |
 | `audit_log` | Permanent record of every event | insert only — UPDATE, DELETE and TRUNCATE raise an error |
 | `schema_migrations` | Which migration files were applied | — |
+| `api_usage` (migration `004_api_usage`) | One row per Claude request by an agent: purpose, model, tokens, estimated cost | append-only; the monthly budget is checked against it |
 | `monitor_runs` (migration `002_monitoring`, Stage 3) | One row per collection run: requests sent, rows stored, problems | status is `ok`, `partial` or `failed` |
 
 | `research_snapshots` (migration `003_research`) | Provider answers per instrument: profile, fundamentals, earnings, filings — with provider, source, time | one row per different answer; unchanged answers only move `last_confirmed_at` |
@@ -64,13 +65,21 @@ belong to the Stage 5 config file; each risk assessment stores the limits it use
 2. Key: `TRADING_DATABASE_URL` — Value: the full string from step 7 above.
 3. **Save, rebuild, and deploy**. Leave `TRADING_ENABLED` as it is (`false`).
 
-## Migrating (only after the schema is approved)
+## Migrating — automatic (since 2026-11-15)
 
-Log in to the console, then open in the same browser:
+Pending migrations are applied when the server starts, before anything that uses the database
+is allowed to run. Each migration runs in its own transaction: it is applied fully or not at
+all, and one already applied is never run again. Every applied migration is written to the
+audit log and announced on Telegram.
 
-1. `/api/trading/admin/db-status` — expect `"connected": true` and `"pending": ["001_initial"]`. Nothing is created by this.
-2. `/api/trading/admin/migrate?confirm=001_initial` — creates the tables. Without the exact name it refuses.
-3. `/api/trading/admin/db-status` again — expect 12 tables and `"pending": []`.
+**Fail closed.** If a migration fails, or a migration file was edited after it was applied,
+nothing further is run and the Trading Desk stays off: no monitoring, no research, no agent run,
+and its database routes answer 503. You get one Telegram message saying why. It retries every
+5 minutes, so a database that was only unreachable recovers by itself. The rest of the server
+(the GM console) is not affected.
+
+`/api/trading/admin/db-status` shows the startup state. The old manual route
+(`/api/trading/admin/migrate?confirm=…`) still exists but is no longer needed.
 
 Then the allowlists:
 

@@ -37,7 +37,7 @@ const { createBudget, BudgetError } = require("./budget");
 
 const CONFIDENCE_NOTE = "analytical_confidence = how well the evidence supports the conclusion (0 to 1). It is NOT a probability that the trade makes money.";
 
-function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, now = () => new Date(), anthropic = null, budget = null, cron = null, log = (...a) => console.log("[trading/agents]", ...a) } = {}) {
+function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, now = () => new Date(), anthropic = null, budget = null, cron = null, onFinished = null, log = (...a) => console.log("[trading/agents]", ...a) } = {}) {
   let running = null, lastResult = null, sdk = anthropic, scheduled = false;
   const clean = (t) => db.redact(client.redact(String(t ?? "")));
   const ledger = budget || createBudget({ db, settings, now, redact: clean });
@@ -295,8 +295,11 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
       result.orderPlacement = "none — proposals are saved as drafts only";
       log(result.skipped ? `skipped: ${result.skipped}` : result.error ? `failed: ${result.error}` : `${result.instruments.length} instrument(s), ${result.proposals.length} draft proposal(s), ${result.problems.length} problem(s), about $${result.usage.estimatedCostUsd}`);
       if (started) await record("agents.run_finished", result);
+      if (!started && result.budgetStopped) { try { result.budget = await ledger.status(); } catch { /* reported as unavailable */ } }
       lastResult = result;
       running = null;
+      // Tell the owner (Telegram). Reporting must never break or delay the run.
+      if (onFinished) Promise.resolve().then(() => onFinished(result)).catch((e) => log("could not send the run summary:", clean(e?.message)));
     }
     return result;
   }

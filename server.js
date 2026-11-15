@@ -1980,6 +1980,10 @@ const TG_HELP = `<b>Loop — المدير العام على تيليجرام</b>
 /brief — تشغيل إحاطة السكرتيرة
 /help — هذه الرسالة
 
+<b>مكتب التداول (تجريبي)</b>
+/trade_run — تشغيل فحص وتحليل الآن (أضف crypto للعملات فقط)
+/trade_status — الحالة والميزانية وآخر تشغيل
+
 المدفوعات والنشر لا تُنفَّذ من المحادثة: تُرفع كطلب موافقة وتنتظر ضغطك على الزر.`;
 
 // Claude writes Markdown; Telegram wants its own small HTML subset.
@@ -2098,6 +2102,9 @@ function tgEnqueue(fn) {
 async function tgHandleMessage(msg) {
   const text = (msg.text || msg.caption || "").trim();
   const command = /^\/([a-z_]+)(@\w+)?(\s|$)/i.exec(msg.text || "")?.[1]?.toLowerCase();
+  // Trading Desk commands are answered by the Trading Desk's own code and
+  // stop here: they are never passed to the GM agent.
+  if (command && tradingDesk.telegramCommands.has(command)) return tradingDesk.handleTelegramCommand(command, text);
   if (command === "test") return runTelegramSelfTest();
   if (command === "help" || command === "start") return telegram.sendMessage(TG_HELP);
   if (command === "status") return telegram.sendMessage(tgStatusText());
@@ -2166,7 +2173,7 @@ const TELEGRAM_SELFTEST_MARK = "chat-v1";
 async function startTelegram() {
   const registered = await telegram.registerWebhook(PUBLIC_URL);
   if (!registered) return;
-  await telegram.setMyCommands(TG_COMMANDS).catch((e) => tgLogError("setMyCommands", e));
+  await telegram.setMyCommands([...TG_COMMANDS, ...tradingDesk.telegramCommandList]).catch((e) => tgLogError("setMyCommands", e));
   await storeReady;
   if (store.telegramSelfTest === TELEGRAM_SELFTEST_MARK) return;
   await telegram.sendMessage(`✅ <b>المحادثة مع المدير العام شغّالة</b>\nرسالة اختبار من السيرفر — 🕒 ${telegram.uaeTime()} (توقيت الإمارات)\n\n${TG_HELP}`);
@@ -2329,7 +2336,7 @@ app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISO
 // Trading Desk (eToro DEMO, read-only for now) — an isolated module. It is
 // mounted here, after the login gate, and is deliberately not connected to
 // the GM, the department agents or the secretary.
-require("./trading").mount(app, { authOn: AUTH_ON });
+const tradingDesk = require("./trading").mount(app, { authOn: AUTH_ON, telegram });
 
 // Consolidated connectivity flags for the "system status" panel.
 app.get("/api/status", (req, res) => {

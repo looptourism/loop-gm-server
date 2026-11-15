@@ -67,7 +67,16 @@ test("the agents have read-only tools only, and nothing is shared with the rest 
   // server.js touches the Trading Desk in exactly one place: mounting its routes.
   const server = fs.readFileSync(path.join(__dirname, "..", "..", "server.js"), "utf8");
   const lines = server.split("\n").filter((l) => /require\(["']\.\/trading/.test(l));
-  assert.deepStrictEqual(lines.map((l) => l.trim()), ['require("./trading").mount(app, { authOn: AUTH_ON });']);
+  assert.deepStrictEqual(lines.map((l) => l.trim()), ['const tradingDesk = require("./trading").mount(app, { authOn: AUTH_ON, telegram });']);
+  // Outside that line, server.js uses the desk for exactly two things: routing its Telegram commands and listing them.
+  const uses = server.split("\n").filter((l) => /tradingDesk\./.test(l)).map((l) => l.trim());
+  assert.deepStrictEqual(uses, [
+    "if (command && tradingDesk.telegramCommands.has(command)) return tradingDesk.handleTelegramCommand(command, text);",
+    'await telegram.setMyCommands([...TG_COMMANDS, ...tradingDesk.telegramCommandList]).catch((e) => tgLogError("setMyCommands", e));',
+  ]);
+  // The desk's commands are answered before any other command and before the message can reach the GM agent.
+  const handler = server.slice(server.indexOf("async function tgHandleMessage"), server.indexOf("async function handleTelegramUpdate"));
+  assert.ok(handler.indexOf("tradingDesk.handleTelegramCommand") > 0 && handler.indexOf("tradingDesk.handleTelegramCommand") < handler.indexOf('command === "test"'));
   for (const word of ["get_market_data", "submit_analysis", "submit_decisions", "agents/pipeline"]) assert.ok(!server.includes(word));
   // No order path or write method anywhere in the trading code.
   const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === "test" ? [] : walk(path.join(dir, e.name))) : e.name.endsWith(".js") ? [path.join(dir, e.name)] : []));
@@ -483,8 +492,12 @@ dbTest("budget: the month's spend is summed in UTC, a step is refused when it wo
 
 dbTest("a screened run: the cheap model scores everything, code picks the shortlist, only the shortlist gets the strong model", async () => {
   const claude = fakeClaude({ scores: { MSTR: 8, BTC: 5 } });
-  const agents = createAgents({ config: cfg, db, client: etoro(), anthropic: claude, now: () => NOW, log: () => {} });
+  const reported = [];
+  const agents = createAgents({ config: cfg, db, client: etoro(), anthropic: claude, now: () => NOW, log: () => {}, onFinished: (r) => { reported.push(r); throw new Error("telegram is down"); } });
   const out = await agents.run("all", { screened: true });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(reported.length, 1);                                          // the finished run is handed to the notifier once…
+  assert.ok(reported[0] === out && out.budget.available && out.ok);                // …with the budget in it, and a failing notifier changes nothing
   assert.deepStrictEqual(out.screen.results.map((x) => [x.symbol, x.score, x.shortlisted]), [["BTC", 5, false], ["MSTR", 8, true]]);
   assert.deepStrictEqual(out.screen.shortlist, ["MSTR"]);                          // BTC scored below the minimum of 6
   assert.deepStrictEqual(out.instruments.map((i) => i.symbol), ["MSTR"]);

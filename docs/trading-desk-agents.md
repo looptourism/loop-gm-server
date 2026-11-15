@@ -92,18 +92,21 @@ All of this is set in `AGENTS` in `trading/config.js`.
 - **Measured cost so far** (two real runs, before screening existed, all on Opus): $0.62 and
   $0.82 for two instruments. Every run now reports tokens and cost per agent.
 
-## First real run (phone)
+## How to use it (Telegram)
 
-1. Merge the branch on GitHub and wait for Render to deploy.
-2. Log in to the console, then open `/api/trading/agents/status` — expect `"ready": true`.
-3. Open `/api/trading/agents/run?symbols=MSTR,BTC&confirm=yes` — one stock and one coin.
-4. Wait about 5–10 minutes, reloading `/api/trading/agents/status`. When `running` is `null`,
-   `lastResult` shows what happened, the problems, the token use and the estimated cost.
-   **Send me that output.**
-5. `/api/trading/agents/latest?symbol=MSTR` — the analysis, the risk review and the decision, with sources.
-6. `/api/trading/agents/proposals` — the draft proposals.
+The desk uses the server's existing bot. Its commands are answered by the desk's own code and
+never reach the GM agent.
 
-To run everything later: `/api/trading/agents/run?all=yes&confirm=yes` (expect over an hour).
+- `/trade_run` — start a screened run now (all instruments). `/trade_run crypto` — coins only.
+- `/trade_status` — what is running, the schedule, the month's budget, the last run.
+- After **every** run (scheduled, from Telegram or from a URL) a summary arrives: instruments
+  screened, the shortlist with scores, what was analysed, draft proposals, cost by agent, and
+  budget used. It is built by plain code from the run's result.
+- You are also told when the database was updated at startup, and if the desk is off because
+  its database could not be prepared.
+
+The pages remain for details: `/api/trading/agents/status`, `/api/trading/agents/latest?symbol=…`,
+`/api/trading/agents/proposals`.
 
 ## Limitations
 
