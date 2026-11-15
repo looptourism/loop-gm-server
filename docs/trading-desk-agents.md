@@ -12,7 +12,15 @@ analyses (both "avoid"), two risk reviews (both "no objection"), one Portfolio M
 10 Claude requests, 88,272 input and 13,339 output tokens, estimated $0.62 — about $0.31 per
 instrument and about one minute each. A run that ends in a draft proposal has not been seen yet.
 
-**Server restarts:** the server restarted about 15 minutes after that run with no deploy,
+**Second real run (2026-11-15 19:41–19:44 UTC, MSTR and BTC),** after the reviewer was given
+the analyst's research tools and MSTR was allowed to read BTC's price: completed with no
+problems, same outcome (both "avoid", both "no trade", no draft). 115,065 input and 17,739
+output tokens, estimated $0.82 — about $0.41 per instrument, so roughly $12 for all 30.
+
+**Owner's decision for Stage 5 (2026-11-15):** MSTR counts toward the $1,500 crypto cap
+(recorded in `trading/policy.js`; enforced by the Stage 5 engine, not yet by any code).
+
+**Server restarts (resolved 2026-11-15 — the Render service was moved to a plan that stays awake):** the server restarted about 15 minutes after that run with no deploy,
 which is what a hosting plan that puts idle services to sleep looks like. If so, the 15-minute
 price schedule and the research schedule do not run while it sleeps, and a long agent run can
 be cut short. To be confirmed in Render (instance type).

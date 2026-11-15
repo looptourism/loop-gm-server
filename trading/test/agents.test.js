@@ -81,6 +81,7 @@ test("the model is set in one place and the policy matches the owner's limits", 
   assert.strictEqual(AGENTS.model, "claude-opus-5-5");
   assert.deepStrictEqual([POLICY.maxPerTradeUsd, POLICY.maxTotalExposureUsd, POLICY.maxCryptoExposureUsd, POLICY.maxDailyLossUsd, POLICY.maxOpenPositions, POLICY.leverage, POLICY.direction],
     [{ stock: 500, crypto: 250 }, 5000, 1500, 100, 10, 1, "buy"]);
+  assert.strictEqual(POLICY.cryptoCorrelatedCountsTowardCryptoCap, true);
   assert.strictEqual(readConfig({ ANTHROPIC_API_KEY: " k " }).anthropicKey, "k");
 });
 
