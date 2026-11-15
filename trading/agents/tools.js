@@ -41,14 +41,21 @@ const DEFS = {
   get_policy: { description: "The owner's trading limits (per-trade maximum, total and crypto exposure caps, daily loss limit, maximum open positions, long-only, leverage 1). For your information: they are enforced by code, not by you.", input_schema: none },
 };
 
+const RESEARCH_TOOLS = {
+  stock: ["get_fundamentals", "get_earnings", "get_filings", "get_news"],
+  crypto: ["get_coin_fundamentals", "get_crypto_news"],
+};
 const TOOLSETS = {
-  stock: ["get_market_data", "get_technicals", "get_fundamentals", "get_earnings", "get_filings", "get_news"],
-  crypto: ["get_market_data", "get_technicals", "get_coin_fundamentals", "get_crypto_news"],
-  risk: ["get_market_data", "get_technicals", "get_portfolio", "get_policy"],
+  stock: ["get_market_data", "get_technicals", ...RESEARCH_TOOLS.stock],
+  crypto: ["get_market_data", "get_technicals", ...RESEARCH_TOOLS.crypto],
+  // The reviewer gets the same research data as the analyst it is checking
+  // (so it can verify company figures and news itself), plus portfolio and policy.
+  risk: { stock: ["get_market_data", "get_technicals", ...RESEARCH_TOOLS.stock, "get_portfolio", "get_policy"], crypto: ["get_market_data", "get_technicals", ...RESEARCH_TOOLS.crypto, "get_portfolio", "get_policy"] },
   portfolio_manager: ["get_market_data", "get_portfolio", "get_policy"],
 };
 
-const toolDefs = (agent) => TOOLSETS[agent].map((name) => ({ name, ...DEFS[name] }));
+const toolNames = (agent, assetClass) => (Array.isArray(TOOLSETS[agent]) ? TOOLSETS[agent] : TOOLSETS[agent][assetClass]);
+const toolDefs = (agent, assetClass) => toolNames(agent, assetClass).map((name) => ({ name, ...DEFS[name] }));
 
 // `instruments`: the instruments this run may read: [{ symbol, instrumentId, assetClass }].
 // `account`: { ok: true, summary, exposure } or { ok: false, reason } — fetched once by the pipeline.
@@ -168,4 +175,4 @@ function createToolbox({ db, instruments, account, now = () => new Date(), seedR
   return { execute, refs, has: (tag) => refs.has(tag), record: (tag) => refs.get(tag) };
 }
 
-module.exports = { createToolbox, toolDefs, TOOLSETS, DEFS };
+module.exports = { createToolbox, toolDefs, toolNames, TOOLSETS, DEFS };

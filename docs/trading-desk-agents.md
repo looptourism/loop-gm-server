@@ -23,8 +23,11 @@ be cut short. To be confirmed in Render (instance type).
 |---|---|---|
 | Stock Analyst | price + ranges, technicals, fundamentals, earnings, SEC filings, company news | buy / hold / avoid, thesis, evidence, entry and exit conditions, amount, holding period, risks, confidence, assumptions, data gaps |
 | Crypto Analyst | price + ranges, technicals, coin fundamentals, general crypto headlines | the same |
-| Risk Reviewer | price + ranges, technicals, the demo portfolio, the policy — plus the analysis it critiques | no objection / caution / object, concerns with severity, claims it checked, a smaller amount if it thinks so. **Opinion only** |
+| Risk Reviewer | everything the analyst it checks could read, plus the demo portfolio and the policy — and the analysis it critiques | no objection / caution / object, concerns with severity, claims it checked, a smaller amount if it thinks so. **Opinion only** |
 | Portfolio Manager | the analyses and reviews, price + ranges, the demo portfolio, the policy | one decision per instrument (propose buy / no trade), with every analyst-vs-reviewer disagreement written out, and a draft proposal for each "propose buy" |
+
+A stock you flagged as crypto-correlated (MSTR) can also read BTC's stored price in all three
+steps, because it cannot be judged without it. BTC is then a reference only, not up for a decision.
 
 Order of a run: analyst → risk reviewer → portfolio manager. An instrument reaches the
 Portfolio Manager only if both its analysis and its risk review were produced and accepted.
