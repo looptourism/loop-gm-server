@@ -10,7 +10,9 @@
 // ---------------------------------------------------------------------------
 const MAX_CORRECTIONS = 2;
 
-async function runAgent({ anthropic, settings, system, task, tools, submit, toolbox, validate, redact = (t) => t }) {
+// `onUsage` is called after every Claude request with that request's tokens.
+// If it throws (the usage could not be recorded), the agent stops at once.
+async function runAgent({ anthropic, settings, system, task, tools, submit, toolbox, validate, onUsage = null, redact = (t) => t }) {
   const usage = { inputTokens: 0, outputTokens: 0, requests: 0 };
   const messages = [{ role: "user", content: task }];
   const allTools = [...tools, submit];
@@ -27,9 +29,14 @@ async function runAgent({ anthropic, settings, system, task, tools, submit, tool
     }
     usage.requests++;
     const u = res.usage || {};
-    usage.inputTokens += (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
-    usage.outputTokens += u.output_tokens || 0;
+    const inTok = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0), outTok = u.output_tokens || 0;
+    usage.inputTokens += inTok;
+    usage.outputTokens += outTok;
     if (res.model) model = res.model;
+    if (onUsage) {
+      try { await onUsage({ model, inputTokens: inTok, outputTokens: outTok }); }
+      catch (e) { return fail(`the request's usage could not be recorded, so the agent was stopped: ${e?.message || e}`, { stopReason: "usage_not_recorded" }); }
+    }
 
     if (res.stop_reason === "refusal") return fail("Claude declined the request", { stopReason: "refusal" });
     if (res.stop_reason === "max_tokens") return fail("Claude's answer was cut off (max_tokens)", { stopReason: "max_tokens" });

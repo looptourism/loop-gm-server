@@ -12,7 +12,15 @@ analyses (both "avoid"), two risk reviews (both "no objection"), one Portfolio M
 10 Claude requests, 88,272 input and 13,339 output tokens, estimated $0.62 — about $0.31 per
 instrument and about one minute each. A run that ends in a draft proposal has not been seen yet.
 
-**Server restarts:** the server restarted about 15 minutes after that run with no deploy,
+**Second real run (2026-11-15 19:41–19:44 UTC, MSTR and BTC),** after the reviewer was given
+the analyst's research tools and MSTR was allowed to read BTC's price: completed with no
+problems, same outcome (both "avoid", both "no trade", no draft). 115,065 input and 17,739
+output tokens, estimated $0.82 — about $0.41 per instrument, so roughly $12 for all 30.
+
+**Owner's decision for Stage 5 (2026-11-15):** MSTR counts toward the $1,500 crypto cap
+(recorded in `trading/policy.js`; enforced by the Stage 5 engine, not yet by any code).
+
+**Server restarts (resolved 2026-11-15 — the Render service was moved to a plan that stays awake):** the server restarted about 15 minutes after that run with no deploy,
 which is what a hosting plan that puts idle services to sleep looks like. If so, the 15-minute
 price schedule and the research schedule do not run while it sleeps, and a long agent run can
 be cut short. To be confirmed in Render (instance type).
@@ -54,28 +62,51 @@ Portfolio Manager only if both its analysis and its risk review were produced an
   checks that `server.js` touches the Trading Desk in exactly one place (mounting the routes).
 - **No schedule.** A run starts only when you start it, because every run costs money.
 
-## Model and cost
+## Models, screening, schedule and budget (owner's decisions, 2026-11-15)
 
-- Model: `claude-opus-5-5` (set in `AGENTS` in `trading/config.js`, with its list price of $4
-  per million input tokens and $20 per million output tokens). The rest of the server uses
-  `claude-sonnet-4-6`; the two are independent.
-- It uses the `ANTHROPIC_API_KEY` already set in Render. No new env var.
-- **Measured cost:** about $0.31 per instrument in the first real run (two instruments, $0.62),
-  so a full run of all 30 would be roughly $9–10 and take 30–40 minutes. Every run reports its
-  real token use and an estimated cost.
+| Step | Model | List price per million tokens (input / output) |
+|---|---|---|
+| Screener | `claude-haiku-5-5` | $0.10 / $0.50 |
+| Stock Analyst, Crypto Analyst, Risk Reviewer, Portfolio Manager | `claude-opus-5-5` | $4 / $20 |
 
-## First real run (phone)
+All of this is set in `AGENTS` in `trading/config.js`.
 
-1. Merge the branch on GitHub and wait for Render to deploy.
-2. Log in to the console, then open `/api/trading/agents/status` — expect `"ready": true`.
-3. Open `/api/trading/agents/run?symbols=MSTR,BTC&confirm=yes` — one stock and one coin.
-4. Wait about 5–10 minutes, reloading `/api/trading/agents/status`. When `running` is `null`,
-   `lastResult` shows what happened, the problems, the token use and the estimated cost.
-   **Send me that output.**
-5. `/api/trading/agents/latest?symbol=MSTR` — the analysis, the risk review and the decision, with sources.
-6. `/api/trading/agents/proposals` — the draft proposals.
+- **Screening.** In a screened run the Screener scores every instrument from 0 to 10 on a data
+  pack built by code (price, ranges, technicals, key fundamentals, next earnings date, six
+  headlines). It has no tools. Code then picks the shortlist: score 6 or more, highest first,
+  at most 5. Only the shortlist gets the full analysis. A screen can only cause an instrument
+  to be skipped; it cannot cause a trade.
+- **Schedule.** Monday, Wednesday and Friday at 12:00 UTC: all instruments, screened. Saturday at
+  12:00 UTC: coins only, screened. It runs only when `TRADING_AGENTS_SCHEDULE_ENABLED` is `true`
+  in Render (off by default, separate from the monitoring switch because it spends money).
+- **Monthly budget: $50, enforced in code.** Every Claude request is written to a ledger
+  (`trading.api_usage`, append-only). Before every agent step the calendar month's total (UTC)
+  is read; if the step would take it over $50, the step is refused and the run stops there.
+  Fail closed: if the ledger cannot be read no agent runs, and if a request's usage cannot be
+  written that agent stops at once. A warning shows from 80%.
+- **Limits of the budget.** Costs are estimates at list price from Claude's token counts, not
+  the invoice, and one step can overshoot by its own cost. The spend limit you set on the
+  Anthropic workspace is the backstop outside this code.
+- **The desk's own key.** `TRADING_ANTHROPIC_API_KEY`, if set, is used instead of the server's
+  shared `ANTHROPIC_API_KEY`; the status page says which is in use.
+- **Measured cost so far** (two real runs, before screening existed, all on Opus): $0.62 and
+  $0.82 for two instruments. Every run now reports tokens and cost per agent.
 
-To run everything later: `/api/trading/agents/run?all=yes&confirm=yes` (expect over an hour).
+## How to use it (Telegram)
+
+The desk uses the server's existing bot. Its commands are answered by the desk's own code and
+never reach the GM agent.
+
+- `/trade_run` — start a screened run now (all instruments). `/trade_run crypto` — coins only.
+- `/trade_status` — what is running, the schedule, the month's budget, the last run.
+- After **every** run (scheduled, from Telegram or from a URL) a summary arrives: instruments
+  screened, the shortlist with scores, what was analysed, draft proposals, cost by agent, and
+  budget used. It is built by plain code from the run's result.
+- You are also told when the database was updated at startup, and if the desk is off because
+  its database could not be prepared.
+
+The pages remain for details: `/api/trading/agents/status`, `/api/trading/agents/latest?symbol=…`,
+`/api/trading/agents/proposals`.
 
 ## Limitations
 

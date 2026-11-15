@@ -15,6 +15,10 @@ const POLICY = {
   maxPerTradeUsd: { stock: 500, crypto: 250 },
   maxTotalExposureUsd: 5000,
   maxCryptoExposureUsd: 1500,
+  // Owner's decision (2026-11-15): a stock flagged crypto_correlated on the
+  // allowlist (MSTR) counts toward the crypto cap as well as the total cap.
+  // It stays a stock for the per-trade limit ($500).
+  cryptoCorrelatedCountsTowardCryptoCap: true,
   maxDailyLossUsd: 100,
   maxOpenPositions: 10,
   proposalValidHours: 24,                      // a draft proposal expires after this

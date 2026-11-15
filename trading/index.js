@@ -32,11 +32,51 @@ const { createAgents } = require("./agents/pipeline");
 const analysesStore = require("./db/analyses");
 const { POLICY } = require("./policy");
 const { AGENTS } = require("./config");
+const notify = require("./notify");
 
 const STARTED_AT = new Date().toISOString(); // when this server process started
 
 function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }), providers = createProviders({ config }),
-  research = createResearch({ config, providers, db }), agents = createAgents({ config, db, client }) } = {}) {
+  research = createResearch({ config, providers, db }), telegram = null, notifier = notify.createNotifier({ telegram }),
+  agents = createAgents({ config, db, client, onFinished: (result) => notifier.send(notify.runSummary(result)) }), retryMs = 5 * 60 * 1000 } = {}) {
+  // ---- database readiness --------------------------------------------------
+  // Pending migrations are applied here, at startup, before anything that
+  // uses the database is allowed to run. If that fails, the Trading Desk
+  // stays off — schedules are not started and database routes answer 503 —
+  // and it tries again every few minutes. The rest of the server is not
+  // affected.
+  const dbState = { state: !db.configured ? "not_configured" : typeof db.migrateAll === "function" ? "starting" : "ok", applied: [], error: null, attempts: 0, checkedAt: null };
+  let schedulesStarted = false;
+  const startSchedules = () => {
+    if (schedulesStarted) return;
+    schedulesStarted = true;
+    monitor.start();   // each does nothing unless its own switch is exactly "true"
+    research.start();
+    if (typeof agents.start === "function") agents.start();
+  };
+  async function prepareDatabase() {
+    dbState.attempts++;
+    dbState.checkedAt = new Date().toISOString();
+    try {
+      const out = await db.migrateAll({ onApplied: (name) => console.log(`[trading/db] migration applied at startup: ${name}`) });
+      const recovered = dbState.state === "failed";
+      Object.assign(dbState, { state: "ok", error: null });
+      dbState.applied.push(...out.applied);
+      console.log(`[trading/db] database ready (${out.applied.length ? `applied: ${out.applied.join(", ")}` : "nothing to apply"})`);
+      if (out.applied.length) notifier.send(`🗄 <b>Trading Desk database updated</b>\nApplied automatically at startup: ${out.applied.map(notify.esc).join(", ")}`);
+      else if (recovered) notifier.send("✅ <b>Trading Desk database is reachable again</b> — the desk is back on.");
+      startSchedules();
+    } catch (e) {
+      const message = db.redact(e?.message || String(e));
+      const first = dbState.state !== "failed" || dbState.error !== message;
+      Object.assign(dbState, { state: "failed", error: message });
+      console.error(`[trading/db] database not ready (attempt ${dbState.attempts}): ${message}`);
+      if (first) notifier.send(`⛔ <b>Trading Desk is off: its database could not be prepared</b>\n${notify.esc(message.slice(0, 300))}\nNo monitoring, research or agent run will start. It retries every ${Math.round(retryMs / 60000)} minutes.`);
+      const t = setTimeout(prepareDatabase, retryMs);
+      if (typeof t.unref === "function") t.unref();
+    }
+  }
+
   // One coverage test per asset class, over the owner's seed lists.
   const coverage = Object.fromEntries(["stock", "crypto"].map((assetClass) => [assetClass,
     createCoverage({ providers, assetClass, symbols: seedAllowlist().filter((s) => s.assetClass === assetClass).map((s) => s.symbol) })]));
@@ -54,6 +94,8 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   });
   const dbGuard = (req, res, next) => loginGuard(req, res, () => {
     if (!db.configured) return res.status(503).json({ ok: false, error: "TRADING_DATABASE_URL is not set on the server" });
+    if (dbState.state === "starting") return res.status(503).json({ ok: false, error: "the Trading Desk database is being prepared; try again in a moment" });
+    if (dbState.state === "failed") return res.status(503).json({ ok: false, error: `the Trading Desk is off: its database could not be prepared (${dbState.error})`, retrying: true });
     next();
   });
 
@@ -164,7 +206,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   // Connection check, applied / pending migrations, row counts. Read-only.
   app.get("/api/trading/admin/db-status", loginGuard, async (req, res) => {
     const s = await db.status();
-    res.status(s.connected ? 200 : 503).json({ ok: s.connected, ...s });
+    res.status(s.connected ? 200 : 503).json({ ok: s.connected, startup: dbState, ...s });
   });
 
   // Applies ONE migration, and only when it is named: ?confirm=001_initial
@@ -343,21 +385,27 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     if (db.configured && typeof agents.recentRuns === "function") {
       try { recentRuns = await agents.recentRuns(6); } catch (e) { recentRunsError = db.redact(e?.message); }
     }
-    res.json({ ok: true, ...status(), serverStartedAt: STARTED_AT, agents: agents.state(), recentRuns, ...(recentRunsError ? { recentRunsError } : {}), policy: POLICY });
+    const budget = db.configured && agents.budget ? await agents.budget.status() : null;
+    res.json({ ok: true, ...status(), serverStartedAt: STARTED_AT, agents: agents.state(), budget, recentRuns, ...(recentRunsError ? { recentRunsError } : {}), policy: POLICY });
   });
 
-  // Starts one run: ?symbols=MSTR,BTC&confirm=yes  or  ?all=yes&confirm=yes
-  // Each instrument costs Claude API money (three agents read it), so it
-  // needs ?confirm=yes. Works in the background; follow it on /agents/status.
+  // Starts one run. Always needs &confirm=yes, because it costs Claude API money.
+  //   ?screened=yes                 the cheap model scores every instrument, the best few get the full analysis
+  //   ?screened=yes&class=crypto    the same, coins only
+  //   ?symbols=MSTR,BTC             full analysis of exactly these, no screen
+  //   ?all=yes                      full analysis of EVERY instrument, no screen (expensive)
+  // Works in the background; follow it on /agents/status.
   app.get("/api/trading/agents/run", dbGuard, (req, res) => {
-    const symbols = req.query.all === "yes" ? "all" : String(req.query.symbols || req.query.symbol || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
-    if (req.query.confirm !== "yes" || (symbols !== "all" && symbols.length === 0)) return fail(res, new EtoroError("nothing was started: pass ?symbols=MSTR,BTC&confirm=yes (or ?all=yes&confirm=yes)", { code: "BadInput" }));
+    const screened = req.query.screened === "yes";
+    const symbols = screened || req.query.all === "yes" ? "all" : String(req.query.symbols || req.query.symbol || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
+    if (req.query.confirm !== "yes" || (symbols !== "all" && symbols.length === 0)) return fail(res, new EtoroError("nothing was started: pass ?screened=yes&confirm=yes (or ?symbols=MSTR,BTC&confirm=yes)", { code: "BadInput" }));
     if (symbols !== "all" && symbols.length > AGENTS.maxSymbolsPerRun) return fail(res, new EtoroError(`at most ${AGENTS.maxSymbolsPerRun} symbols per run`, { code: "BadInput" }));
     const st = agents.state();
     if (!st.ready) return res.status(503).json({ ok: false, error: st.notReadyBecause });
     if (st.running) return res.status(409).json({ ok: false, error: "a run is already in progress", running: st.running });
-    agents.run(symbols, { trigger: "manual" });
-    res.json({ ok: true, ...status(), started: true, symbols, next: "open /api/trading/agents/status — one instrument takes a few minutes" });
+    const options = { trigger: "manual", screened, scope: req.query.class === "crypto" ? "crypto" : "all" };
+    agents.run(symbols, options);
+    res.json({ ok: true, ...status(), started: true, symbols, mode: screened ? "screened" : "direct", scope: symbols === "all" ? options.scope : "named symbols", next: "open /api/trading/agents/status" });
   });
 
   // The newest analysis, risk review and Portfolio Manager decision for one symbol.
@@ -373,9 +421,35 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     try { res.json({ ok: true, ...status(), proposals: await analysesStore.listProposals(db, 20) }); } catch (e) { fail(res, e); }
   });
 
-  monitor.start();  // both do nothing unless TRADING_MONITOR_ENABLED is exactly "true"
-  research.start();
-  return { monitor, providers, coverage, research, agents };
+  // --- Telegram commands (the server's existing bot) -----------------------
+  // server.js hands exactly these commands to this function, before anything
+  // goes to the GM agent. Plain code: no Claude call decides or writes here.
+  const telegramCommands = new Set(notify.COMMANDS.map((c) => c.command));
+  async function handleTelegramCommand(command, text = "") {
+    if (!telegramCommands.has(command)) return false;
+    const offBecause = !db.configured ? "TRADING_DATABASE_URL is not set" : dbState.state !== "ok" ? `the database is ${dbState.state}${dbState.error ? ` (${dbState.error})` : ""}` : null;
+    if (command === "trade_status") {
+      let budget = null, lastRun = null;
+      if (!offBecause) {
+        budget = await agents.budget.status();
+        try { lastRun = (await agents.recentRuns(1))[0] || null; } catch { /* shown as none */ }
+      }
+      await notifier.send(notify.statusText({ agents: agents.state(), budget, lastRun, dbState }));
+      return true;
+    }
+    // trade_run: a SCREENED run only. "crypto" after the command = coins only.
+    const st = agents.state();
+    if (offBecause || !st.ready) { await notifier.send(`⛔ Not started: ${notify.esc(offBecause || st.notReadyBecause)}`); return true; }
+    if (st.running) { await notifier.send(`⏳ A run is already in progress: ${notify.esc(st.running.step)}. I will send the summary when it finishes.`); return true; }
+    const scope = /\bcrypto\b/i.test(text) ? "crypto" : "all";
+    await notifier.send(`▶️ Screened run started (${scope === "crypto" ? "coins only" : "all instruments"}). The summary follows when it finishes, usually within 15 minutes.`);
+    agents.run("all", { trigger: "telegram", screened: true, scope });
+    return true;
+  }
+
+  if (dbState.state === "ok") startSchedules();
+  else if (dbState.state === "starting") prepareDatabase();
+  return { monitor, providers, coverage, research, agents, dbState, telegramCommands, handleTelegramCommand, telegramCommandList: notify.COMMANDS };
 }
 
 module.exports = { mount };

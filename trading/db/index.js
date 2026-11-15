@@ -7,9 +7,9 @@
 //     (bundled next to this file — a public certificate, not a secret).
 //     There is no "skip verification" switch. Plain connections are allowed
 //     only to localhost, which is what the automated tests use.
-//   * Nothing here runs by itself: no table is created at startup. A
-//     migration is applied only when the owner calls the migrate route and
-//     names the exact file.
+//   * Pending migrations are applied automatically at server startup
+//     (migrateAll, called from trading/index.js) — the owner's decision of
+//     2026-11-15. If one fails, the Trading Desk stays off (fail closed).
 //   * No session-level features are used, so it works through Supabase's
 //     shared pooler in either mode (session mode is the one to use).
 // ---------------------------------------------------------------------------
@@ -176,11 +176,49 @@ function createDb({ config, pgImpl, migrationsDir = MIGRATIONS_DIR } = {}) {
     });
   }
 
+  // Applies EVERY pending migration, oldest first — used at server startup.
+  // Safe to run any number of times and from two server instances at once:
+  //   * each migration runs in its own transaction, under a lock, and is
+  //     recorded in the same transaction — it is applied fully or not at all;
+  //   * a migration already recorded is never run again;
+  //   * if a file was edited after it was applied, or an applied file is
+  //     missing, nothing is run and this throws;
+  //   * the first failure stops the sequence and throws. Earlier migrations
+  //     stay applied; the failed one left no trace.
+  // Returns { applied: [names], upToDate: true }.
+  async function migrateAll({ onApplied = null } = {}) {
+    const files = listMigrations(migrationsDir);
+    const applied = [];
+    for (;;) {
+      const name = await withTransaction(async (tx) => {
+        await tx.query("select pg_advisory_xact_lock($1)", [LOCK_KEY]);
+        await tx.query("create schema if not exists trading");
+        await tx.query("create table if not exists trading.schema_migrations (name text primary key, checksum text not null, applied_at timestamptz not null default now())");
+        const { pending, problems } = plan(await appliedMigrations(tx), files);
+        if (problems.length) throw new DbError(`migrations refused: ${problems.join("; ")}`, { code: "MigrationProblem" });
+        if (!pending.length) return null;
+        const file = files.find((f) => f.name === pending[0]);
+        try { await tx.query(file.sql); }
+        catch (e) { throw new DbError(redact(`migration ${file.name} failed and was rolled back: ${e.message}`), { code: "MigrationFailed" }); }
+        await tx.query("insert into trading.schema_migrations (name, checksum) values ($1, $2)", [file.name, file.checksum]);
+        // The permanent log exists from migration 001 on.
+        if ((await tx.query("select to_regclass('trading.audit_log') as t")).rows[0].t) {
+          await tx.query("insert into trading.audit_log (event_type, entity_type, entity_id, actor, data) values ('migration.applied', 'migration', $1, 'system:startup', $2)", [file.name, JSON.stringify({ checksum: file.checksum })]);
+        }
+        return file.name;
+      });
+      if (!name) break;
+      applied.push(name);
+      if (onApplied) onApplied(name);
+    }
+    return { applied, upToDate: true };
+  }
+
   async function close() {
     if (pool) { const p = pool; pool = null; await p.end(); }
   }
 
-  return { configured, query, withTransaction, status, migrate, close, redact };
+  return { configured, query, withTransaction, status, migrate, migrateAll, close, redact };
 }
 
 module.exports = { createDb, DbError, parseDatabaseUrl, listMigrations };

@@ -96,6 +96,13 @@ Rate limits are per user key over a rolling 60 seconds. Over the limit → HTTP 
 6. With `desc`, `rangeOpen` / `rangeClose` are the newest candle's open and the oldest
    candle's close — reversed in time. Compute ranges from the candles themselves.
 
+7. **Intermittent 401 (seen 2026-11-15 19:05 UTC).** In one scheduled run of 30 candle requests
+   with the same keys, three (FET, GRRR, SE) were answered `401 Unauthorized` while the other 27
+   succeeded; the next run 15 minutes later succeeded for all 30. So a single 401 does not prove
+   the keys are bad. The monitoring job reports it and the next run retries. For Stage 5: a 401
+   on an order call must be treated as "unknown result" — fail closed, then check the order
+   lookup — never as "definitely not sent" and never retried blindly.
+
 ## How to test (from a phone)
 
 Log in to the console first, then open in the same browser:
