@@ -631,3 +631,33 @@ dbTest("the database is the last line: no order without a used, unexpired approv
   const p = { action: "open", instrumentId: 2002, direction: "buy", leverage: 1, orderType: "market", limitRate: null, amountUsd: 400, positionId: null, expiresAt: "2099-11-17T15:10:00.000Z" };
   for (const change of [{ amountUsd: 401 }, { instrumentId: 2001 }, { expiresAt: "2099-11-17T15:11:00.000Z" }]) assert.notStrictEqual(w.gateway.hashOf({ ...p, ...change }), w.gateway.hashOf(p));
 });
+
+dbTest("/trade_test: a small trade you start by hand goes through the same engine, approval and gateway — and is refused the same ways", async (w) => {
+  const desk = mount({ get() {} }, { authOn: true, config: w.config, client: w.client, db: w.db, notifier: w.notifier, approvals: { ...w.approvals, start: () => false }, gateway: w.gateway, orders: w.orders,
+    monitor: { start: () => false, state: () => ({}) }, research: { start: () => false, state: () => ({}) }, positions: { start: () => false, state: () => ({ scheduled: false }) }, agents: { start: () => false, state: () => ({ ready: true, running: null, schedule: { running: false, runs: [] } }), recentRuns: async () => [], budget: { status: async () => null } } });
+  await new Promise((r) => setTimeout(r, 100));
+  const last = () => w.sent[w.sent.length - 1];
+  const proposals = () => w.count("select count(*) as n from trading.proposals");
+  // this command uses the real clock, so give NKE and BTC a price that is fresh right now
+  const stamp = new Date(Date.now() - 60000).toISOString();
+  await w.db.query("update trading.market_snapshots set as_of = '2020-01-01T00:00:00Z'");
+  for (const id of [2002, 100000]) await w.db.query("insert into trading.market_snapshots (instrument_id, kind, as_of, bid, ask, quote_type, raw, source, fetched_at) values ($1, 'rate', $2, 200, 200.2, 'realtime', '{}', 'x', $2)", [id, stamp]);
+  for (const [text, pattern] of [["/trade_test", /Usage: \/trade_test SYMBOL AMOUNT/], ["/trade_test BTC", /Usage/], ["/trade_test BTC lots", /Usage/], ["/trade_test BTC 50.01", /at most \$50/], ["/trade_test BTC 0", /at most \$50/], ["/trade_test AAPL 20", /AAPL is not an allowlisted, verified instrument/], ["/trade_test ADBE 20", /no fresh price for ADBE/]]) {
+    await desk.handleTelegramCommand("trade_test", text);
+    assert.match(last(), pattern, text);
+  }
+  assert.strictEqual(await proposals(), 0);
+  w.tradingEnabled = false;
+  await desk.handleTelegramCommand("trade_test", "/trade_test BTC 50");
+  assert.match(last(), /Not created: trading is off/);
+  assert.strictEqual(await proposals(), 0);
+  w.tradingEnabled = true;
+  await desk.handleTelegramCommand("trade_test", "/trade_test btc $40");
+  const p = (await w.db.query("select p.*, i.symbol from trading.proposals p join trading.instruments i using (instrument_id)")).rows[0];
+  assert.deepStrictEqual([p.symbol, Number(p.amount_usd), p.direction, p.leverage, p.order_type, p.analysis_id], ["BTC", 40, "buy", 1, "market", null]);
+  assert.deepStrictEqual([p.details.source, p.details.holding_days, p.details.exit_conditions], ["owner test (/trade_test)", 3, [{ type: "price_below", value: 190, description: "fixed rule for test trades: 5% below the bid of 200 when it was created" }]]);
+  assert.ok(w.sent.some((m) => /Test proposal created — BUY BTC \$40\.00[\s\S]*Stop 190[\s\S]*risk engine like any other proposal/.test(m)));
+  assert.strictEqual(w.orderCalls.length, 0);                                      // creating it sends nothing
+  assert.strictEqual((await w.db.query("select actor from trading.audit_log where event_type = 'proposal.created'")).rows[0].actor, "owner:telegram");
+  assert.deepStrictEqual([POLICY.testTrade.maxUsd, POLICY.testTrade.stopPctBelowBid, POLICY.testTrade.holdingDays], [50, 5, 3]);
+});

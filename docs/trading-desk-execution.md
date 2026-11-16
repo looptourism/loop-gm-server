@@ -78,6 +78,15 @@ Only a 400 or 404 from eToro is treated as a definite "not placed".
 | Live price age at execution | at most 180 s | eToro's "realtime" rates were seen 40–70 s old |
 | Quiet hours | none | no window was given; set `quietHours` to add one |
 
+## A test trade you start yourself: `/trade_test`
+
+`/trade_test BTC 50` creates one small draft proposal by hand, so the path from proposal to
+position can be proven without waiting for the agents to propose something. It is at most $50,
+needs a fresh price, and only works while trading is on. No agent analyses it, so its plan is
+set by fixed rules in `trading/policy.js`: a stop 5% below the bid and a 3-day holding period.
+From there it is treated exactly like any other proposal: the risk engine, your Approve /
+Reject request, the live re-check, one demo order, verification, and the position watch.
+
 ## What you need to do
 
 1. **A demo key that can trade.** eToro keys are created with Read or Write permission. The
