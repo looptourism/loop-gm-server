@@ -62,8 +62,20 @@ function runSummary(r) {
   return clip(lines.join("\n"), 3900);
 }
 
+// An alert about one demo position. `figures` are the position's own numbers.
+function positionAlert({ title, symbol, lines, figures = {} }) {
+  const out = [`🚨 <b>${esc(title)} — ${esc(symbol)}</b> (DEMO)`, ...lines.map(esc)];
+  const bits = [];
+  if (figures.amountUsd !== undefined && figures.amountUsd !== null) bits.push(`${usd(figures.amountUsd)} invested`);
+  if (figures.openRate) bits.push(`opened at ${figures.openRate}`);
+  if (figures.openedAt) bits.push(`on ${String(figures.openedAt).slice(0, 10)}`);
+  if (typeof figures.unrealizedPnlUsd === "number") bits.push(`profit/loss ${figures.unrealizedPnlUsd < 0 ? "-" : "+"}${usd(Math.abs(figures.unrealizedPnlUsd))}`);
+  if (bits.length) out.push(`Position: ${esc(bits.join(", "))}`);
+  return clip(out.join("\n"), 3900);
+}
+
 // The answer to /trade_status.
-function statusText({ agents, budget, lastRun, dbState }) {
+function statusText({ agents, budget, lastRun, dbState, positions = null }) {
   const lines = ["📈 <b>Trading Desk status</b> (DEMO)"];
   if (dbState && dbState.state !== "ok") lines.push(`⛔ Database: ${esc(dbState.state)}${dbState.error ? ` — ${esc(clip(dbState.error, 200))}` : ""}. The desk is off until this is fixed.`);
   lines.push(agents.running ? `⏳ Running now: ${esc(agents.running.step)} (since ${when(agents.running.startedAt)})` : agents.ready ? "✅ Ready, nothing running" : `⛔ Not ready: ${esc(agents.notReadyBecause)}`);
@@ -73,6 +85,10 @@ function statusText({ agents, budget, lastRun, dbState }) {
   if (lastRun) {
     lines.push(`🕘 Last run: ${when(lastRun.at)} — ${lastRun.event === "started" ? "did not finish (server restarted)" : `${lastRun.skipped ? "nothing ran" : lastRun.ok ? "ok" : "with problems"}, ${lastRun.proposals?.length || 0} draft(s), about ${usd(lastRun.usage?.estimatedCostUsd)}`}`);
   } else lines.push("🕘 Last run: none yet");
+  if (positions) {
+    const c = positions.lastCheck;
+    lines.push(!positions.scheduled ? "👁 Position checks: off" : !c ? "👁 Position checks: on, first check pending" : c.error ? `⚠️ Position checks: last one failed at ${when(c.startedAt)}` : `👁 Positions: ${c.account?.openPositions ?? 0} open, checked ${when(c.startedAt)}${c.account?.openPositions ? `, profit/loss ${c.account.unrealizedPnlUsd < 0 ? "-" : "+"}${usd(Math.abs(c.account.unrealizedPnlUsd))}` : ""}`);
+  }
   lines.push("/trade_run — start a screened run · /trade_run crypto — coins only");
   return lines.join("\n");
 }
@@ -94,4 +110,4 @@ const COMMANDS = [
   { command: "trade_status", description: "مكتب التداول (تجريبي): الحالة والميزانية وآخر تشغيل" },
 ];
 
-module.exports = { createNotifier, runSummary, statusText, budgetLine, COMMANDS, esc };
+module.exports = { createNotifier, runSummary, statusText, positionAlert, budgetLine, COMMANDS, esc };

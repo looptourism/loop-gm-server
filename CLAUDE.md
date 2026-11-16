@@ -18,5 +18,6 @@ The owner works only from a phone. Keep their manual steps to a minimum.
 - **Only ask the owner for things that need their accounts:** API keys, billing, spend limits,
   hosting settings.
 - **Telegram** is the owner's interface for the Trading Desk: a summary after every agent run,
-  `/trade_run` and `/trade_status`. Messages are built by plain code, never by a Claude call.
-  Keep the status pages for details.
+  `/trade_run` and `/trade_status`, and position alerts. Messages are built by plain code,
+  never by a Claude call. Keep the status pages for details.
+- **Trading style (2026-11-16):** short-term swing trades, held 1 to 14 days (`trading/policy.js`).

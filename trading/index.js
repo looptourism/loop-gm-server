@@ -33,12 +33,14 @@ const analysesStore = require("./db/analyses");
 const { POLICY } = require("./policy");
 const { AGENTS } = require("./config");
 const notify = require("./notify");
+const { createPositionMonitor } = require("./positions");
 
 const STARTED_AT = new Date().toISOString(); // when this server process started
 
 function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }), providers = createProviders({ config }),
   research = createResearch({ config, providers, db }), telegram = null, notifier = notify.createNotifier({ telegram }),
-  agents = createAgents({ config, db, client, onFinished: (result) => notifier.send(notify.runSummary(result)) }), retryMs = 5 * 60 * 1000 } = {}) {
+  agents = createAgents({ config, db, client, onFinished: (result) => notifier.send(notify.runSummary(result)) }),
+  positions = createPositionMonitor({ config, client, db, notifier }), retryMs = 5 * 60 * 1000 } = {}) {
   // ---- database readiness --------------------------------------------------
   // Pending migrations are applied here, at startup, before anything that
   // uses the database is allowed to run. If that fails, the Trading Desk
@@ -53,6 +55,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     monitor.start();   // each does nothing unless its own switch is exactly "true"
     research.start();
     if (typeof agents.start === "function") agents.start();
+    if (typeof positions.start === "function") positions.start();
   };
   async function prepareDatabase() {
     dbState.attempts++;
@@ -421,6 +424,20 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     try { res.json({ ok: true, ...status(), proposals: await analysesStore.listProposals(db, 20) }); } catch (e) { fail(res, e); }
   });
 
+  // --- Position monitoring ---------------------------------------------------
+  // The last check, the desk's record of positions, and the alerts sent. Read-only.
+  // Add ?check=yes to run one check now.
+  app.get("/api/trading/positions/status", dbGuard, async (req, res) => {
+    try {
+      const checkedNow = req.query.check === "yes" ? await positions.check("manual") : null;
+      const [open, alerts] = await Promise.all([
+        db.query("select p.etoro_position_id, i.symbol, p.amount_usd, p.open_rate, p.opened_at, p.status, p.exit_conditions, p.last_synced_at from trading.positions p join trading.instruments i using (instrument_id) order by p.status desc, p.opened_at desc nulls last limit 30"),
+        db.query("select created_at, symbol, kind, condition_key, delivered from trading.position_alerts order by created_at desc limit 20"),
+      ]);
+      res.json({ ok: true, ...status(), monitor: positions.state(), ...(checkedNow ? { checkedNow } : {}), positions: open.rows, recentAlerts: alerts.rows });
+    } catch (e) { fail(res, e); }
+  });
+
   // --- Telegram commands (the server's existing bot) -----------------------
   // server.js hands exactly these commands to this function, before anything
   // goes to the GM agent. Plain code: no Claude call decides or writes here.
@@ -434,7 +451,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
         budget = await agents.budget.status();
         try { lastRun = (await agents.recentRuns(1))[0] || null; } catch { /* shown as none */ }
       }
-      await notifier.send(notify.statusText({ agents: agents.state(), budget, lastRun, dbState }));
+      await notifier.send(notify.statusText({ agents: agents.state(), budget, lastRun, dbState, positions: typeof positions.state === "function" ? positions.state() : null }));
       return true;
     }
     // trade_run: a SCREENED run only. "crypto" after the command = coins only.
@@ -449,7 +466,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
 
   if (dbState.state === "ok") startSchedules();
   else if (dbState.state === "starting") prepareDatabase();
-  return { monitor, providers, coverage, research, agents, dbState, telegramCommands, handleTelegramCommand, telegramCommandList: notify.COMMANDS };
+  return { monitor, providers, coverage, research, agents, positions, dbState, telegramCommands, handleTelegramCommand, telegramCommandList: notify.COMMANDS };
 }
 
 module.exports = { mount };

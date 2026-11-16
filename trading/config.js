@@ -153,11 +153,11 @@ const AGENTS = {
   // month's spend plus this would exceed the budget.
   stepReserveUsd: { screen: 0.02, stock: 0.4, crypto: 0.4, risk: 0.4, portfolio_manager: 1.5 },
 
-  // owner: screened runs on Monday, Wednesday and Friday at 12:00 UTC (all
+  // owner (2026-11-16): screened runs every weekday at 12:00 UTC (all
   // instruments), and on Saturday at 12:00 UTC (coins only). They run only
   // when TRADING_AGENTS_SCHEDULE_ENABLED is exactly "true".
   schedule: [
-    { cron: "0 12 * * 1,3,5", scope: "all", label: "Mon/Wed/Fri 12:00 UTC — all instruments, screened" },
+    { cron: "0 12 * * 1-5", scope: "all", label: "Mon–Fri 12:00 UTC — all instruments, screened" },
     { cron: "0 12 * * 6", scope: "crypto", label: "Sat 12:00 UTC — coins only, screened" },
   ],
 
@@ -167,4 +167,16 @@ const AGENTS = {
   maxSymbolsPerRun: 40,
 };
 
-module.exports = { ETORO_BASE_URL, AGENTS, MONITORING, DATA_PROVIDERS, PROVIDER_LIMITS, RESEARCH, readConfig };
+// ---------------------------------------------------------------------------
+// Position monitoring (owner's requirement, 2026-11-16): open demo positions
+// are checked against their exit conditions every 15 minutes, two minutes
+// after each price collection so the prices are new. It runs under the same
+// switch as price monitoring (TRADING_MONITOR_ENABLED). One eToro request per
+// check, on the account quota (60 per minute).
+// ---------------------------------------------------------------------------
+const POSITIONS = {
+  cron: "7,22,37,52 * * * *",   // UTC
+  failuresBeforeAlert: 2,        // consecutive failed checks before a Telegram alert
+};
+
+module.exports = { ETORO_BASE_URL, AGENTS, POSITIONS, MONITORING, DATA_PROVIDERS, PROVIDER_LIMITS, RESEARCH, readConfig };
