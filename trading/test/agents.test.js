@@ -91,7 +91,7 @@ test("the model is set in one place and the policy matches the owner's limits", 
   assert.deepStrictEqual(AGENTS.models, { screen: "claude-haiku-5-5", stock: "claude-opus-5-5", crypto: "claude-opus-5-5", risk: "claude-opus-5-5", portfolio_manager: "claude-opus-5-5" });
   for (const m of Object.values(AGENTS.models)) assert.ok(AGENTS.pricesPerMTok[m], `no price for ${m}`);
   // the owner's cost decisions of 2026-11-15
-  assert.deepStrictEqual([AGENTS.monthlyBudgetUsd, AGENTS.shortlistMax], [50, 5]);
+  assert.deepStrictEqual([AGENTS.monthlyBudgetUsd, AGENTS.shortlistMax], [75, 5]);
   assert.deepStrictEqual(AGENTS.schedule.map((x) => [x.cron, x.scope]), [["0 12 * * 1-5", "all"], ["0 12 * * 6", "crypto"]]); // every weekday, and coins on Saturday
   assert.deepStrictEqual([POLICY.style, POLICY.holdingDays], ["swing", { min: 1, max: 14 }]);
   assert.strictEqual(readConfig({}).agentsScheduleEnabled, false);
@@ -386,7 +386,7 @@ dbTest("a full run: analysis → risk review → portfolio manager, saved with s
   assert.deepStrictEqual([Number(led.n), Number(led.i)], [claude.calls.length, out.usage.inputTokens]);
   assert.ok(Math.abs(Number(led.usd) - out.usage.estimatedCostUsd) < 0.01);
   assert.strictEqual(out.usage.estimatedCostUsd, Math.round(claude.calls.length * (100 * 4 + 50 * 20) / 1e6 * 100) / 100); // 100 in + 50 out per request at Opus prices
-  assert.deepStrictEqual([out.budget.budgetUsd, out.budget.reached, out.mode], [50, false, "direct"]);
+  assert.deepStrictEqual([out.budget.budgetUsd, out.budget.reached, out.mode], [75, false, "direct"]);
   // the run itself is in the permanent log, so it survives a server restart
   const runs = await agents.recentRuns();
   assert.deepStrictEqual(runs.map((r) => r.event), ["finished", "started"]);

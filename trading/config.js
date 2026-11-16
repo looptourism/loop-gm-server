@@ -147,7 +147,7 @@ const AGENTS = {
   shortlistMax: 5,            // owner: at most 5 instruments get the full analysis per run
   shortlistMinScore: 6,       // a screen score below this is never analysed, even if fewer than 5 qualify
 
-  monthlyBudgetUsd: 50,       // owner: hard stop for the calendar month (UTC)
+  monthlyBudgetUsd: 75,       // owner (2026-11-16, raised from 50 for weekday runs): hard stop for the calendar month (UTC)
   warnAtFraction: 0.8,
   // What one step is assumed to cost at most. A step is refused if the
   // month's spend plus this would exceed the budget.

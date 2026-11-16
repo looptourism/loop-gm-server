@@ -83,9 +83,9 @@ All of this is set in `AGENTS` in `trading/config.js`.
 - **Schedule (owner, 2026-11-16).** Every weekday at 12:00 UTC: all instruments, screened. Saturday at
   12:00 UTC: coins only, screened. It runs only when `TRADING_AGENTS_SCHEDULE_ENABLED` is `true`
   in Render (off by default, separate from the monitoring switch because it spends money).
-- **Monthly budget: $50, enforced in code.** Every Claude request is written to a ledger
+- **Monthly budget: $75, enforced in code** (raised from $50 on 2026-11-16 for weekday runs). Every Claude request is written to a ledger
   (`trading.api_usage`, append-only). Before every agent step the calendar month's total (UTC)
-  is read; if the step would take it over $50, the step is refused and the run stops there.
+  is read; if the step would take it over $75, the step is refused and the run stops there.
   Fail closed: if the ledger cannot be read no agent runs, and if a request's usage cannot be
   written that agent stops at once. A warning shows from 80%.
 - **Limits of the budget.** Costs are estimates at list price from Claude's token counts, not
@@ -95,7 +95,7 @@ All of this is set in `AGENTS` in `trading/config.js`.
   shared `ANTHROPIC_API_KEY`; the status page says which is in use.
 - **Estimated monthly cost of the schedule** (22 weekday runs and about 4 Saturday runs, a full
   shortlist of five every time, token use as in the second real run; rough, ±40%): about $49
-  with Opus for everything — right at the $50 budget, so late-month runs would be refused.
+  with Opus for everything, which is why the budget was raised to $75.
   With Sonnet 5.5 for the analysts and the reviewer and Opus for the manager only: about $31.
   A screened run has not been measured yet; the first one will replace these figures.
 - **Measured cost so far** (two real runs, before screening existed, all on Opus): $0.62 and
