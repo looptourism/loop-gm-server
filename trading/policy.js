@@ -34,6 +34,11 @@ const POLICY = {
     maxPriceDriftPct: 3,                       // refuse if the price moved more than this since the approval request was sent
     lookupGiveUpMinutes: 10,                   // an order whose fate is unknown and that eToro still has no record of after this long is marked failed
   },
+  // /trade_test — a small trade the owner starts by hand to prove the path
+  // from proposal to position. No agent analyses it, so its stop and holding
+  // period are set by these fixed rules. It goes through the same risk
+  // engine, the same approval and the same gateway as any other proposal.
+  testTrade: { maxUsd: 50, stopPctBelowBid: 5, holdingDays: 3 },
   // Telegram quiet hours: no approval request is sent inside this window;
   // proposals wait and still expire normally. null = no quiet hours.
   // Example: { start: "23:00", end: "07:00", timeZone: "Asia/Dubai" }

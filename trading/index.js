@@ -39,6 +39,8 @@ const { createGateway } = require("./execution/gateway");
 const { createApprovals } = require("./approvals");
 const { readHalted } = require("./risk/context");
 const { appendAudit } = require("./db/store");
+const { listMonitored } = require("./db/snapshots");
+const { rateFreshness } = require("./market-data");
 
 const STARTED_AT = new Date().toISOString(); // when this server process started
 
@@ -512,6 +514,37 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
       await notifier.send(halted
         ? "⛔ <b>Trading stopped</b> (DEMO)\nNo approval request will be sent and no order can be placed — including ones you already approved. Open positions stay open and are still watched. /trade_resume to allow trading again."
         : config.tradingEnabled ? "🟢 <b>Trading resumed</b> (DEMO)\nEvery order still needs your approval." : "ℹ️ The stop was lifted, but trading is still off: TRADING_ENABLED is not \"true\" in Render.");
+      return true;
+    }
+    // trade_test SYMBOL AMOUNT — the owner's own small test trade. It only
+    // creates a DRAFT proposal; the risk engine, the approval request and the
+    // gateway then treat it exactly like an agent's proposal.
+    if (command === "trade_test") {
+      const rule = POLICY.testTrade;
+      const m = /^\/\w+(?:@\w+)?\s+([A-Za-z0-9.]{1,12})\s+\$?(\d+(?:\.\d{1,2})?)\s*$/.exec(text.trim());
+      const say = async (t) => { await notifier.send(t); return true; };
+      if (offBecause) return say(`⛔ Not created: ${notify.esc(offBecause)}`);
+      if (!m) return say(`Usage: /trade_test SYMBOL AMOUNT — for example <code>/trade_test BTC ${rule.maxUsd}</code>. At most $${rule.maxUsd}.`);
+      const symbol = m[1].toUpperCase(), amountUsd = Number(m[2]);
+      if (!(amountUsd > 0 && amountUsd <= rule.maxUsd)) return say(`⛔ Not created: a test trade is at most $${rule.maxUsd}.`);
+      const trading = await approvals.summary();
+      if (trading.tradingOff) return say(`⛔ Not created: trading is off (${notify.esc(trading.tradingOff)}), so it could not be offered to you for approval.`);
+      const instrument = (await listMonitored(db)).find((i) => i.symbol === symbol);
+      if (!instrument) return say(`⛔ Not created: ${notify.esc(symbol)} is not an allowlisted, verified instrument.`);
+      const r = (await db.query("select bid, as_of, quote_type from trading.market_snapshots where kind = 'rate' and instrument_id = $1 order by as_of desc limit 1", [instrument.instrumentId])).rows[0];
+      const at = new Date();
+      if (!r || !rateFreshness({ asOf: r.as_of, quoteType: r.quote_type }, at, MONITORING.rateFreshSec).fresh) return say(`⛔ Not created: there is no fresh price for ${notify.esc(symbol)} right now (market closed or data delayed). A stop level cannot be set without one.`);
+      const bid = Number(r.bid);
+      const stop = Number((bid * (1 - rule.stopPctBelowBid / 100)).toPrecision(6));
+      const details = {
+        source: "owner test (/trade_test)", symbol, decision: "propose_buy", amount_usd: amountUsd, holding_days: rule.holdingDays, holding_period: `${rule.holdingDays} days (fixed rule for test trades)`,
+        rationale: "Test trade started by you with /trade_test. No agent analysed it; it exists to prove the path from proposal to position.",
+        disagreements: [], entry_conditions: ["at the market price when approved"], risks: ["not analysed by any agent"], evidence: [], assumptions: [],
+        exit_conditions: [{ type: "price_below", value: stop, description: `fixed rule for test trades: ${rule.stopPctBelowBid}% below the bid of ${bid} when it was created` }],
+      };
+      await db.withTransaction((tx) => analysesStore.saveDraftProposal(tx, { instrument, amountUsd, expiresAt: new Date(at.getTime() + POLICY.proposalValidHours * 3600000), analysisId: null, details, actor: "owner:telegram" }));
+      await notifier.send(`🧪 <b>Test proposal created — BUY ${notify.esc(symbol)} $${amountUsd.toFixed(2)}</b> (DEMO)\nStop ${stop} (${rule.stopPctBelowBid}% below the bid), planned holding ${rule.holdingDays} days.\nIt now goes to the risk engine like any other proposal. If it passes you will get the Approve / Reject request.`);
+      if (typeof approvals.tick === "function") await approvals.tick();
       return true;
     }
     // trade_run: a SCREENED run only. "crypto" after the command = coins only.

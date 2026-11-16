@@ -158,6 +158,7 @@ function statusText({ agents, budget, lastRun, dbState, positions = null, tradin
   }
   lines.push("/trade_run — start a screened run · /trade_run crypto — coins only");
   lines.push("/trade_stop — stop all trading now · /trade_resume — allow it again");
+  lines.push("/trade_test BTC 50 — a small test trade through the same checks and your approval");
   return lines.join("\n");
 }
 
@@ -191,6 +192,7 @@ function createNotifier({ telegram = null, log = (...a) => console.log("[trading
 const COMMANDS = [
   { command: "trade_run", description: "مكتب التداول (تجريبي): تشغيل فحص وتحليل الآن" },
   { command: "trade_status", description: "مكتب التداول (تجريبي): الحالة والميزانية وآخر تشغيل" },
+  { command: "trade_test", description: "مكتب التداول (تجريبي): صفقة اختبار صغيرة، مثال: /trade_test BTC 50" },
   { command: "trade_stop", description: "مكتب التداول (تجريبي): إيقاف التداول فورًا" },
   { command: "trade_resume", description: "مكتب التداول (تجريبي): السماح بالتداول من جديد" },
 ];
