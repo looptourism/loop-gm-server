@@ -134,7 +134,7 @@ test("the notifier never throws and says nothing when Telegram is not set up", a
 test("Telegram commands: /trade_run starts a screened run only; /trade_status reports; nothing else is handled", async () => {
   const p = parts();
   const desk = mount(fakeApp(), { ...p.opts, db: { configured: true, redact: (t) => String(t ?? "") } });
-  assert.deepStrictEqual([...desk.telegramCommands], ["trade_run", "trade_status"]);
+  assert.deepStrictEqual([...desk.telegramCommands], ["trade_run", "trade_status", "trade_stop", "trade_resume"]);
   assert.strictEqual(await desk.handleTelegramCommand("brief", "/brief"), false);  // not the desk's command: left to the server
   assert.deepStrictEqual([p.runs, p.sent], [[], []]);
   await desk.handleTelegramCommand("trade_run", "/trade_run");

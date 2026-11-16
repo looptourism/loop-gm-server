@@ -1983,6 +1983,7 @@ const TG_HELP = `<b>Loop — المدير العام على تيليجرام</b>
 <b>مكتب التداول (تجريبي)</b>
 /trade_run — تشغيل فحص وتحليل الآن (أضف crypto للعملات فقط)
 /trade_status — الحالة والميزانية وآخر تشغيل
+/trade_stop — إيقاف التداول فورًا · /trade_resume — السماح به من جديد
 
 المدفوعات والنشر لا تُنفَّذ من المحادثة: تُرفع كطلب موافقة وتنتظر ضغطك على الزر.`;
 
@@ -2142,6 +2143,8 @@ async function tgHandleMessage(msg) {
 async function handleTelegramUpdate(update) {
   const cq = update.callback_query;
   if (cq) {
+    // Trading Desk approval buttons are handled by the Trading Desk's own code.
+    if (tradingDesk.ownsCallback(cq.data)) return tradingDesk.handleTelegramCallback(cq);
     const m = /^ap:(ok|no):(.+)$/.exec(cq.data || "");
     if (!m) return telegram.answerCallbackQuery(cq.id);
     const ok = m[1] === "ok";

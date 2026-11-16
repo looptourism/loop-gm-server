@@ -102,6 +102,13 @@ function createPositionMonitor({ config, client, db, notifier, settings = POSITI
       const pnl = await client.getDemoPnl();
       const account = summarizeDemoAccount(pnl); // throws if eToro's answer is not usable
       const t = now();
+      // The account's figures at this moment. The risk engine measures today's loss
+      // against the first of these each day; without it no order can be sent.
+      const equity = Math.round((account.availableCashUsd + account.investedUsd + account.pendingOrdersUsd + account.unrealizedPnlUsd) * 100) / 100;
+      await db.query(
+        "insert into trading.account_snapshots (taken_at, credit_usd, invested_usd, pending_orders_usd, unrealized_pnl_usd, equity_usd, open_positions, source) values ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [pnl.fetchedAt, account.creditUsd, account.investedUsd, account.pendingOrdersUsd, account.unrealizedPnlUsd, equity, account.openPositions, pnl.source]
+      );
       const known = new Map((await db.query("select instrument_id, symbol, asset_class from trading.instruments")).rows.map((r) => [Number(r.instrument_id), r]));
       const seenIds = [];
       run.instruments = account.positions.length;
