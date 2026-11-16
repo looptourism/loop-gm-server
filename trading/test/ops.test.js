@@ -93,7 +93,7 @@ test("startup: without a database nothing is migrated or started, and the rest o
 // ---- Telegram: messages built by code ----------------------------------------
 const finished = {
   ok: true, trigger: "schedule", mode: "screened", scope: "all", startedAt: "2026-11-16T12:00:00.100Z", finishedAt: "2026-11-16T12:09:10.000Z",
-  screen: { minScore: 6, results: [{ symbol: "MSTR", score: 8, shortlisted: true }, { symbol: "NVO", score: 7, shortlisted: true }, { symbol: "BTC", score: 3, shortlisted: false }, { symbol: "SE", score: null, error: "x", shortlisted: false }] },
+  screen: { minScore: 6, results: [{ symbol: "MSTR", score: 8, shortlisted: true, reason: "pulled back to its 20-day average with RSI turning up" }, { symbol: "NVO", score: 7, shortlisted: true }, { symbol: "BTC", score: 3, shortlisted: false }, { symbol: "SE", score: null, error: "x", shortlisted: false }] },
   instruments: [{ symbol: "MSTR", analysis: { ok: true, recommendation: "avoid" }, riskReview: { ok: true, stance: "no_objection" } }, { symbol: "NVO", analysis: { ok: true, recommendation: "buy" }, riskReview: { ok: true, stance: "caution" } }],
   portfolioManager: { decisions: [{ symbol: "MSTR", decision: "no_trade" }, { symbol: "NVO", decision: "propose_buy" }] },
   proposals: [{ symbol: "NVO", amountUsd: 300 }], problems: ["SE screen: x — not shortlisted"],
@@ -103,11 +103,12 @@ const finished = {
 
 test("run summary: instruments screened, shortlist, proposals, cost and budget — from the result, by code", () => {
   const t = notify.runSummary(finished);
-  for (const piece of ["screened run", "(DEMO)", "schedule · 2026-11-16 12:00 UTC · 9 min", "Screened: 3 of 4", "Shortlist (2): MSTR 8, NVO 7", "MSTR avoid / no objection; NVO buy / caution",
+  for (const piece of ["screened run", "(DEMO)", "schedule · 2026-11-16 12:00 UTC · 9 min", "Screened: 3 of 4", "Shortlist (2): MSTR 8, NVO 7", "Next highest: BTC 3", "Top score (MSTR): pulled back to its 20-day average", "MSTR avoid / no objection; NVO buy / caution",
     "1 buy proposed, 1 no trade", "Draft proposals (1): NVO $300.00", "Problems (1): SE screen", "about $1.42 (screen $0.02, analysts $0.60, risk $0.50, manager $0.30)", "$12.40 of $50.00 used in 2026-11 (25%)", "No order was placed"]) assert.ok(t.includes(piece), piece);
   assert.ok(t.length < 4096);                                                      // fits one Telegram message
   const quiet = notify.runSummary({ ...finished, screen: { minScore: 6, results: [{ symbol: "BTC", score: 3, shortlisted: false }] }, instruments: [], portfolioManager: undefined, proposals: [], problems: [] });
   assert.ok(quiet.includes("Shortlist: none scored 6 or more") && quiet.includes("Draft proposals: none"));
+  assert.ok(quiet.includes("Next highest: BTC 3"));                                // an empty shortlist still shows how close the best came
   const skipped = notify.runSummary({ trigger: "schedule", mode: "screened", startedAt: "2026-11-16T12:00:00Z", skipped: "monthly budget reached: about $49.9 of $50 used", budget: { ...finished.budget, spentUsd: 49.9, reached: true } });
   assert.ok(skipped.includes("Nothing ran: monthly budget reached"));
   assert.match(notify.budgetLine({ ...finished.budget, spentUsd: 49.9, reached: true }), /⛔[\s\S]*reached, runs are stopped until next month/);
