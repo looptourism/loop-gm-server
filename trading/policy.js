@@ -27,6 +27,17 @@ const POLICY = {
   // flagged by the position monitor.
   style: "swing",
   holdingDays: { min: 1, max: 14 },
+  // Stage 5 — rules of the risk engine and the execution gateway.
+  onePositionPerInstrument: true,              // no second position in an instrument that is already held
+  execution: {
+    priceMaxAgeSec: 180,                       // the live price must be this recent when the order is sent (eToro's "realtime" rates were seen 40–70 s old)
+    maxPriceDriftPct: 3,                       // refuse if the price moved more than this since the approval request was sent
+    lookupGiveUpMinutes: 10,                   // an order whose fate is unknown and that eToro still has no record of after this long is marked failed
+  },
+  // Telegram quiet hours: no approval request is sent inside this window;
+  // proposals wait and still expire normally. null = no quiet hours.
+  // Example: { start: "23:00", end: "07:00", timeZone: "Asia/Dubai" }
+  quietHours: null,
   proposalValidHours: 24,                      // a draft proposal expires after this
   approvalValidMinutes: 15,                    // an approval request expires after this (Stage 5)
 };

@@ -72,15 +72,18 @@ test("the agents have read-only tools only, and nothing is shared with the rest 
   const uses = server.split("\n").filter((l) => /tradingDesk\./.test(l)).map((l) => l.trim());
   assert.deepStrictEqual(uses, [
     "if (command && tradingDesk.telegramCommands.has(command)) return tradingDesk.handleTelegramCommand(command, text);",
+    "if (tradingDesk.ownsCallback(cq.data)) return tradingDesk.handleTelegramCallback(cq);",
     'await telegram.setMyCommands([...TG_COMMANDS, ...tradingDesk.telegramCommandList]).catch((e) => tgLogError("setMyCommands", e));',
   ]);
   // The desk's commands are answered before any other command and before the message can reach the GM agent.
   const handler = server.slice(server.indexOf("async function tgHandleMessage"), server.indexOf("async function handleTelegramUpdate"));
   assert.ok(handler.indexOf("tradingDesk.handleTelegramCommand") > 0 && handler.indexOf("tradingDesk.handleTelegramCommand") < handler.indexOf('command === "test"'));
   for (const word of ["get_market_data", "submit_analysis", "submit_decisions", "agents/pipeline"]) assert.ok(!server.includes(word));
-  // No order path or write method anywhere in the trading code.
+  // No order path or write method anywhere in the trading code — except the one
+  // demo order client, which has its own tests in stage5.test.js.
   const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === "test" ? [] : walk(path.join(dir, e.name))) : e.name.endsWith(".js") ? [path.join(dir, e.name)] : []));
   for (const file of walk(path.join(__dirname, ".."))) {
+    if (file.endsWith(path.join("execution", "etoro-orders.js")) || file.endsWith(path.join("execution", "gateway.js"))) continue;
     const src = fs.readFileSync(file, "utf8");
     assert.ok(!/method:\s*["'](POST|PUT|DELETE|PATCH)["']/.test(src), `${file} sends a write request`);
     assert.ok(!/\/trading\/execution\//.test(src) || /NOT implemented|never|Never/.test(src), `${file} names an order path`);
@@ -317,7 +320,7 @@ if (TEST_URL) {
     await admin.close();
     const u = new URL(TEST_URL); u.pathname = "/trading_agents_test";
     db = createDb({ config: { databaseUrl: u.toString() } });
-    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage", "005_positions_monitor"]) await db.migrate(m);
+    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage", "005_positions_monitor", "006_risk_and_execution"]) await db.migrate(m);
     for (const [id, symbol, cls] of [[2001, "MSTR", "stock"], [100000, "BTC", "crypto"], [2009, "NKE", "stock"]]) {
       await db.query("insert into trading.instruments (instrument_id, symbol, display_name, asset_class, exchange, raw, source, fetched_at) values ($1, $2, $3, $4, 'NASDAQ', '{}', 'test', now())", [id, symbol, `${symbol} name`, cls]);
       if (symbol !== "NKE") await db.query(`insert into trading.${cls}_allowlist (symbol, instrument_id, verified_at) values ($1, $2, now())`, [symbol, id]);

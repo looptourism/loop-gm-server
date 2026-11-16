@@ -34,13 +34,27 @@ const { POLICY } = require("./policy");
 const { AGENTS } = require("./config");
 const notify = require("./notify");
 const { createPositionMonitor } = require("./positions");
+const { createOrderClient } = require("./execution/etoro-orders");
+const { createGateway } = require("./execution/gateway");
+const { createApprovals } = require("./approvals");
+const { readHalted } = require("./risk/context");
+const { appendAudit } = require("./db/store");
 
 const STARTED_AT = new Date().toISOString(); // when this server process started
 
 function mount(app, { authOn, config = readConfig(), client = createClient({ config }), db = createDb({ config }), monitor = createMonitor({ config, client, db }), providers = createProviders({ config }),
   research = createResearch({ config, providers, db }), telegram = null, notifier = notify.createNotifier({ telegram }),
-  agents = createAgents({ config, db, client, onFinished: (result) => notifier.send(notify.runSummary(result)) }),
-  positions = createPositionMonitor({ config, client, db, notifier }), retryMs = 5 * 60 * 1000 } = {}) {
+  hooks = {}, agents = createAgents({ config, db, client, onFinished: (result) => hooks.afterRun(result) }),
+  positions = createPositionMonitor({ config, client, db, notifier }),
+  orders = createOrderClient({ config }),
+  gateway = createGateway({ config, db, client, orders, onOutcome: (outcome) => notifier.send(notify.executionResult(outcome)) }),
+  approvals = createApprovals({ config, db, client, gateway, notifier }), retryMs = 5 * 60 * 1000 } = {}) {
+  // After every agent run: the summary first, then any new draft goes to the
+  // risk engine at once (and, if it passes and trading is on, to the owner).
+  hooks.afterRun = async (result) => {
+    await notifier.send(notify.runSummary(result));
+    if (result.proposals?.length && typeof approvals.tick === "function") await approvals.tick();
+  };
   // ---- database readiness --------------------------------------------------
   // Pending migrations are applied here, at startup, before anything that
   // uses the database is allowed to run. If that fails, the Trading Desk
@@ -56,6 +70,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     research.start();
     if (typeof agents.start === "function") agents.start();
     if (typeof positions.start === "function") positions.start();
+    if (typeof approvals.start === "function") approvals.start(); // every minute: expire, offer for approval, settle orders
   };
   async function prepareDatabase() {
     dbState.attempts++;
@@ -115,7 +130,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     });
   };
 
-  const status = () => ({ environment: "demo", tradingEnabled: config.tradingEnabled, orderPlacement: "not implemented (read-only so far)" });
+  const status = () => ({ environment: "demo", tradingEnabled: config.tradingEnabled, orderPlacement: config.tradingEnabled ? "DEMO orders only, each one after your approval" : "off — TRADING_ENABLED is not \"true\"" });
 
   // Demo balance + portfolio. Add ?raw=1 to see eToro's untouched response.
   app.get("/api/trading/test/demo-account", guard, async (req, res) => {
@@ -438,6 +453,25 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     } catch (e) { fail(res, e); }
   });
 
+  // --- Stage 5: risk engine, approvals, execution -------------------------------
+  // What is waiting, the latest approvals and orders, and the latest verdicts
+  // of the risk engine with every check. Read-only.
+  app.get("/api/trading/orders/status", dbGuard, async (req, res) => {
+    try {
+      const [proposals, approvalRows, orderRows, verdicts] = await Promise.all([
+        analysesStore.listProposals(db, 15),
+        db.query("select a.id, i.symbol, a.requested_at, a.expires_at, a.decision, a.decided_at, a.channel, a.consumed_at from trading.approvals a join trading.proposals p on p.id = a.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id order by a.requested_at desc limit 15"),
+        db.query("select o.id, i.symbol, o.status, o.etoro_order_id, o.error, o.request, o.created_at, o.submitted_at, o.verified_at from trading.orders o join trading.proposals p on p.id = o.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id order by o.created_at desc limit 15"),
+        db.query("select r.created_at, i.symbol, r.phase, r.passed, r.checks, r.engine_version from trading.risk_assessments r join trading.proposals p on p.id = r.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id order by r.created_at desc limit 10"),
+      ]);
+      res.json({
+        ok: true, ...status(), stopped: await readHalted(db), summary: await approvals.summary(),
+        proposals: proposals.map(({ details, ...p }) => p), approvals: approvalRows.rows, orders: orderRows.rows,
+        riskVerdicts: verdicts.rows.map((v) => ({ at: v.created_at, symbol: v.symbol, phase: v.phase, passed: v.passed, engine: v.engine_version, failed: v.checks.filter((c) => !c.passed).map((c) => `${c.name}: ${c.message}`), checks: req.query.all === "yes" ? v.checks : undefined })),
+      });
+    } catch (e) { fail(res, e); }
+  });
+
   // --- Telegram commands (the server's existing bot) -----------------------
   // server.js hands exactly these commands to this function, before anything
   // goes to the GM agent. Plain code: no Claude call decides or writes here.
@@ -456,7 +490,28 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
           lastRun = (agents.state().running && recent[0]?.event === "started" ? recent.slice(1) : recent)[0] || null;
         } catch { /* shown as none */ }
       }
-      await notifier.send(notify.statusText({ agents: agents.state(), budget, lastRun, dbState, positions: typeof positions.state === "function" ? positions.state() : null }));
+      let trading = null;
+      if (!offBecause && typeof approvals.summary === "function") { try { trading = await approvals.summary(); } catch { /* left out */ } }
+      await notifier.send(notify.statusText({ agents: agents.state(), budget, lastRun, dbState, positions: typeof positions.state === "function" ? positions.state() : null, trading }));
+      return true;
+    }
+    // The runtime stop. It can only make the desk stricter: trading needs
+    // TRADING_ENABLED = "true" AND not stopped here. Stopping never needs the
+    // database to be healthy to take effect — an unreadable stop state counts as stopped.
+    if (command === "trade_stop" || command === "trade_resume") {
+      const halted = command === "trade_stop";
+      try {
+        await db.withTransaction(async (tx) => {
+          await tx.query("insert into trading.desk_state (key, value, updated_by) values ('trading_halted', $1, 'owner:telegram') on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()", [JSON.stringify({ halted, at: new Date().toISOString() })]);
+          await appendAudit(tx, { eventType: halted ? "trading.stopped" : "trading.resumed", entityType: "desk", actor: "owner:telegram", data: { envSwitch: config.tradingEnabled } });
+        });
+      } catch (e) {
+        await notifier.send(halted ? `⚠️ The stop could not be saved (${notify.esc(db.redact(e?.message))}). While the stop state cannot be read, no order is sent anyway.` : `⚠️ Trading was NOT resumed: ${notify.esc(db.redact(e?.message))}`);
+        return true;
+      }
+      await notifier.send(halted
+        ? "⛔ <b>Trading stopped</b> (DEMO)\nNo approval request will be sent and no order can be placed — including ones you already approved. Open positions stay open and are still watched. /trade_resume to allow trading again."
+        : config.tradingEnabled ? "🟢 <b>Trading resumed</b> (DEMO)\nEvery order still needs your approval." : "ℹ️ The stop was lifted, but trading is still off: TRADING_ENABLED is not \"true\" in Render.");
       return true;
     }
     // trade_run: a SCREENED run only. "crypto" after the command = coins only.
@@ -471,7 +526,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
 
   if (dbState.state === "ok") startSchedules();
   else if (dbState.state === "starting") prepareDatabase();
-  return { monitor, providers, coverage, research, agents, positions, dbState, telegramCommands, handleTelegramCommand, telegramCommandList: notify.COMMANDS };
+  return { monitor, providers, coverage, research, agents, positions, approvals, gateway, ownsCallback: (data) => typeof approvals.ownsCallback === "function" && approvals.ownsCallback(data), handleTelegramCallback: (cq) => approvals.handleTelegramCallback(cq), dbState, telegramCommands, handleTelegramCommand, telegramCommandList: notify.COMMANDS };
 }
 
 module.exports = { mount };

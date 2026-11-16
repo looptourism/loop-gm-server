@@ -1,0 +1,239 @@
+// ---------------------------------------------------------------------------
+// The execution gateway (Stage 5) — the only path from an approval to an
+// order, and it is plain code.
+//
+// execute(proposalId) sends ONE demo order, and only if every one of these
+// holds at that moment. Any "no" or "don't know" ends with no order:
+//
+//   1. the proposal is in status "approved" (taken to "executing" under a
+//      row lock, so two calls can never both proceed);
+//   2. its approval is approved, unused and not expired;
+//   3. the hash of the proposal's parameters, recomputed now, equals the hash
+//      stored on the proposal AND the hash stored on the approval;
+//   4. the risk engine passes again with a LIVE account and a LIVE price —
+//      including the kill switch and how far the price moved since you were
+//      asked;
+//   5. the approval is marked used and the order row is written in one
+//      transaction (the database refuses the row otherwise) BEFORE anything
+//      is sent.
+//
+// Then the order is sent once, with the proposal's idempotency key as the
+// request ID. It is never sent again: not on a timeout, not on a restart.
+// If eToro's answer is lost or unclear the order is "unknown" and is settled
+// only by looking it up on eToro (reconcile), using that same key.
+// ---------------------------------------------------------------------------
+const { POLICY } = require("../policy");
+const { paramsHash } = require("../proposals");
+const { assess } = require("../risk/engine");
+const { buildContext, saveAssessment, loadProposal, readHalted } = require("../risk/context");
+const { appendAudit } = require("../db/store");
+const { buildOpenOrder, OrderError } = require("./etoro-orders");
+const { parseUtc } = require("../market-data");
+
+const FILLED = new Set([3, 5]);       // Filled, PartiallyFilled
+const REJECTED = new Set([4, 10]);    // Rejected, RejectedPartiallyFilled
+const IN_FLIGHT = new Set([1, 2, 11, 12]); // Received, Placed, WaitingForMarket, PendingTriggeredRate
+const DAY = 86400000;
+const iso = (v) => (v ? new Date(v).toISOString() : null);
+
+function createGateway({ config, db, client, orders, policy = POLICY, now = () => new Date(), onOutcome = null, log = (...a) => console.log("[trading/gateway]", ...a) } = {}) {
+  const clean = (e) => db.redact(client.redact(orders.redact(e?.message || String(e))));
+  const audit = (q, eventType, proposalId, data, entity = {}) => appendAudit(q, { eventType, entityType: entity.type || "proposal", entityId: entity.id || proposalId, proposalId, actor: "system:gateway", data });
+  const tell = (outcome) => { if (onOutcome) Promise.resolve().then(() => onOutcome(outcome)).catch((e) => log("could not report an outcome:", clean(e))); };
+
+  const hashOf = (p) => paramsHash({ action: p.action, instrumentId: p.instrumentId, direction: p.direction, leverage: p.leverage, orderType: p.orderType, limitRate: p.limitRate, amountUsd: p.amountUsd, positionId: p.positionId, expiresAt: p.expiresAt });
+
+  // Ends an execution attempt with no order. The proposal becomes "failed":
+  // a new proposal and a new approval are needed to try again.
+  async function refuse(proposalId, reason, extra = {}) {
+    try {
+      await db.withTransaction(async (tx) => {
+        await tx.query("update trading.proposals set status = 'failed', status_reason = $2 where id = $1 and status in ('approved', 'executing')", [proposalId, reason.slice(0, 500)]);
+        await audit(tx, "execution.refused", proposalId, { reason, ...extra });
+      });
+    } catch (e) { log("could not record a refusal:", clean(e)); }
+    return { ok: false, sent: false, status: "refused", reason, ...extra };
+  }
+
+  async function execute(proposalId) {
+    // ---- 1–3: state, approval, hash — under row locks -------------------------
+    let proposal, approval;
+    try {
+      const gate = await db.withTransaction(async (tx) => {
+        const p = await loadProposal(tx, proposalId, { forUpdate: true });
+        if (!p) return { stop: "the proposal does not exist", soft: true };
+        if (p.status !== "approved") return { stop: `the proposal is "${p.status}", not approved — nothing was sent`, soft: true };
+        const a = (await tx.query("select * from trading.approvals where proposal_id = $1 for update", [proposalId])).rows[0];
+        if (!a || a.decision !== "approved") return { stop: "there is no approved approval for this proposal" };
+        if (a.consumed_at !== null) return { stop: "the approval has already been used" };
+        if (now().getTime() > new Date(a.expires_at).getTime()) return { stop: `the approval expired at ${iso(a.expires_at)}` };
+        let recomputed;
+        try { recomputed = hashOf(p); } catch (e) { return { stop: `the proposal's parameters are not valid: ${e.message}` }; }
+        if (recomputed !== p.paramsHash || a.params_hash !== p.paramsHash) return { stop: "the approval does not match the proposal's parameters (hash mismatch)" };
+        await tx.query("update trading.proposals set status = 'executing', status_reason = null where id = $1", [proposalId]);
+        return { p, a };
+      });
+      if (gate.stop) return gate.soft ? { ok: false, sent: false, status: "refused", reason: gate.stop } : refuse(proposalId, gate.stop);
+      proposal = gate.p; approval = gate.a;
+    } catch (e) { return { ok: false, sent: false, status: "refused", reason: `the database could not be used: ${clean(e)}` }; }
+
+    // ---- kill switch, before anything else is asked of eToro ---------------------
+    if (config.tradingEnabled !== true) return refuse(proposalId, "trading is switched off (TRADING_ENABLED is not \"true\")");
+    if (await readHalted(db)) return refuse(proposalId, "trading was stopped (/trade_stop), or the stop state could not be read");
+
+    // ---- 4: the risk engine again, on live facts --------------------------------
+    let verdict, ctx, body;
+    try {
+      const ref = (await db.query("select inputs from trading.risk_assessments where proposal_id = $1 and phase = 'pre_approval' and passed order by created_at desc limit 1", [proposalId])).rows[0];
+      ctx = await buildContext({ db, client, config, policy, proposal, phase: "pre_execution", now: now(), referenceAsk: ref?.inputs?.price?.ask ?? null });
+      verdict = assess(ctx);
+      await saveAssessment(db, proposalId, ctx, verdict);
+      body = buildOpenOrder({ instrumentId: proposal.instrumentId, amountUsd: proposal.amountUsd, direction: proposal.direction, leverage: proposal.leverage, orderType: proposal.orderType, action: proposal.action });
+    } catch (e) { return refuse(proposalId, `the pre-execution check could not be completed: ${clean(e)}`); }
+    if (!verdict.passed) {
+      const why = verdict.checks.filter((c) => !c.passed).map((c) => `${c.name}: ${c.message}`);
+      return refuse(proposalId, `risk engine: ${why.join("; ")}`, { failedChecks: verdict.failed });
+    }
+
+    // ---- 5: use the approval and write the order row, then send -----------------
+    let orderRow;
+    try {
+      orderRow = await db.withTransaction(async (tx) => {
+        const a = (await tx.query("select expires_at, consumed_at, decision from trading.approvals where id = $1 for update", [approval.id])).rows[0];
+        const t = now();
+        if (!a || a.decision !== "approved" || a.consumed_at !== null) throw new Error("the approval is no longer usable");
+        if (t.getTime() > new Date(a.expires_at).getTime()) throw new Error(`the approval expired at ${iso(a.expires_at)} while the checks were running`);
+        await tx.query("update trading.approvals set consumed_at = $2 where id = $1", [approval.id, t.toISOString()]);
+        const o = (await tx.query(
+          "insert into trading.orders (proposal_id, approval_id, params_hash, idempotency_key, status, request, created_at) values ($1, $2, $3, $4, 'submitting', $5, $6) returning id",
+          [proposalId, approval.id, proposal.paramsHash, proposal.idempotencyKey, JSON.stringify({ path: "POST /api/v2/trading/execution/demo/orders", requestId: proposal.idempotencyKey, body }), t.toISOString()]
+        )).rows[0];
+        await audit(tx, "order.created", proposalId, { orderId: o.id, body, livePrice: ctx.price }, { type: "order", id: o.id });
+        return o;
+      });
+    } catch (e) { return refuse(proposalId, `the order could not be recorded, so it was not sent: ${clean(e)}`); }
+
+    let placed;
+    try { placed = await orders.placeDemoOrder(body, { idempotencyKey: proposal.idempotencyKey }); }
+    catch (e) {
+      const message = e instanceof OrderError ? clean(e) : `unexpected error: ${clean(e)}`;
+      if (e instanceof OrderError && e.sent === false) {
+        // eToro did not take it (or it never left): final, no order exists.
+        await settle(orderRow.id, proposal, { status: e.code === "Rejected" ? "rejected" : "failed", error: message, response: e.body ?? null, proposalStatus: "failed", event: "order.not_placed" });
+        const out = { ok: false, sent: false, status: "not_placed", reason: message, proposal };
+        tell(out); return out;
+      }
+      // The answer was lost or unclear: the order may exist. Never resend.
+      await settle(orderRow.id, proposal, { status: "unknown", error: message, event: "order.unknown" });
+      const checked = await reconcileOrder(orderRow.id, { announce: false });
+      const out = checked.final ? checked : { ok: false, sent: true, status: "unknown", reason: `${message}. The order may or may not exist on eToro; it will be looked up, and it will NOT be sent again.`, proposal };
+      tell(out); return out;
+    }
+    await settle(orderRow.id, proposal, { status: "submitted", etoroOrderId: placed.orderId, response: placed.response, submittedAt: placed.fetchedAt, event: "order.submitted" });
+    const out = await reconcileOrder(orderRow.id, { announce: false });
+    tell(out);
+    return out;
+  }
+
+  // Writes an order's new state (and the proposal's, when it is final).
+  async function settle(orderId, proposal, { status, error = null, response, etoroOrderId, submittedAt, verification, verifiedAt, proposalStatus = null, proposalReason = null, event, data = {} }) {
+    try {
+      await db.withTransaction(async (tx) => {
+        await tx.query(
+          `update trading.orders set status = $2, error = $3, response = coalesce($4, response), etoro_order_id = coalesce($5, etoro_order_id),
+             submitted_at = coalesce($6, submitted_at), verification = coalesce($7, verification), verified_at = coalesce($8, verified_at) where id = $1`,
+          [orderId, status, error, response === undefined ? null : JSON.stringify(response), etoroOrderId ?? null, submittedAt ?? null, verification === undefined ? null : JSON.stringify(verification), verifiedAt ?? null]
+        );
+        if (proposalStatus) await tx.query("update trading.proposals set status = $2, status_reason = $3 where id = $1 and status = 'executing'", [proposal.id, proposalStatus, (proposalReason || error || "").slice(0, 500) || null]);
+        await audit(tx, event, proposal.id, { orderId, status, error, etoroOrderId: etoroOrderId ?? null, ...data }, { type: "order", id: orderId });
+      });
+    } catch (e) { log(`could not record ${event}:`, clean(e)); }
+  }
+
+  // Records the position(s) an order opened, with the exit conditions the
+  // owner approved — this is what the 15-minute position check watches.
+  async function recordPositions(tx, order, proposal, info) {
+    const made = [];
+    const exits = Array.isArray(proposal.details.exit_conditions) ? [...proposal.details.exit_conditions] : [];
+    for (const x of Array.isArray(info.positionExecutions) ? info.positionExecutions : []) {
+      if (!Number.isInteger(x?.positionId)) continue;
+      const opened = parseUtc(x.openingData?.openTime || "") || now();
+      const conditions = [...exits];
+      if (Number.isInteger(proposal.details.holding_days)) conditions.push({ type: "date_after", date: new Date(opened.getTime() + proposal.details.holding_days * DAY).toISOString().slice(0, 10), description: `planned holding period of ${proposal.details.holding_days} day(s)` });
+      const amount = typeof x.investedAmountCurrency === "number" && x.investedAmountCurrency > 0 ? x.investedAmountCurrency : proposal.amountUsd;
+      await tx.query(
+        `insert into trading.positions (etoro_position_id, instrument_id, direction, leverage, amount_usd, units, open_rate, opened_at, exit_conditions, source, last_synced_at, opened_by_order_id)
+         values ($1, $2, 'buy', 1, $3, $4, $5, $6, $7, $8, $9, $10)
+         on conflict (etoro_position_id) do update set exit_conditions = excluded.exit_conditions, opened_by_order_id = excluded.opened_by_order_id, open_rate = coalesce(excluded.open_rate, trading.positions.open_rate)`,
+        [x.positionId, proposal.instrumentId, amount, x.openingData?.units ?? x.remainingUnits ?? null, x.openingData?.avgPrice ?? null, opened.toISOString(), JSON.stringify(conditions), "eToro Public API GET /api/v2/trading/info/demo/orders:lookup", now().toISOString(), order.id]
+      );
+      made.push({ positionId: x.positionId, amountUsd: amount, openRate: x.openingData?.avgPrice ?? null, exitConditions: conditions });
+    }
+    return made;
+  }
+
+  // Asks eToro what became of one order and records the answer. Read-only
+  // toward eToro. Returns an outcome; `final` says whether it is settled.
+  async function reconcileOrder(orderId, { announce = true } = {}) {
+    const order = (await db.query("select * from trading.orders where id = $1", [orderId])).rows[0];
+    if (!order) return { ok: false, final: true, status: "unknown", reason: "no such order" };
+    const proposal = await loadProposal(db, order.proposal_id);
+    const done = (out) => { if (announce && out.final) tell(out); return out; };
+    if (!["submitting", "submitted", "unknown"].includes(order.status)) return { ok: order.status === "filled", final: true, sent: true, status: order.status, proposal };
+    let info;
+    try {
+      const r = await client.getDemoOrder(order.etoro_order_id ? { orderId: Number(order.etoro_order_id) } : { referenceId: order.idempotency_key });
+      info = r.data;
+    } catch (e) {
+      if (e?.status === 404 && !order.etoro_order_id) {
+        // eToro has no order under our request ID. Right after a lost answer that proves nothing yet.
+        const ageMin = (now().getTime() - new Date(order.created_at).getTime()) / 60000;
+        if (ageMin < policy.execution.lookupGiveUpMinutes) return { ok: false, final: false, sent: true, status: "unknown", reason: "eToro has no record of the order yet; it will be looked up again", proposal };
+        const reason = `eToro has no record of the order ${Math.round(ageMin)} minutes after it was sent: it was not placed`;
+        await settle(order.id, proposal, { status: "failed", error: reason, verifiedAt: now().toISOString(), proposalStatus: "failed", event: "order.not_found" });
+        return done({ ok: false, final: true, sent: false, status: "not_placed", reason, proposal });
+      }
+      return { ok: false, final: false, sent: true, status: order.status, reason: `the order could not be looked up: ${clean(e)}`, proposal };
+    }
+    const id = info?.status?.id;
+    const at = now().toISOString();
+    if (FILLED.has(id)) {
+      let positions = [];
+      try {
+        await db.withTransaction(async (tx) => {
+          positions = await recordPositions(tx, order, proposal, info);
+          await tx.query("update trading.orders set status = 'filled', error = null, etoro_order_id = coalesce(etoro_order_id, $2), verification = $3, verified_at = $4 where id = $1", [order.id, info.orderId ?? null, JSON.stringify(info), at]);
+          await tx.query("update trading.proposals set status = 'executed', status_reason = null where id = $1 and status = 'executing'", [proposal.id]);
+          await audit(tx, "order.filled", proposal.id, { orderId: order.id, etoroOrderId: info.orderId ?? null, etoroStatus: info.status, positions }, { type: "order", id: order.id });
+        });
+      } catch (e) { return { ok: false, final: false, sent: true, status: order.status, reason: `eToro reports the order filled, but it could not be recorded: ${clean(e)}`, proposal }; }
+      return done({ ok: true, final: true, sent: true, status: "filled", partial: id === 5, etoroOrderId: info.orderId ?? null, positions, proposal });
+    }
+    if (REJECTED.has(id)) {
+      const reason = `eToro rejected the order: ${info.status.errorMessage || info.status.name || "no reason given"} (code ${info.status.errorCode ?? "?"})`;
+      await settle(order.id, proposal, { status: "rejected", error: reason, etoroOrderId: info.orderId, verification: info, verifiedAt: at, proposalStatus: "failed", event: "order.rejected" });
+      return done({ ok: false, final: true, sent: true, status: "rejected", reason, proposal });
+    }
+    if (IN_FLIGHT.has(id)) {
+      if (order.status !== "submitted") await settle(order.id, proposal, { status: "submitted", etoroOrderId: info.orderId, verification: info, verifiedAt: at, event: "order.in_flight" });
+      return { ok: false, final: false, sent: true, status: "submitted", reason: `eToro has the order and has not executed it yet (${info.status.name || `status ${id}`})`, etoroOrderId: info.orderId ?? null, proposal };
+    }
+    return { ok: false, final: false, sent: true, status: order.status, reason: `eToro returned a status this code does not know (${id}); it will be looked up again`, proposal };
+  }
+
+  // Every order whose fate is not settled yet. Called every minute.
+  async function reconcileAll() {
+    const open = (await db.query("select id, status, created_at from trading.orders where status in ('submitting', 'submitted', 'unknown') order by created_at")).rows;
+    const out = [];
+    for (const o of open) {
+      // A row still "submitting" a minute later means the server stopped mid-send: treat as unknown, look it up.
+      if (o.status === "submitting" && now().getTime() - new Date(o.created_at).getTime() < 60000) continue;
+      try { out.push(await reconcileOrder(o.id)); } catch (e) { log("reconcile failed:", clean(e)); }
+    }
+    return out;
+  }
+
+  return { execute, reconcileOrder, reconcileAll, hashOf };
+}
+
+module.exports = { createGateway };

@@ -47,18 +47,35 @@ Balance: there is no "demo balance" endpoint. eToro's guide derives it from the 
 Rate limits are per user key over a rolling 60 seconds. Over the limit → HTTP 429 with
 `Retry-After`. Responses carry `RateLimit-Limit / -Remaining / -Reset`.
 
-## Order endpoints (NOT implemented — for Stage 5)
+## Order endpoints (Stage 5 — implemented for DEMO, not yet confirmed by a real call)
 
-- **v1 is withdrawn.** Changelog, 18 Aug 2026: the v1 endpoints for placing and cancelling
-  orders were removed on real and demo. They now sit under "deprecated" in the portal.
-- **v2 is the current synchronous path:** `POST /api/v2/trading/execution/demo/orders`
-  (body: `action`, `transaction`, `instrumentId`, `orderType`, `leverage`, and exactly one of
-  `amount` / `units` / `contracts`). Quota 20/min.
-- **v3 also exists** (added 23 Aug 2026): `POST /api/v3/trading/execution/demo/orders`,
-  asynchronous — submit, then poll the order lookup.
-- **Danger:** eToro's own guide "Open and close market orders" shows
-  `POST /api/v2/trading/execution/orders` — with no `/demo/`, that is the REAL account path.
-  Never copy paths from that guide; the demo path always contains `/demo/`.
+Re-read on the official portal on 2026-11-16 (OpenAPI v1.415.0; the changelog's newest entry
+is still 12 Oct 2026).
+
+- **v1 is withdrawn** (changelog, 18 Aug 2026); its pages sit under "deprecated".
+- **v2 is the current synchronous path and the one used:**
+  `POST /api/v2/trading/execution/demo/orders`. Quota 20/min, shared with the other order calls.
+  - Body sent: `{ action: "open", transaction: "buy", instrumentId, orderType: "mkt", leverage: 1, amount, orderCurrency: "usd" }`.
+    Exactly one of `amount` / `units` / `contracts`; exactly one of `symbol` / `instrumentId`.
+    `settlementType` is optional on v2 and is not sent.
+  - "Currently only orders to open a position are supported" on this endpoint; only `buy` and
+    `sellShort` transactions are accepted.
+  - The `x-request-id` header (a GUID) is required "for idempotency". The answer is
+    `{ token, orderId, referenceId }`, where `referenceId` echoes the request ID.
+  - **200 means accepted, not executed.** The outcome comes from
+    `GET /api/v2/trading/info/demo/orders:lookup?orderId=` or `?referenceId=`: `status.id`
+    3 Filled and 5 PartiallyFilled = executed; 4 Rejected and 10 RejectedPartiallyFilled carry
+    `status.errorCode` / `errorMessage`; 1 Received, 2 Placed, 11 WaitingForMarket and
+    12 PendingTriggeredRate are still in flight. `positionExecutions[].positionId` lists the
+    positions the order produced.
+  - Auth: the API key pair, or OAuth scope `etoro-public:demo:write` — the key must have
+    **Write** permission.
+- **v3** (`POST /api/v3/trading/execution/demo/orders`, added 23 Aug 2026) is asynchronous and
+  has stricter `settlementType` rules. Not used.
+- **Danger, unchanged:** eToro's guide "Open and close market orders" shows the path without
+  `/demo/` — the REAL account. The order client holds one constant path, the demo one.
+- **Equity** (guide "Calculate Equity"): available cash + total invested + unrealized P/L, all
+  from the demo PnL endpoint. Used for the daily loss limit.
 
 ## Limitations and doc inconsistencies found
 

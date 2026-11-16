@@ -75,6 +75,8 @@ test("path guard refuses live-account, order-placing and unknown paths", () => {
   assert.doesNotThrow(() => assertAllowedPath("/api/v1/market-data/instruments/1001/history/candles/desc/OneDay/5"));
 });
 
+// Since Stage 5 one file can place a DEMO order: trading/execution/etoro-orders.js
+// (tested in stage5.test.js). Everything at the top level of the module still cannot.
 test("the trading module contains no order-placing or live-account code", () => {
   const dir = path.join(__dirname, "..");
   for (const file of fs.readdirSync(dir).filter((n) => n.endsWith(".js"))) {

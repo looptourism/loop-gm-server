@@ -63,7 +63,7 @@ function runSummary(r) {
   }
   const b = budgetLine(r.budget);
   if (b) lines.push(b);
-  lines.push("No order was placed. Drafts wait for the risk engine and your approval. /trade_status for more.");
+  lines.push(r.proposals?.length ? "No order was placed. Each draft goes to the risk engine; if it passes and trading is on, you get an Approve / Reject request." : "No order was placed. /trade_status for more.");
   return clip(lines.join("\n"), 3900);
 }
 
@@ -79,9 +79,71 @@ function positionAlert({ title, symbol, lines, figures = {} }) {
   return clip(out.join("\n"), 3900);
 }
 
+// ---- Stage 5: approval requests and results ------------------------------------
+const hhmm = (d) => `${new Date(d).toISOString().slice(11, 16)} UTC`;
+
+// The message with the Approve / Reject buttons. Everything in it comes from
+// the stored proposal, the risk engine's verdict and the price it used.
+function approvalRequest({ proposal, verdict, price, account, expiresAt }) {
+  const d = proposal.details || {};
+  const exits = Array.isArray(d.exit_conditions) ? d.exit_conditions : [];
+  const stop = exits.filter((c) => c.type === "price_below").map((c) => c.value);
+  const target = exits.filter((c) => c.type === "price_above").map((c) => c.value);
+  const lines = [
+    `🟢 <b>Approve a BUY? — ${esc(proposal.symbol)}</b> (DEMO)`,
+    `Amount: <b>${usd(proposal.amountUsd)}</b> · market order · no leverage`,
+    `Price now: bid ${price.bid} / ask ${price.ask} (${price.ageSec} s old)`,
+    `Plan: hold about ${esc(d.holding_days)} day(s)${stop.length ? ` · stop ${stop.join(", ")}` : ""}${target.length ? ` · target ${target.join(", ")}` : ""}`,
+  ];
+  const lossCheck = verdict.checks.find((c) => c.name === "loss_at_stop");
+  if (lossCheck?.actual !== undefined && lossCheck.actual !== null) lines.push(`If the stop is reached: about -${usd(lossCheck.actual)}`);
+  if (d.rationale) lines.push(`Why: ${esc(clip(d.rationale, 420))}`);
+  if (Array.isArray(d.disagreements) && d.disagreements.length) lines.push(`Analyst and reviewer disagreed on ${d.disagreements.length} point(s): ${esc(clip(d.disagreements.map((x) => x.issue).join("; "), 200))}`);
+  lines.push(`Risk engine: all ${verdict.checks.length} checks passed`);
+  for (const w of verdict.warnings || []) lines.push(`⚠️ ${esc(w)}`);
+  if (account?.ok) lines.push(`Account: ${usd(account.availableCashUsd)} cash, ${account.positions.length} open position(s)`);
+  lines.push(`⏳ Answer by ${hhmm(expiresAt)}. The price and every limit are checked again before anything is sent.`);
+  return clip(lines.join("\n"), 3900);
+}
+
+// What the request message becomes once it is decided, expired or withdrawn.
+function approvalClosed({ symbol, amountUsd, outcome, note = null, at = null }) {
+  const head = { approved: "✅ Approved", rejected: "❌ Rejected — nothing was sent", expired: "⌛ Expired — nothing was sent", withdrawn: "↩️ Withdrawn — nothing was sent", mismatch: "⛔ Refused — nothing was sent", not_pending: "ℹ️ No longer open", unknown: "ℹ️ Not on record", error: "⚠️ Not recorded — nothing was sent" }[outcome] || "ℹ️ Closed";
+  return [`<b>${head}</b> — BUY ${esc(symbol)} ${usd(amountUsd)} (DEMO)`, at ? `at ${hhmm(at)}` : null, note ? esc(clip(note, 300)) : null].filter(Boolean).join("\n");
+}
+
+function riskRejected({ proposal, reasons }) {
+  return clip([`🛑 <b>Proposal stopped by the risk engine — ${esc(proposal.symbol)}</b> (DEMO)`, `BUY ${usd(proposal.amountUsd)} was not offered for approval.`, ...reasons.slice(0, 6).map((r) => `• ${esc(clip(r, 220))}`), reasons.length > 6 ? `… and ${reasons.length - 6} more` : null].filter(Boolean).join("\n"), 3900);
+}
+
+// What happened after an approval: built from the gateway's outcome.
+function executionResult(o) {
+  const p = o.proposal || {};
+  const what = `BUY ${esc(p.symbol)} ${usd(p.amountUsd)} (DEMO)`;
+  if (o.status === "filled") {
+    const pos = (o.positions || [])[0];
+    const lines = [`✅ <b>Order filled — ${what}</b>`];
+    if (pos) lines.push(`Position ${pos.positionId}${pos.openRate ? ` opened at ${pos.openRate}` : ""}, ${usd(pos.amountUsd)} invested`);
+    if (o.partial) lines.push("⚠️ eToro reports the order as partially filled.");
+    if (pos?.exitConditions?.length) lines.push(`Watching: ${esc(pos.exitConditions.map((c) => (c.type === "price_below" ? `stop ${c.value}` : c.type === "price_above" ? `target ${c.value}` : c.type === "date_after" ? `until ${c.date}` : "a condition in words")).join(" · "))}`);
+    lines.push("Open positions are checked every 15 minutes; nothing is closed without you.");
+    return lines.join("\n");
+  }
+  if (o.status === "submitted") return `⏳ <b>Order accepted, not executed yet — ${what}</b>\n${esc(clip(o.reason, 300))}\nI will tell you when it fills or is rejected.`;
+  if (o.status === "unknown") return `⚠️ <b>Order result unknown — ${what}</b>\n${esc(clip(o.reason, 400))}`;
+  if (o.status === "rejected") return `❌ <b>Order rejected by eToro — ${what}</b>\n${esc(clip(o.reason, 400))}\nNo position was opened.`;
+  return `🛑 <b>No order was sent — ${what}</b>\n${esc(clip(o.reason, 600))}\nA new proposal and a new approval are needed to try again.`;
+}
+
 // The answer to /trade_status.
-function statusText({ agents, budget, lastRun, dbState, positions = null }) {
+function statusText({ agents, budget, lastRun, dbState, positions = null, trading = null }) {
   const lines = ["📈 <b>Trading Desk status</b> (DEMO)"];
+  if (trading) {
+    const p = trading.proposals || {}, o = Object.values(trading.ordersInFlight || {}).reduce((a, b) => a + b, 0);
+    lines.push(trading.tradingOff ? `⛔ Trading: OFF — ${esc(trading.tradingOff)}. No approval request is sent and no order can be placed.` : "🟢 Trading: ON (demo) — every order still needs your approval");
+    const bits = [p.draft && `${p.draft} draft(s) waiting`, p.pending_approval && `${p.pending_approval} awaiting your answer`, (p.approved || p.executing) && `${(p.approved || 0) + (p.executing || 0)} being executed`, o && `${o} order(s) not settled yet`].filter(Boolean);
+    if (bits.length) lines.push(`📨 ${bits.join(" · ")}`);
+  }
   if (dbState && dbState.state !== "ok") lines.push(`⛔ Database: ${esc(dbState.state)}${dbState.error ? ` — ${esc(clip(dbState.error, 200))}` : ""}. The desk is off until this is fixed.`);
   lines.push(agents.running ? `⏳ Running now: ${esc(agents.running.step)} (since ${when(agents.running.startedAt)})` : agents.ready ? "✅ Ready, nothing running" : `⛔ Not ready: ${esc(agents.notReadyBecause)}`);
   lines.push(`🗓 Schedule: ${agents.schedule.running ? esc(agents.schedule.runs.join("; ")) : "off"}`);
@@ -95,6 +157,7 @@ function statusText({ agents, budget, lastRun, dbState, positions = null }) {
     lines.push(!positions.scheduled ? "👁 Position checks: off" : !c ? "👁 Position checks: on, first check pending" : c.error ? `⚠️ Position checks: last one failed at ${when(c.startedAt)}` : `👁 Positions: ${c.account?.openPositions ?? 0} open, checked ${when(c.startedAt)}${c.account?.openPositions ? `, profit/loss ${c.account.unrealizedPnlUsd < 0 ? "-" : "+"}${usd(Math.abs(c.account.unrealizedPnlUsd))}` : ""}`);
   }
   lines.push("/trade_run — start a screened run · /trade_run crypto — coins only");
+  lines.push("/trade_stop — stop all trading now · /trade_resume — allow it again");
   return lines.join("\n");
 }
 
@@ -105,7 +168,22 @@ function createNotifier({ telegram = null, log = (...a) => console.log("[trading
     try { await telegram.sendMessage(html); return true; }
     catch (e) { log("telegram send failed:", typeof telegram.redact === "function" ? telegram.redact(e?.message) : "error"); return false; }
   }
-  return { enabled, send };
+  // A message with inline buttons. Returns the message ID so it can be edited later.
+  async function sendButtons(html, keyboard) {
+    if (!enabled) { log("telegram is not configured; approval request not sent"); return { ok: false }; }
+    try { const m = await telegram.sendMessage(html, { reply_markup: { inline_keyboard: keyboard } }); return { ok: true, messageId: m?.message_id ?? null }; }
+    catch (e) { log("telegram send failed:", typeof telegram.redact === "function" ? telegram.redact(e?.message) : "error"); return { ok: false }; }
+  }
+  // Replaces a message's text and removes its buttons.
+  async function edit(messageId, html) {
+    if (!enabled || !messageId) return false;
+    try { await telegram.editMessageText(messageId, html); return true; } catch (e) { log("telegram edit failed:", typeof telegram.redact === "function" ? telegram.redact(e?.message) : "error"); return false; }
+  }
+  async function answer(callbackId, text) {
+    if (!enabled || !callbackId) return false;
+    try { await telegram.answerCallbackQuery(callbackId, text); return true; } catch { return false; }
+  }
+  return { enabled, send, sendButtons, edit, answer };
 }
 
 // The commands the desk adds to the existing bot. server.js routes exactly
@@ -113,6 +191,8 @@ function createNotifier({ telegram = null, log = (...a) => console.log("[trading
 const COMMANDS = [
   { command: "trade_run", description: "مكتب التداول (تجريبي): تشغيل فحص وتحليل الآن" },
   { command: "trade_status", description: "مكتب التداول (تجريبي): الحالة والميزانية وآخر تشغيل" },
+  { command: "trade_stop", description: "مكتب التداول (تجريبي): إيقاف التداول فورًا" },
+  { command: "trade_resume", description: "مكتب التداول (تجريبي): السماح بالتداول من جديد" },
 ];
 
-module.exports = { createNotifier, runSummary, statusText, positionAlert, budgetLine, COMMANDS, esc };
+module.exports = { createNotifier, runSummary, statusText, positionAlert, approvalRequest, approvalClosed, riskRejected, executionResult, budgetLine, COMMANDS, esc };
