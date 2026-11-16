@@ -76,7 +76,11 @@ All of this is set in `AGENTS` in `trading/config.js`.
   headlines). It has no tools. Code then picks the shortlist: score 6 or more, highest first,
   at most 5. Only the shortlist gets the full analysis. A screen can only cause an instrument
   to be skipped; it cannot cause a trade.
-- **Schedule.** Monday, Wednesday and Friday at 12:00 UTC: all instruments, screened. Saturday at
+- **Style: short-term swing trades (owner, 2026-11-16).** Positions are meant to be held 1 to 14
+  days. The agents judge setups on that horizon. Code refuses a buy analysis or proposal that
+  does not state a whole number of holding days from 1 to 14 and a stop level (an exit
+  condition of type `price_below`). The limits live in `trading/policy.js`.
+- **Schedule (owner, 2026-11-16).** Every weekday at 12:00 UTC: all instruments, screened. Saturday at
   12:00 UTC: coins only, screened. It runs only when `TRADING_AGENTS_SCHEDULE_ENABLED` is `true`
   in Render (off by default, separate from the monitoring switch because it spends money).
 - **Monthly budget: $50, enforced in code.** Every Claude request is written to a ledger
@@ -89,6 +93,11 @@ All of this is set in `AGENTS` in `trading/config.js`.
   Anthropic workspace is the backstop outside this code.
 - **The desk's own key.** `TRADING_ANTHROPIC_API_KEY`, if set, is used instead of the server's
   shared `ANTHROPIC_API_KEY`; the status page says which is in use.
+- **Estimated monthly cost of the schedule** (22 weekday runs and about 4 Saturday runs, a full
+  shortlist of five every time, token use as in the second real run; rough, ±40%): about $49
+  with Opus for everything — right at the $50 budget, so late-month runs would be refused.
+  With Sonnet 5.5 for the analysts and the reviewer and Opus for the manager only: about $31.
+  A screened run has not been measured yet; the first one will replace these figures.
 - **Measured cost so far** (two real runs, before screening existed, all on Opus): $0.62 and
   $0.82 for two instruments. Every run now reports tokens and cost per agent.
 

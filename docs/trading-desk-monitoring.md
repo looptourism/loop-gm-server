@@ -70,6 +70,38 @@ see `docs/trading-desk-database.md`). Log in to the console, then open in the sa
 **To stop the schedule:** set `TRADING_MONITOR_ENABLED` to `false` (or delete it) and deploy.
 It is separate from `TRADING_ENABLED` (the order kill switch), which stays `false`.
 
+## Position monitoring (owner's requirement, 2026-11-16)
+
+Plain code, read-only. Every 15 minutes, at minutes 07, 22, 37 and 52 UTC — two minutes after
+each price collection — it reads the demo account's open positions (one eToro request), keeps
+the desk's record of them in step, and checks each one against its exit conditions. It runs
+under the same switch as price monitoring (`TRADING_MONITOR_ENABLED`).
+
+| What is checked | How |
+|---|---|
+| Stop level / price target (`price_below`, `price_above`) | Against the newest stored **bid** — and only if that price is fresh (eToro's own timestamp no older than 20 minutes) |
+| Date limit (`date_after`) | Against the calendar, in UTC |
+| The desk's holding limit | A position open for more than 14 days is flagged, whatever its proposal said |
+| A position with no stop level on record | Reported once (for example one opened by hand on eToro) |
+| A position outside the desk's rules (short, leveraged, or not on an allowlist) | Reported once; never added to the desk's record |
+| A position eToro no longer lists | Marked closed and reported once |
+
+- **"During market hours" needs no calendar.** A stock's price outside market hours is old, so
+  nothing is judged on it; coins are checked around the clock.
+- **Each alert is sent once** per position and condition. If Telegram does not accept it, it is
+  not recorded as sent and the next check tries again.
+- **Nothing is ever closed.** An alert is information; the position stays open until you act.
+  Closing through the desk (a proposal you approve) comes with Stage 6.
+- **If the watch itself fails** twice in a row you get a Telegram warning that positions are not
+  being checked, and a note when it works again. A failed read never marks a position closed.
+- Details: `/api/trading/positions/status` (add `?check=yes` to run one check now). `/trade_status`
+  shows the number of open positions and the time of the last check.
+
+Limits: a price that crosses a level and returns between two checks is not seen; an alert is
+not a stop order; conditions described only in words cannot be checked by code. Until Stage 5
+attaches exit conditions to positions the desk opens, the only conditions on record are the
+ones above that need none (holding limit, no stop, outside the rules, closed elsewhere).
+
 ## Limitations
 
 1. The 15-minute schedule is confirmed running without gaps (2026-11-15, after the Render service was moved off the plan that sleeps when idle).

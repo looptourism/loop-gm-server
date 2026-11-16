@@ -92,7 +92,8 @@ test("the model is set in one place and the policy matches the owner's limits", 
   for (const m of Object.values(AGENTS.models)) assert.ok(AGENTS.pricesPerMTok[m], `no price for ${m}`);
   // the owner's cost decisions of 2026-11-15
   assert.deepStrictEqual([AGENTS.monthlyBudgetUsd, AGENTS.shortlistMax], [50, 5]);
-  assert.deepStrictEqual(AGENTS.schedule.map((x) => [x.cron, x.scope]), [["0 12 * * 1,3,5", "all"], ["0 12 * * 6", "crypto"]]);
+  assert.deepStrictEqual(AGENTS.schedule.map((x) => [x.cron, x.scope]), [["0 12 * * 1-5", "all"], ["0 12 * * 6", "crypto"]]); // every weekday, and coins on Saturday
+  assert.deepStrictEqual([POLICY.style, POLICY.holdingDays], ["swing", { min: 1, max: 14 }]);
   assert.strictEqual(readConfig({}).agentsScheduleEnabled, false);
   assert.strictEqual(readConfig({ TRADING_AGENTS_SCHEDULE_ENABLED: "yes" }).agentsScheduleEnabled, false);
   assert.strictEqual(readConfig({ TRADING_AGENTS_SCHEDULE_ENABLED: "true" }).agentsScheduleEnabled, true);
@@ -108,7 +109,7 @@ test("the model is set in one place and the policy matches the owner's limits", 
 
 // ---- validators -------------------------------------------------------------
 const box = (tags) => ({ has: (t) => tags.includes(t), record: (t) => ({ kind: "rate", source: `source of ${t}`, timestamp: "2099-11-14T10:00:00.000Z", label: t, ids: [] }) });
-const goodAnalysis = () => ({ recommendation: "buy", thesis: "t", evidence: [{ ref: "R1", claim: "a" }, { ref: "R2", claim: "b" }, { ref: "N1", claim: "c" }], entry_conditions: ["now"], exit_conditions: [{ type: "price_below", value: 90, description: "stop" }], suggested_amount_usd: 300, holding_period: "4 weeks", risks: ["r"], analytical_confidence: 0.6, assumptions: [], data_gaps: [] });
+const goodAnalysis = () => ({ recommendation: "buy", thesis: "t", evidence: [{ ref: "R1", claim: "a" }, { ref: "R2", claim: "b" }, { ref: "N1", claim: "c" }], entry_conditions: ["now"], exit_conditions: [{ type: "price_below", value: 90, description: "stop" }], suggested_amount_usd: 300, holding_days: 7, holding_period: "about a week", risks: ["r"], analytical_confidence: 0.6, assumptions: [], data_gaps: [] });
 
 test("an analysis is refused unless every evidence tag was issued by a tool", () => {
   const b = box(["R1", "R2", "N1"]);
@@ -124,9 +125,15 @@ test("an analysis is refused unless every evidence tag was issued by a tool", ()
     [(a) => { a.recommendation = "sell"; }, /"buy", "hold" or "avoid"/],
     [(a) => { a.entry_conditions = []; }, /entry condition/],
     [(a) => { a.risks = []; }, /at least one risk/],
+    // swing trading: a buy must say how many days (1 to 14) and carry a stop level
+    [(a) => { a.holding_days = 30; }, /holding_days must be a whole number from 1 to 14/],
+    [(a) => { a.holding_days = null; }, /holding_days must be a whole number from 1 to 14/],
+    [(a) => { a.holding_days = 2.5; }, /holding_days/],
+    [(a) => { a.exit_conditions = [{ type: "price_above", value: 120, description: "target" }]; }, /needs a stop level/],
+    [(a) => { a.exit_conditions = [{ type: "date_after", date: "2026-12-01", description: "time limit" }]; }, /needs a stop level/],
   ];
   for (const [change, pattern] of cases) { const a = goodAnalysis(); change(a); assert.ok(VALIDATE.analysis(a, b).some((e) => pattern.test(e)), String(pattern)); }
-  const hold = { ...goodAnalysis(), recommendation: "hold", evidence: [{ ref: "R1", claim: "a" }], entry_conditions: [], exit_conditions: [], suggested_amount_usd: null };
+  const hold = { ...goodAnalysis(), recommendation: "hold", evidence: [{ ref: "R1", claim: "a" }], entry_conditions: [], exit_conditions: [], suggested_amount_usd: null, holding_days: null };
   assert.deepStrictEqual(VALIDATE.analysis(hold, b), []);
   const ev = expandEvidence(goodAnalysis().evidence, b);
   assert.deepStrictEqual([ev[0].source, ev[0].timestamp, ev[0].claim], ["source of R1", "2099-11-14T10:00:00.000Z", "a"]); // source and time come from the record
@@ -138,7 +145,7 @@ test("a risk review needs a concern when it objects; decisions must cover every 
   assert.match(VALIDATE.risk(review, b)[0], /needs at least one concern/);
   review.concerns = [{ topic: "volatility", severity: "high", detail: "d" }];
   assert.deepStrictEqual(VALIDATE.risk(review, b), []);
-  const d = (symbol, decision) => ({ symbol, decision, amount_usd: decision === "propose_buy" ? 300 : null, rationale: "r", disagreements: [], entry_conditions: decision === "propose_buy" ? ["now"] : [], exit_conditions: decision === "propose_buy" ? [{ type: "date_after", date: "2026-12-31", description: "time limit" }] : [], holding_period: "n/a", risks: ["r"], evidence: [{ ref: "A1", claim: "a" }, { ref: "A2", claim: "b" }], analytical_confidence: 0.5, assumptions: [] });
+  const d = (symbol, decision) => ({ symbol, decision, amount_usd: decision === "propose_buy" ? 300 : null, rationale: "r", disagreements: [], entry_conditions: decision === "propose_buy" ? ["now"] : [], exit_conditions: decision === "propose_buy" ? [{ type: "price_below", value: 95, description: "stop" }, { type: "date_after", date: "2026-12-31", description: "time limit" }] : [], holding_days: decision === "propose_buy" ? 10 : null, holding_period: "n/a", risks: ["r"], evidence: [{ ref: "A1", claim: "a" }, { ref: "A2", claim: "b" }], analytical_confidence: 0.5, assumptions: [] });
   const ok = { decisions: [d("MSTR", "propose_buy"), d("BTC", "no_trade")], portfolio_note: "n" };
   assert.deepStrictEqual(VALIDATE.decisions(ok, b, { symbols: ["MSTR", "BTC"] }), []);
   assert.ok(VALIDATE.decisions({ ...ok, decisions: [d("MSTR", "propose_buy")] }, b, { symbols: ["MSTR", "BTC"] }).some((e) => /no decision was given for BTC/.test(e)));
@@ -212,7 +219,7 @@ test("agent routes: closed without a login; a run needs symbols and confirm=yes;
   const none = { configured: true, redact: (t) => String(t ?? "") };
   let runs = [];
   const agents = { state: () => ({ ready: true, running: null }), run: async (s) => { runs.push(s); } };
-  const base = { config: cfg, client: { redact: (t) => String(t ?? "") }, db: none, monitor: quiet, research: quiet };
+  const base = { config: cfg, client: { redact: (t) => String(t ?? "") }, db: none, monitor: quiet, research: quiet, positions: quiet };
   const open = fakeApp();
   mount(open, { authOn: false, ...base, agents });
   for (const p of ["/api/trading/agents/status", "/api/trading/agents/run", "/api/trading/agents/latest", "/api/trading/agents/proposals"]) assert.strictEqual((await open.call(p, { symbols: "MSTR", confirm: "yes" })).statusCode, 503);
@@ -281,7 +288,7 @@ function fakeClaude(opts = {}) {
     const cite = (opts.inventRefs ? ["R99", "R98", "R97"] : seen.slice(0, 4)).map((ref) => ({ ref, claim: `what ${ref} shows` }));
     if (submit === "submit_analysis") {
       const buy = symbol === "MSTR";
-      return reply("tool_use", [use(`c${++id}`, submit, { recommendation: buy ? "buy" : "hold", thesis: `thesis for ${symbol}`, evidence: cite, entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 50-day average" }] : [], suggested_amount_usd: buy ? 450 : null, holding_period: buy ? "4 to 8 weeks" : "n/a", risks: ["volatility"], analytical_confidence: 0.62, assumptions: ["data is current"], data_gaps: [] })]);
+      return reply("tool_use", [use(`c${++id}`, submit, { recommendation: buy ? "buy" : "hold", thesis: `thesis for ${symbol}`, evidence: cite, entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 50-day average" }] : [], suggested_amount_usd: buy ? 450 : null, holding_days: buy ? 8 : null, holding_period: buy ? "about a week" : "n/a", risks: ["volatility"], analytical_confidence: 0.62, assumptions: ["data is current"], data_gaps: [] })]);
     }
     if (submit === "submit_risk_review") {
       return reply("tool_use", [use(`c${++id}`, submit, { stance: "caution", summary: "size is too large for this volatility", concerns: [{ topic: "volatility", severity: "medium", detail: "30-day volatility is high" }], claims_checked: ["price trend confirmed"], evidence: cite, suggested_max_amount_usd: 300, analytical_confidence: 0.7, assumptions: [] })]);
@@ -294,7 +301,7 @@ function fakeClaude(opts = {}) {
         const buy = s === "MSTR";
         return { symbol: s, decision: buy ? "propose_buy" : "no_trade", amount_usd: buy ? (opts.amount ?? 300.004) : null, rationale: `decision for ${s}`,
           disagreements: buy ? [{ issue: "position size", analyst_position: "$450", risk_position: "at most $300", my_view: "the reviewer's volatility point stands; $300" }] : [],
-          entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 50-day average" }] : [], holding_period: buy ? "4 to 8 weeks" : "n/a", risks: ["volatility"],
+          entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 50-day average" }] : [], holding_days: buy ? 8 : null, holding_period: buy ? "about a week" : "n/a", risks: ["volatility"],
           evidence: [{ ref: tags[k][1], claim: "the analysis" }, { ref: tags[k][2], claim: "the review" }], analytical_confidence: 0.6, assumptions: [] };
       }),
     })]);
@@ -310,7 +317,7 @@ if (TEST_URL) {
     await admin.close();
     const u = new URL(TEST_URL); u.pathname = "/trading_agents_test";
     db = createDb({ config: { databaseUrl: u.toString() } });
-    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage"]) await db.migrate(m);
+    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage", "005_positions_monitor"]) await db.migrate(m);
     for (const [id, symbol, cls] of [[2001, "MSTR", "stock"], [100000, "BTC", "crypto"], [2009, "NKE", "stock"]]) {
       await db.query("insert into trading.instruments (instrument_id, symbol, display_name, asset_class, exchange, raw, source, fetched_at) values ($1, $2, $3, $4, 'NASDAQ', '{}', 'test', now())", [id, symbol, `${symbol} name`, cls]);
       if (symbol !== "NKE") await db.query(`insert into trading.${cls}_allowlist (symbol, instrument_id, verified_at) values ($1, $2, now())`, [symbol, id]);
@@ -363,6 +370,7 @@ dbTest("a full run: analysis → risk review → portfolio manager, saved with s
   assert.strictEqual(p[0].expires_at.toISOString(), "2099-11-15T10:00:00.000Z");
   assert.strictEqual(p[0].params_hash, paramsHash({ action: "open", instrumentId: 2001, direction: "buy", leverage: 1, orderType: "market", limitRate: null, amountUsd: 300, positionId: null, expiresAt: "2099-11-15T10:00:00.000Z" }));
   assert.strictEqual(p[0].details.disagreements[0].risk_position, "at most $300");
+  assert.deepStrictEqual([p[0].details.holding_days, p[0].details.exit_conditions[0].type], [8, "price_below"]); // a swing proposal: days and a stop level
   assert.strictEqual(out.proposals[0].status, "draft");
   assert.strictEqual(await count("select count(*) as n from trading.orders"), 0);
   assert.strictEqual(await count("select count(*) as n from trading.approvals"), 0);
@@ -549,7 +557,7 @@ dbTest("fail closed: if a request's usage cannot be written, that agent stops an
   assert.strictEqual(await count("select count(*) as n from trading.analyses"), analyses);
 });
 
-test("the agents' schedule: off by default; with its own switch on, Mon/Wed/Fri all and Saturday coins — always screened", async () => {
+test("the agents' schedule: off by default; with its own switch on, every weekday all and Saturday coins — always screened", async () => {
   const jobs = [];
   const cron = { schedule: (expr, fn, o) => jobs.push({ expr, fn, o }) };
   const stub = { configured: true, redact: (t) => String(t ?? ""), query: async () => ({ rows: [] }) };
@@ -561,7 +569,7 @@ test("the agents' schedule: off by default; with its own switch on, Mon/Wed/Fri 
   on.run = null; // the scheduled function calls the pipeline's own run; observe through state instead
   assert.strictEqual(on.start(), true);
   assert.strictEqual(on.start(), false);                                           // not registered twice
-  assert.deepStrictEqual(jobs.map((j) => [j.expr, j.o.timezone]), [["0 12 * * 1,3,5", "UTC"], ["0 12 * * 6", "UTC"]]);
+  assert.deepStrictEqual(jobs.map((j) => [j.expr, j.o.timezone]), [["0 12 * * 1-5", "UTC"], ["0 12 * * 6", "UTC"]]);
   assert.deepStrictEqual([on.state().schedule.enabled, on.state().schedule.running], [true, true]);
   assert.strictEqual(started.length, 0);
 });

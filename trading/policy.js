@@ -21,6 +21,12 @@ const POLICY = {
   cryptoCorrelatedCountsTowardCryptoCap: true,
   maxDailyLossUsd: 100,
   maxOpenPositions: 10,
+  // Owner's decision (2026-11-16): short-term swing trades. Every proposal
+  // must state how many days it expects to be held, within this range, and
+  // must carry a stop level. A position still open after `max` days is
+  // flagged by the position monitor.
+  style: "swing",
+  holdingDays: { min: 1, max: 14 },
   proposalValidHours: 24,                      // a draft proposal expires after this
   approvalValidMinutes: 15,                    // an approval request expires after this (Stage 5)
 };

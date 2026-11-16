@@ -38,6 +38,7 @@ function parts() {
       research: { start: () => started.push("research"), state: () => ({}) },
       agents: { start: () => started.push("agents"), state: () => state, run: async (s, o) => { runs.push([s, o]); }, recentRuns: async () => [], budget: { status: async () => ({ available: true, month: "2026-11", budgetUsd: 50, spentUsd: 12.4, remainingUsd: 37.6, reached: false, warning: null }) } },
       notifier: { enabled: true, send: async (html) => { sent.push(html); return true; } },
+      positions: { start: () => started.push("positions"), state: () => ({ scheduled: true, lastCheck: null }) },
     },
   };
 }
@@ -54,7 +55,7 @@ test("startup: nothing that uses the database starts until migrations have been 
   assert.strictEqual((await app.call("/api/trading/monitor/status")).statusCode, 503);
   release();
   await wait(() => desk.dbState.state === "ok");
-  assert.deepStrictEqual(p.started, ["monitor", "research", "agents"]);
+  assert.deepStrictEqual(p.started, ["monitor", "research", "agents", "positions"]);
   assert.deepStrictEqual(desk.dbState.applied, ["004_api_usage"]);
   assert.match(p.sent[0], /database updated[\s\S]*004_api_usage/);                 // the owner is told what was applied
 });
@@ -77,7 +78,7 @@ test("startup fails closed: a failed migration keeps the desk off, says why once
   assert.deepStrictEqual(p.runs, []);
   await wait(() => desk.dbState.state === "ok", 3000);                            // third attempt succeeds
   assert.strictEqual(calls, 3);
-  assert.deepStrictEqual(p.started, ["monitor", "research", "agents"]);
+  assert.deepStrictEqual(p.started, ["monitor", "research", "agents", "positions"]);
   assert.strictEqual(p.sent.filter((m) => /is off: its database/.test(m)).length, 1); // the same failure is reported once, not on every retry
   assert.ok(p.sent.some((m) => /database updated/.test(m)));
 });
@@ -145,7 +146,7 @@ test("Telegram commands: /trade_run starts a screened run only; /trade_status re
   assert.strictEqual(p.runs.length, 2);                                            // not started twice
   assert.match(p.sent[2], /already in progress: screening NVO/);
   await desk.handleTelegramCommand("trade_status", "/trade_status");
-  assert.match(p.sent[3], /Trading Desk status[\s\S]*Running now: screening NVO[\s\S]*\$12\.40 of \$50\.00[\s\S]*Last run: none yet/);
+  assert.match(p.sent[3], /Trading Desk status[\s\S]*Running now: screening NVO[\s\S]*\$12\.40 of \$50\.00[\s\S]*Last run: none yet[\s\S]*Position checks: on, first check pending/);
   p.state.running = null; p.state.ready = false; p.state.notReadyBecause = "ANTHROPIC_API_KEY is not set on the server";
   await desk.handleTelegramCommand("trade_run", "/trade_run");
   assert.match(p.sent[4], /Not started: ANTHROPIC_API_KEY/);
@@ -187,21 +188,21 @@ dbTest("migrateAll fails closed: a broken migration is rolled back, earlier ones
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mig-"));
   const real = path.join(__dirname, "..", "db", "migrations");
   for (const f of fs.readdirSync(real)) fs.copyFileSync(path.join(real, f), path.join(dir, f));
-  fs.writeFileSync(path.join(dir, "005_good.sql"), "create table trading.t5 (id int);");
-  fs.writeFileSync(path.join(dir, "006_broken.sql"), "create table trading.t6 (id int); select no_such_function();");
-  fs.writeFileSync(path.join(dir, "007_never.sql"), "create table trading.t7 (id int);");
+  fs.writeFileSync(path.join(dir, "905_good.sql"), "create table trading.t5 (id int);");
+  fs.writeFileSync(path.join(dir, "906_broken.sql"), "create table trading.t6 (id int); select no_such_function();");
+  fs.writeFileSync(path.join(dir, "907_never.sql"), "create table trading.t7 (id int);");
   const db = createDb({ config: { databaseUrl: urlFor("trading_ops_test") }, migrationsDir: dir });
   try {
-    await assert.rejects(db.migrateAll(), (e) => e.code === "MigrationFailed" && /006_broken failed and was rolled back/.test(e.message));
+    await assert.rejects(db.migrateAll(), (e) => e.code === "MigrationFailed" && /906_broken failed and was rolled back/.test(e.message));
     const tables = (await db.query("select tablename from pg_tables where schemaname = 'trading' and tablename in ('t5', 't6', 't7') order by 1")).rows.map((r) => r.tablename);
     assert.deepStrictEqual(tables, ["t5"]);                                         // 005 stayed, 006 left nothing, 007 was never tried
-    assert.deepStrictEqual((await db.status()).migrations.pending, ["006_broken", "007_never"]);
+    assert.deepStrictEqual((await db.status()).migrations.pending, ["906_broken", "907_never"]);
     await assert.rejects(db.migrateAll(), (e) => e.code === "MigrationFailed");     // still failing, still nothing half-done
-    fs.writeFileSync(path.join(dir, "006_broken.sql"), "create table trading.t6 (id int);"); // the fix arrives with a later deploy
-    assert.deepStrictEqual((await db.migrateAll()).applied, ["006_broken", "007_never"]);
-    fs.appendFileSync(path.join(dir, "005_good.sql"), "\n-- edited after it was applied");
-    fs.writeFileSync(path.join(dir, "008_next.sql"), "create table trading.t8 (id int);");
-    await assert.rejects(db.migrateAll(), (e) => e.code === "MigrationProblem" && /005_good was edited after it was applied/.test(e.message));
+    fs.writeFileSync(path.join(dir, "906_broken.sql"), "create table trading.t6 (id int);"); // the fix arrives with a later deploy
+    assert.deepStrictEqual((await db.migrateAll()).applied, ["906_broken", "907_never"]);
+    fs.appendFileSync(path.join(dir, "905_good.sql"), "\n-- edited after it was applied");
+    fs.writeFileSync(path.join(dir, "908_next.sql"), "create table trading.t8 (id int);");
+    await assert.rejects(db.migrateAll(), (e) => e.code === "MigrationProblem" && /905_good was edited after it was applied/.test(e.message));
     assert.strictEqual((await db.query("select to_regclass('trading.t8') as t")).rows[0].t, null); // nothing ran
   } finally { await db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

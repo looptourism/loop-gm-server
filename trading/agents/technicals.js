@@ -52,15 +52,15 @@ function computeTechnicals(candles, { periodsPerYear }) {
   for (const c of within(90)) { peak = Math.max(peak, c.close); maxDd = Math.min(maxDd, (c.close - peak) / peak); }
   const trs = [];
   for (let i = Math.max(1, candles.length - 14); i < candles.length; i++) trs.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i - 1].close), Math.abs(candles[i].low - candles[i - 1].close)));
-  const s20 = sma(closes, 20), s50 = sma(closes, 50), s200 = sma(closes, 200);
+  const s5 = sma(closes, 5), s10 = sma(closes, 10), s20 = sma(closes, 20), s50 = sma(closes, 50), s200 = sma(closes, 200);
   const vs = (avg) => (avg === null ? null : round(((last.close - avg) / avg) * 100, 2));
 
   return {
     basis: { interval: "OneDay", finishedCandles: candles.length, from: candles[0].asOf, to: last.asOf, note: "computed by Trading Desk code from stored eToro candles; volume is not used" },
     lastClose: last.close,
-    changePct: { d1: change(1), d7: change(7), d30: change(30), d90: change(90), d365: change(365) },
-    sma: { d20: round(s20), d50: round(s50), d200: round(s200) },
-    closeVsSmaPct: { d20: vs(s20), d50: vs(s50), d200: vs(s200) },
+    changePct: { d1: change(1), d3: change(3), d7: change(7), d14: change(14), d30: change(30), d90: change(90), d365: change(365) },
+    sma: { d5: round(s5), d10: round(s10), d20: round(s20), d50: round(s50), d200: round(s200) },
+    closeVsSmaPct: { d5: vs(s5), d10: vs(s10), d20: vs(s20), d50: vs(s50), d200: vs(s200) },
     rsi14: round(rsi(closes, 14), 1),
     volatility30dAnnualizedPct: round(vol, 1),
     atr14Pct: trs.length === 14 ? round((mean(trs) / last.close) * 100, 2) : null,
