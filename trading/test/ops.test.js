@@ -147,7 +147,16 @@ test("Telegram commands: /trade_run starts a screened run only; /trade_status re
   assert.match(p.sent[2], /already in progress: screening NVO/);
   await desk.handleTelegramCommand("trade_status", "/trade_status");
   assert.match(p.sent[3], /Trading Desk status[\s\S]*Running now: screening NVO[\s\S]*\$12\.40 of \$50\.00[\s\S]*Last run: none yet[\s\S]*Position checks: on, first check pending/);
-  p.state.running = null; p.state.ready = false; p.state.notReadyBecause = "ANTHROPIC_API_KEY is not set on the server";
+  // while a run is in progress, its own start record is not reported as a run that "did not finish"
+  p.opts.agents.recentRuns = async () => [{ event: "started", at: "2026-11-16T14:00:00Z" }, { event: "finished", at: "2026-11-15T12:09:00Z", ok: true, proposals: [], usage: { estimatedCostUsd: 0.82 } }];
+  await desk.handleTelegramCommand("trade_status", "/trade_status");
+  assert.match(p.sent[4], /Running now: screening NVO[\s\S]*Last run: 2026-11-15 12:09 UTC — ok, 0 draft\(s\), about \$0\.82/);
+  assert.ok(!/did not finish/.test(p.sent[4]));
+  p.state.running = null;                                                          // the same records with nothing running: that run really was cut short
+  await desk.handleTelegramCommand("trade_status", "/trade_status");
+  assert.match(p.sent[5], /Last run: 2026-11-16 14:00 UTC — did not finish \(server restarted\)/);
+  p.sent.splice(4, 2);
+  p.state.ready = false; p.state.notReadyBecause = "ANTHROPIC_API_KEY is not set on the server";
   await desk.handleTelegramCommand("trade_run", "/trade_run");
   assert.match(p.sent[4], /Not started: ANTHROPIC_API_KEY/);
   assert.strictEqual(p.runs.length, 2);

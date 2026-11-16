@@ -449,7 +449,12 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
       let budget = null, lastRun = null;
       if (!offBecause) {
         budget = await agents.budget.status();
-        try { lastRun = (await agents.recentRuns(1))[0] || null; } catch { /* shown as none */ }
+        // While a run is in progress its own "started" record is the newest
+        // entry; "last run" means the one before it.
+        try {
+          const recent = await agents.recentRuns(3);
+          lastRun = (agents.state().running && recent[0]?.event === "started" ? recent.slice(1) : recent)[0] || null;
+        } catch { /* shown as none */ }
       }
       await notifier.send(notify.statusText({ agents: agents.state(), budget, lastRun, dbState, positions: typeof positions.state === "function" ? positions.state() : null }));
       return true;
