@@ -37,6 +37,11 @@ function runSummary(r) {
     const short = r.screen.results.filter((x) => x.shortlisted).sort((a, b) => b.score - a.score);
     lines.push(`🔎 Screened: ${scored.length} of ${r.screen.results.length}${r.scope === "crypto" ? " (coins only)" : ""}`);
     lines.push(short.length ? `📋 Shortlist (${short.length}): ${short.map((x) => `${esc(x.symbol)} ${x.score}`).join(", ")}` : `📋 Shortlist: none scored ${r.screen.minScore} or more`);
+    // Show how close the rest came, so an empty or short shortlist can be judged.
+    const rest = scored.filter((x) => !x.shortlisted).sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol)).slice(0, 5);
+    if (rest.length) lines.push(`📉 Next highest: ${rest.map((x) => `${esc(x.symbol)} ${x.score}`).join(", ")}`);
+    const top = scored.slice().sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol))[0];
+    if (top?.reason) lines.push(`💬 Top score (${esc(top.symbol)}): ${esc(clip(top.reason, 200))}`);
   }
   if (r.instruments?.length) {
     const one = (i) => (!i.analysis?.ok ? `${esc(i.symbol)} failed` : `${esc(i.symbol)} ${esc(i.analysis.recommendation)}${i.riskReview?.ok ? ` / ${esc(String(i.riskReview.stance).replace("_", " "))}` : " / no review"}`);
