@@ -26,4 +26,7 @@ The owner works only from a phone. Keep their manual steps to a minimum.
 - **Console (Stage 7):** the Trading Desk tab shows `/trading-desk` (`trading/desk/`); its Approve /
   Reject goes through `approvals.decideFromDashboard`, so it counts as approvals code. See
   docs/trading-desk-console.md.
+- **Stage 8 (end-to-end run):** `/trade_e2e` checklist (`trading/e2e.js`, read-only), runbook
+  docs/trading-desk-e2e.md, operator README trading/README.md. Quiet hours can be set from
+  Telegram (`/trade_quiet`, desk_state `quiet_hours`) and are approvals code.
 - **Trading style (2026-11-16):** short-term swing trades, held 1 to 14 days (`trading/policy.js`).

@@ -39,7 +39,8 @@ const path = require("path");
 const DESK_PAGE = path.join(__dirname, "desk", "desk.html");
 const { createOrderClient } = require("./execution/etoro-orders");
 const { createGateway } = require("./execution/gateway");
-const { createApprovals } = require("./approvals");
+const { createApprovals, readQuietHours } = require("./approvals");
+const e2e = require("./e2e");
 const { readHalted } = require("./risk/context");
 const { appendAudit } = require("./db/store");
 const { listMonitored } = require("./db/snapshots");
@@ -520,6 +521,16 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     } catch (e) { fail(res, e); }
   });
 
+  // --- Stage 8: the end-to-end checklist -------------------------------------
+  // Which steps of the live DEMO run are on record. Read-only.
+  app.get("/api/trading/e2e", dbGuard, async (req, res) => {
+    try {
+      const since = await e2e.readSince(db);
+      if (!since) return res.json({ ok: true, environment: "demo", started: false, next: "send /trade_e2e in Telegram to start the run" });
+      res.json(await e2e.buildE2E({ db, since }));
+    } catch (e) { fail(res, e); }
+  });
+
   // --- Telegram commands (the server's existing bot) -----------------------
   // server.js hands exactly these commands to this function, before anything
   // goes to the GM agent. Plain code: no Claude call decides or writes here.
@@ -611,10 +622,82 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
       if (!trading.tradingOff && typeof approvals.tick === "function") await approvals.tick();
       return true;
     }
+    // trade_e2e — the Stage 8 checklist. The first use starts the run;
+    // "/trade_e2e restart" starts it again from now.
+    if (command === "trade_e2e") {
+      if (offBecause) { await notifier.send(`⛔ ${notify.esc(offBecause)}`); return true; }
+      let since = await e2e.readSince(db);
+      if (!since || /\brestart\b/i.test(text)) {
+        since = await e2e.startRun(db, new Date());
+        await appendAudit(db, { eventType: "e2e.started", entityType: "desk", actor: "owner:telegram", data: { since } });
+      }
+      await notifier.send(e2e.e2eText(await e2e.buildE2E({ db, since })));
+      return true;
+    }
+    // trade_quiet 23:00-07:00 [Asia/Dubai] | off — quiet hours for approval
+    // requests. Inside the window no request is sent; proposals wait and still
+    // expire normally. Alerts are not held.
+    if (command === "trade_quiet") {
+      const say = async (t) => { await notifier.send(t); return true; };
+      if (offBecause) return say(`⛔ ${notify.esc(offBecause)}`);
+      const arg = text.trim().replace(/^\/\w+(?:@\w+)?\s*/, "");
+      const describe = (q) => (q.hours ? `${q.hours.start}–${q.hours.end} (${q.hours.timeZone})` : "none");
+      if (!arg) { const q = await readQuietHours(db); return say(`🌙 Quiet hours: ${notify.esc(describe(q))}${q.from === "policy" ? " (from policy.js)" : ""}.\nSet: <code>/trade_quiet 23:00-07:00</code> (Dubai time unless you add a zone). Remove: <code>/trade_quiet off</code>.`); }
+      let value;
+      if (/^off$/i.test(arg)) value = { off: true };
+      else {
+        const m = /^([01]\d|2[0-3]):([0-5]\d)\s*-\s*([01]\d|2[0-3]):([0-5]\d)(?:\s+([A-Za-z_]+\/[A-Za-z_]+|UTC))?$/.exec(arg);
+        if (!m) return say("Usage: <code>/trade_quiet 23:00-07:00</code>, <code>/trade_quiet 23:00-07:00 UTC</code> or <code>/trade_quiet off</code>.");
+        const timeZone = m[5] || "Asia/Dubai";
+        try { new Intl.DateTimeFormat("en-GB", { timeZone }); } catch { return say(`⛔ Unknown time zone: ${notify.esc(timeZone)}`); }
+        if (`${m[1]}:${m[2]}` === `${m[3]}:${m[4]}`) return say("⛔ The start and end are the same.");
+        value = { start: `${m[1]}:${m[2]}`, end: `${m[3]}:${m[4]}`, timeZone };
+      }
+      await db.withTransaction(async (tx) => {
+        await tx.query("insert into trading.desk_state (key, value, updated_by) values ('quiet_hours', $1, 'owner:telegram') on conflict (key) do update set value = excluded.value, updated_by = excluded.updated_by, updated_at = now()", [JSON.stringify(value)]);
+        await appendAudit(tx, { eventType: "settings.quiet_hours", entityType: "desk", actor: "owner:telegram", data: value });
+      });
+      return say(value.off ? "🌙 Quiet hours removed. Approval requests are sent at any time." : `🌙 Quiet hours set: ${value.start}–${value.end} (${notify.esc(value.timeZone)}).\nInside this window no approval request is sent; proposals wait and still expire normally. Alerts are still sent.`);
+    }
+    // trade_drill_exit SYMBOL — Stage 8 drill. Adds a "price at or above"
+    // exit condition 1% below the current stored bid to the desk's open
+    // position, then runs one position check now. The real monitor then sees
+    // the real price above it, sends its alert and creates the close proposal
+    // the normal way. Nothing is closed without your Approve.
+    if (command === "trade_drill_exit") {
+      const say = async (t) => { await notifier.send(t); return true; };
+      if (offBecause) return say(`⛔ Not done: ${notify.esc(offBecause)}`);
+      const m = /^\/\w+(?:@\w+)?\s+([A-Za-z0-9.]{1,12})\s*$/.exec(text.trim());
+      if (!m) return say("Usage: <code>/trade_drill_exit BTC</code> — tests the monitor's alert and close proposal on the desk's open position.");
+      const symbol = m[1].toUpperCase();
+      const pos = (await db.query("select p.id, p.instrument_id, p.etoro_position_id from trading.positions p join trading.instruments i on i.instrument_id = p.instrument_id where i.symbol = $1 and p.status = 'open' order by p.opened_at limit 1", [symbol])).rows[0];
+      if (!pos) return say(`⛔ Not done: the desk has no open position in ${notify.esc(symbol)}.`);
+      const r = (await db.query("select bid, as_of, quote_type from trading.market_snapshots where kind = 'rate' and instrument_id = $1 order by as_of desc limit 1", [pos.instrument_id])).rows[0];
+      const at = new Date();
+      if (!r || !rateFreshness({ asOf: r.as_of, quoteType: r.quote_type }, at, MONITORING.rateFreshSec).fresh) return say(`⛔ Not done: there is no fresh price for ${notify.esc(symbol)} right now (market closed or data delayed). Try again when it trades.`);
+      const level = Number((Number(r.bid) * 0.99).toPrecision(6));
+      const condition = { type: "price_above", value: level, description: `Stage 8 drill: set 1% below the bid of ${Number(r.bid)} (${new Date(r.as_of).toISOString().slice(0, 16)} UTC) to test the alert and close path` };
+      await db.withTransaction(async (tx) => {
+        await tx.query("update trading.positions set exit_conditions = coalesce(exit_conditions, '[]'::jsonb) || $2::jsonb, updated_at = now() where id = $1", [pos.id, JSON.stringify([condition])]);
+        await appendAudit(tx, { eventType: "position.drill_exit", entityType: "position", entityId: String(pos.etoro_position_id), actor: "owner:telegram", data: { symbol, condition } });
+      });
+      await say(`🧪 <b>Drill exit added — ${notify.esc(symbol)}</b> (DEMO)\nCondition: price at or above ${level}. Checking the position now; the monitor's alert and close request follow if it is reached.`);
+      if (typeof positions.check === "function") await positions.check("drill");
+      if (typeof approvals.tick === "function") await approvals.tick();
+      return true;
+    }
     // trade_run: a SCREENED run only. "crypto" after the command = coins only.
     const st = agents.state();
     if (offBecause || !st.ready) { await notifier.send(`⛔ Not started: ${notify.esc(offBecause || st.notReadyBecause)}`); return true; }
     if (st.running) { await notifier.send(`⏳ A run is already in progress: ${notify.esc(st.running.step)}. I will send the summary when it finishes.`); return true; }
+    // "/trade_run NKE BTC" — full analysis of exactly these (no screen), at most 4.
+    const named = text.trim().split(/\s+/).slice(1).map((x) => x.toUpperCase()).filter((x) => x && x !== "CRYPTO");
+    if (named.length) {
+      if (named.length > 4 || !named.every((x) => /^[A-Z0-9.]{1,12}$/.test(x))) { await notifier.send("Usage: <code>/trade_run</code>, <code>/trade_run crypto</code>, or up to 4 symbols: <code>/trade_run NKE BTC</code>."); return true; }
+      await notifier.send(`▶️ Full analysis started for ${notify.esc(named.join(", "))} (no screen). The summary follows when it finishes.`);
+      agents.run(named, { trigger: "telegram" });
+      return true;
+    }
     const scope = /\bcrypto\b/i.test(text) ? "crypto" : "all";
     await notifier.send(`▶️ Screened run started (${scope === "crypto" ? "coins only" : "all instruments"}). The summary follows when it finishes, usually within 15 minutes.`);
     agents.run("all", { trigger: "telegram", screened: true, scope });

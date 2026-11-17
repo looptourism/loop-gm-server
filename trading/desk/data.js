@@ -10,6 +10,7 @@ const { POLICY } = require("../policy");
 const { AGENTS } = require("../config");
 const { readAllowlists } = require("../db/store");
 const { readHalted } = require("../risk/context");
+const { readQuietHours } = require("../approvals");
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 const n = (v) => (v === null || v === undefined ? null : Number(v));
@@ -91,6 +92,7 @@ async function buildDesk({ db, config, agents, positions, approvals, now = new D
   // ---- settings ------------------------------------------------------------------------
   const lists = await readAllowlists(db);
   const halted = await readHalted(db);
+  const quiet = await readQuietHours(db);
   const settings = {
     tradingEnabled: config.tradingEnabled === true, stopped: halted,
     tradingOn: config.tradingEnabled === true && !halted,
@@ -98,7 +100,7 @@ async function buildDesk({ db, config, agents, positions, approvals, now = new D
     policy: {
       maxPerTradeUsd: POLICY.maxPerTradeUsd, maxTotalExposureUsd: POLICY.maxTotalExposureUsd, maxCryptoExposureUsd: POLICY.maxCryptoExposureUsd,
       maxDailyLossUsd: POLICY.maxDailyLossUsd, maxOpenPositions: POLICY.maxOpenPositions, leverage: POLICY.leverage, direction: POLICY.direction,
-      holdingDays: POLICY.holdingDays, approvalValidMinutes: POLICY.approvalValidMinutes, quietHours: POLICY.quietHours,
+      holdingDays: POLICY.holdingDays, approvalValidMinutes: POLICY.approvalValidMinutes, quietHours: quiet.hours, quietHoursFrom: quiet.from,
       cryptoCorrelatedCountsTowardCryptoCap: POLICY.cryptoCorrelatedCountsTowardCryptoCap,
     },
     agents: { models: AGENTS.models, shortlistMax: AGENTS.shortlistMax, shortlistMinScore: AGENTS.shortlistMinScore, monthlyBudgetUsd: AGENTS.monthlyBudgetUsd, schedule: AGENTS.schedule.map((s) => s.label) },

@@ -227,12 +227,15 @@ function createNotifier({ telegram = null, log = (...a) => console.log("[trading
 // The commands the desk adds to the existing bot. server.js routes exactly
 // these to the desk's code, before anything is passed to the GM agent.
 const COMMANDS = [
-  { command: "trade_run", description: "مكتب التداول (تجريبي): تشغيل فحص وتحليل الآن" },
+  { command: "trade_run", description: "مكتب التداول (تجريبي): فحص وتحليل الآن، أو رموز محددة: /trade_run NKE BTC" },
   { command: "trade_status", description: "مكتب التداول (تجريبي): الحالة والميزانية وآخر تشغيل" },
   { command: "trade_test", description: "مكتب التداول (تجريبي): صفقة اختبار صغيرة، مثال: /trade_test BTC 50" },
   { command: "trade_close", description: "مكتب التداول (تجريبي): اقتراح إغلاق مركز، مثال: /trade_close BTC" },
   { command: "trade_stop", description: "مكتب التداول (تجريبي): إيقاف التداول فورًا" },
   { command: "trade_resume", description: "مكتب التداول (تجريبي): السماح بالتداول من جديد" },
+  { command: "trade_quiet", description: "مكتب التداول (تجريبي): ساعات الهدوء، مثال: /trade_quiet 23:00-07:00" },
+  { command: "trade_e2e", description: "مكتب التداول (تجريبي): قائمة فحص التشغيل الكامل" },
+  { command: "trade_drill_exit", description: "مكتب التداول (تجريبي): تمرين شرط خروج، مثال: /trade_drill_exit BTC" },
 ];
 
 module.exports = { createNotifier, runSummary, statusText, positionAlert, limitAlert, closeRequest, approvalRequest, approvalClosed, riskRejected, executionResult, budgetLine, COMMANDS, esc };

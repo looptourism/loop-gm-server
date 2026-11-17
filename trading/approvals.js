@@ -39,6 +39,19 @@ function inQuietHours(now, q) {
   return q.start <= q.end ? hm >= q.start && hm < q.end : hm >= q.start || hm < q.end;
 }
 
+// The quiet hours in force: the owner's /trade_quiet setting when there is
+// one, otherwise POLICY.quietHours. Stored as desk_state 'quiet_hours':
+// { start, end, timeZone } or { off: true }. If the setting cannot be read the
+// answer is "quiet" — an approval request is held, never sent by mistake.
+async function readQuietHours(db, policy = POLICY) {
+  try {
+    const r = await db.query("select value from trading.desk_state where key = 'quiet_hours'");
+    if (!r.rows.length) return { hours: policy.quietHours || null, from: "policy" };
+    const v = r.rows[0].value || {};
+    return v.off ? { hours: null, from: "telegram" } : { hours: { start: v.start, end: v.end, timeZone: v.timeZone || "UTC" }, from: "telegram" };
+  } catch (e) { return { hours: null, from: "unreadable", unreadable: true }; }
+}
+
 function createApprovals({ config, db, client, gateway, notifier, policy = POLICY, now = () => new Date(), log = (...a) => console.log("[trading/approvals]", ...a) } = {}) {
   let busy = false, timer = null;
   const clean = (e) => db.redact(client.redact(e?.message || String(e)));
@@ -65,7 +78,16 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
     const out = { sent: [], rejected: [], waiting: [], skipped: null };
     const off = await tradingOff();
     if (off) { out.skipped = `trading is off: ${off}`; return out; }
-    if (inQuietHours(now(), policy.quietHours)) { out.skipped = "quiet hours"; return out; }
+    const quiet = await readQuietHours(db, policy);
+    if (quiet.unreadable || inQuietHours(now(), quiet.hours)) {
+      out.skipped = quiet.unreadable ? "quiet hours (the setting could not be read)" : "quiet hours";
+      // One audit record per held proposal, so the hold is on record (Stage 8).
+      try {
+        const held = (await db.query("select p.id from trading.proposals p where p.status = 'draft' and p.action in ('open', 'close') and p.expires_at > $1 and not exists (select 1 from trading.audit_log l where l.proposal_id = p.id and l.event_type = 'approval.quiet_hold')", [now().toISOString()])).rows;
+        for (const h of held) await audit(db, "approval.quiet_hold", h.id, { quietHours: quiet.hours, setBy: quiet.from, at: now().toISOString() });
+      } catch (e) { log("could not record a quiet-hours hold:", clean(e)); }
+      return out;
+    }
     const drafts = (await db.query("select id from trading.proposals where status = 'draft' and action in ('open', 'close') and expires_at > $1 order by action = 'close' desc, created_at", [now().toISOString()])).rows;
     for (const d of drafts) {
       const proposal = await loadProposal(db, d.id);
@@ -120,7 +142,11 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
         if (!a) return { outcome: "unknown", message: "This request is not on record. Nothing was done." };
         const p = await loadProposal(tx, a.proposal_id, { forUpdate: true });
         const base = { proposal: p, messageId: a.telegram_message_id === null ? null : Number(a.telegram_message_id) };
-        if (a.decision !== null) return { ...base, outcome: "already_decided", message: `This request was already ${a.decision} at ${iso(a.decided_at)}. Nothing more was done.`, previous: a.decision };
+        if (a.decision !== null) {
+          // A second tap (or a tap on the other channel). Nothing happens; it is put on record.
+          await audit(tx, "approval.duplicate", p.id, { approvalId, attempted: approve ? "approve" : "reject", previous: a.decision }, `owner:${channel}`);
+          return { ...base, outcome: "already_decided", message: `This request was already ${a.decision} at ${iso(a.decided_at)}. Nothing more was done.`, previous: a.decision };
+        }
         const t = now();
         if (t.getTime() > new Date(a.expires_at).getTime()) {
           await tx.query("update trading.proposals set status = 'expired', status_reason = 'the approval request was not answered within its time' where id = $1 and status = 'pending_approval'", [p.id]);
@@ -204,4 +230,4 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
   return { dispatch, decide, decideFromDashboard, expireOld, tick, start, summary, ownsCallback, handleTelegramCallback };
 }
 
-module.exports = { createApprovals, inQuietHours, CALLBACK };
+module.exports = { createApprovals, inQuietHours, readQuietHours, CALLBACK };
