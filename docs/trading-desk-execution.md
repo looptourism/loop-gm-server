@@ -80,6 +80,54 @@ Only a 400 or 404 from eToro is treated as a definite "not placed".
 | Live price age at execution | at most 180 s | eToro's "realtime" rates were seen 40–70 s old |
 | Quiet hours | none | no window was given; set `quietHours` to add one |
 
+## Closing a position (Stage 6)
+
+Nothing closes automatically. A close is a proposal, and it needs your Approve like a buy.
+
+**Where a close proposal comes from**
+- **The position monitor**, when an exit condition you approved is reached (the stop, a target,
+  the planned holding date) or the position has been held longer than 14 days. One proposal per
+  condition: if you reject it, that condition does not propose again. The alert says a close
+  was proposed.
+- **You**, with `/trade_close BTC` in Telegram.
+
+**What the risk engine checks for a close**
+
+| Check | Why |
+|---|---|
+| Kill switch on, trading not stopped | Hard rule: no order of any kind while the switch is off |
+| Demo only · not expired · a long, unleveraged market close | Same as a buy |
+| The position is open in the desk's records, for this instrument | It closes exactly the position you approved |
+| The account can be read, and eToro still lists the position as a long, unleveraged position in this instrument | A position already closed is not "closed again" |
+| No other close order for it is at eToro | No double close |
+| A fresh price (realtime, eToro's own timestamp) | A stock is closed while its market is open |
+
+The opening limits (cash, exposure, open positions, daily loss, the swing plan) do **not**
+apply to a close, because closing reduces risk: a limit must never keep a position open. For
+the same reason, how far the price moved since your approval request does not stop a close —
+refusing would leave you holding a position in a falling market.
+
+**What is sent:** `POST /api/v1/trading/execution/demo/market-close-orders/positions/{positionId}`
+with `{ InstrumentID, UnitsToDeduct: null }` — the whole position. Partial closes are not used.
+The result is fetched with eToro's close-order lookup; the position is then marked closed with
+its closing price and an estimated result (from the open and close prices; fees not included).
+
+**If eToro's answer to a close is lost:** eToro offers no lookup of a close by our request ID,
+so the account itself is the evidence. If eToro no longer lists the position, it is closed (the
+closing price is then not known). If it still lists it 10 minutes later, the close is marked
+not placed. A close is never sent twice by the desk.
+
+**Kill switch and closing:** with `TRADING_ENABLED` off or `/trade_stop` active, a close cannot
+be sent either — that is hard rule 4 taken literally. A close proposed meanwhile waits and is
+offered when trading is back on (it expires after 24 hours). You can always close on eToro yourself.
+
+## Limit warnings (Stage 6)
+
+At each 15-minute position check the desk compares the account with your limits: total exposure
+($5,000), crypto exposure ($1,500, MSTR counts), open positions (10) and today's loss ($100).
+At 80% you get a "Limit approached" message; at 100% a "Limit reached" message. Each fires once
+per limit, level and UTC day. `/trade_status` shows all four at any time.
+
 ## A test trade you start yourself: `/trade_test`
 
 `/trade_test BTC 50` creates one small draft proposal by hand, so the path from proposal to
@@ -101,8 +149,7 @@ Reject request, the live re-check, one demo order, verification, and the positio
 
 1. No real demo order yet (see Status). eToro's real order and lookup answers may differ from
    the documentation, as its market-data answers did in Stage 1.
-2. Only opening is built. Closing through the desk comes with Stage 6; eToro's order endpoint
-   itself currently supports only orders that open a position.
+2. Closing is a separate eToro endpoint (Stage 6); it has not yet been used with a real position.
 3. The stop level is watched by the desk every 15 minutes and you are alerted; it is **not** a
    stop order at eToro. eToro can hold a stop-loss on the order itself, which would close the
    position automatically; that is not used, because your rule is that nothing closes

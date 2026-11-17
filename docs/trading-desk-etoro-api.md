@@ -85,6 +85,22 @@ is still 12 Oct 2026).
     positions the order produced.
   - Auth: the API key pair, or OAuth scope `etoro-public:demo:write` — the key must have
     **Write** permission.
+- **Closing (Stage 6, read on 2026-11-17, not yet used with a real position):**
+  `POST /api/v1/trading/execution/demo/market-close-orders/positions/{positionId}` ("Close demo
+  position by units", listed under the current reference, not "deprecated"). Body:
+  `{ InstrumentID, UnitsToDeduct }`; `UnitsToDeduct: null` closes the whole position. Quota
+  20/min, shared with the open-order calls. Answer: `{ orderForClose: { positionID,
+  instrumentID, unitsToDeduct, orderID, orderType, statusID, … }, token }`. 200 means submitted,
+  not closed.
+  - Outcome: `GET /api/v1/trading/info/demo/close-orders/{orderId}` — by eToro's close order ID
+    **only**; there is no lookup by our request ID. `statusID`: 1 Received, 2 Placed,
+    5 PartiallyFilled, 6 PendingCancel, 11 WaitingForMarket (pending); 3 Filled; 4 Rejected,
+    7 Canceled, 8 Expired, 9 CanceledPartiallyFilled, 10 RejectedPartiallyFilled (terminal).
+    `positions[]` gives each closed position's `rate`, `units`, `amount`, `occurred`;
+    `proceeds` totals what was realized.
+  - The schema names the field `InstrumentID`; eToro's guide example writes `InstrumentId`. The
+    desk sends `InstrumentID` (the schema).
+  - The guide again shows the path without `/demo/` — the real account.
 - **v3** (`POST /api/v3/trading/execution/demo/orders`, added 23 Aug 2026) is asynchronous and
   has stricter `settlementType` rules. Not used.
 - **Danger, unchanged:** eToro's guide "Open and close market orders" shows the path without

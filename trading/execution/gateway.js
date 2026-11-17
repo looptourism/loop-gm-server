@@ -27,9 +27,15 @@ const { paramsHash } = require("../proposals");
 const { assess } = require("../risk/engine");
 const { buildContext, saveAssessment, loadProposal, readHalted } = require("../risk/context");
 const { appendAudit } = require("../db/store");
-const { buildOpenOrder, OrderError } = require("./etoro-orders");
+const { buildOpenOrder, buildCloseOrder, OrderError, DEMO_CLOSE_PATH_PREFIX } = require("./etoro-orders");
+const { summarizeDemoAccount } = require("../account");
 const { parseUtc } = require("../market-data");
 
+// Close orders have their own status list (Stage 6, "Get close order information").
+const CLOSE_FILLED = 3;
+const CLOSE_NOT_EXECUTED = new Set([4, 7, 8]);  // Rejected, Canceled, Expired
+const CLOSE_PARTLY_THEN_STOPPED = new Set([9, 10]); // CanceledPartiallyFilled, RejectedPartiallyFilled
+const CLOSE_IN_FLIGHT = new Set([1, 2, 5, 6, 11]);
 const FILLED = new Set([3, 5]);       // Filled, PartiallyFilled
 const REJECTED = new Set([4, 10]);    // Rejected, RejectedPartiallyFilled
 const IN_FLIGHT = new Set([1, 2, 11, 12]); // Received, Placed, WaitingForMarket, PendingTriggeredRate
@@ -88,7 +94,9 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
       ctx = await buildContext({ db, client, config, policy, proposal, phase: "pre_execution", now: now(), referenceAsk: ref?.inputs?.price?.ask ?? null });
       verdict = assess(ctx);
       await saveAssessment(db, proposalId, ctx, verdict);
-      body = buildOpenOrder({ instrumentId: proposal.instrumentId, amountUsd: proposal.amountUsd, direction: proposal.direction, leverage: proposal.leverage, orderType: proposal.orderType, action: proposal.action });
+      body = proposal.action === "close"
+        ? buildCloseOrder({ etoroPositionId: ctx.position?.etoroPositionId, instrumentId: proposal.instrumentId })
+        : buildOpenOrder({ instrumentId: proposal.instrumentId, amountUsd: proposal.amountUsd, direction: proposal.direction, leverage: proposal.leverage, orderType: proposal.orderType, action: proposal.action });
     } catch (e) { return refuse(proposalId, `the pre-execution check could not be completed: ${clean(e)}`); }
     if (!verdict.passed) {
       const why = verdict.checks.filter((c) => !c.passed).map((c) => `${c.name}: ${c.message}`);
@@ -105,8 +113,11 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
         if (t.getTime() > new Date(a.expires_at).getTime()) throw new Error(`the approval expired at ${iso(a.expires_at)} while the checks were running`);
         await tx.query("update trading.approvals set consumed_at = $2 where id = $1", [approval.id, t.toISOString()]);
         const o = (await tx.query(
-          "insert into trading.orders (proposal_id, approval_id, params_hash, idempotency_key, status, request, created_at) values ($1, $2, $3, $4, 'submitting', $5, $6) returning id",
-          [proposalId, approval.id, proposal.paramsHash, proposal.idempotencyKey, JSON.stringify({ path: "POST /api/v2/trading/execution/demo/orders", requestId: proposal.idempotencyKey, body }), t.toISOString()]
+          "insert into trading.orders (proposal_id, approval_id, params_hash, idempotency_key, status, request, created_at, order_kind) values ($1, $2, $3, $4, 'submitting', $5, $6, $7) returning id",
+          [proposalId, approval.id, proposal.paramsHash, proposal.idempotencyKey, JSON.stringify({
+            path: proposal.action === "close" ? `POST ${DEMO_CLOSE_PATH_PREFIX}${ctx.position.etoroPositionId}` : "POST /api/v2/trading/execution/demo/orders",
+            requestId: proposal.idempotencyKey, body, ...(proposal.action === "close" ? { etoroPositionId: ctx.position.etoroPositionId } : {}),
+          }), t.toISOString(), proposal.action === "close" ? "close" : "open"]
         )).rows[0];
         await audit(tx, "order.created", proposalId, { orderId: o.id, body, livePrice: ctx.price }, { type: "order", id: o.id });
         return o;
@@ -114,7 +125,11 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
     } catch (e) { return refuse(proposalId, `the order could not be recorded, so it was not sent: ${clean(e)}`); }
 
     let placed;
-    try { placed = await orders.placeDemoOrder(body, { idempotencyKey: proposal.idempotencyKey }); }
+    try {
+      placed = proposal.action === "close"
+        ? await orders.placeDemoClose(ctx.position.etoroPositionId, body, { idempotencyKey: proposal.idempotencyKey })
+        : await orders.placeDemoOrder(body, { idempotencyKey: proposal.idempotencyKey });
+    }
     catch (e) {
       const message = e instanceof OrderError ? clean(e) : `unexpected error: ${clean(e)}`;
       if (e instanceof OrderError && e.sent === false) {
@@ -186,6 +201,7 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
     const proposal = await loadProposal(db, order.proposal_id);
     const done = (out) => { if (announce && out.final) tell(out); return out; };
     if (!["submitting", "submitted", "unknown"].includes(order.status)) return { ok: order.status === "filled", final: true, sent: true, status: order.status, proposal };
+    if (order.order_kind === "close") return done(await reconcileClose(order, proposal));
     let info;
     try {
       const r = await client.getDemoOrder(order.etoro_order_id ? { orderId: Number(order.etoro_order_id) } : { referenceId: order.idempotency_key });
@@ -225,6 +241,73 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
       return { ok: false, final: false, sent: true, status: "submitted", reason: `eToro has the order and has not executed it yet (${info.status.name || `status ${id}`})`, etoroOrderId: info.orderId ?? null, proposal };
     }
     return { ok: false, final: false, sent: true, status: order.status, reason: `eToro returned a status this code does not know (${id}); it will be looked up again`, proposal };
+  }
+
+  // What became of a CLOSE order. eToro offers a lookup by its own close
+  // order ID only. If the answer to the close request was lost there is no
+  // such ID, and the only evidence is the account itself: a position eToro
+  // no longer lists is closed; one it still lists after the give-up time was
+  // not closed by this request. The close is never sent again by itself.
+  async function reconcileClose(order, proposal) {
+    const position = (await db.query("select id, etoro_position_id, open_rate, units, amount_usd from trading.positions where id = $1", [proposal.positionId])).rows[0];
+    const etoroPositionId = position ? Number(position.etoro_position_id) : null;
+    const at = now().toISOString();
+    const markClosed = async (tx, { rate = null, units = null, occurred = null }) => {
+      const openRate = position?.open_rate === null || position?.open_rate === undefined ? null : Number(position.open_rate);
+      const u = typeof units === "number" && units > 0 ? units : position?.units === null || position?.units === undefined ? null : Number(position.units);
+      const pnl = typeof rate === "number" && openRate !== null && u !== null ? Math.round((rate - openRate) * u * 100) / 100 : null;
+      await tx.query("update trading.positions set status = 'closed', closed_at = coalesce(closed_at, $2), close_rate = coalesce($3, close_rate), realized_pnl_usd = coalesce($4, realized_pnl_usd), closed_by_order_id = $5, last_synced_at = $6 where id = $1",
+        [proposal.positionId, occurred || at, rate, pnl, order.id, at]);
+      return pnl;
+    };
+    if (!order.etoro_order_id) {
+      let summary;
+      try { summary = summarizeDemoAccount(await client.getDemoPnl()); }
+      catch (e) { return { ok: false, final: false, sent: true, status: "unknown", reason: `the account could not be read to see whether the position closed: ${clean(e)}`, proposal }; }
+      if (!summary.positions.some((p) => p.positionId === etoroPositionId)) {
+        await db.withTransaction(async (tx) => {
+          await markClosed(tx, {});
+          await tx.query("update trading.orders set status = 'filled', error = null, verification = $2, verified_at = $3 where id = $1", [order.id, JSON.stringify({ method: "the position is no longer listed in the demo account", checkedAt: at, source: summary.source }), at]);
+          await tx.query("update trading.proposals set status = 'executed', status_reason = null where id = $1 and status = 'executing'", [proposal.id]);
+          await audit(tx, "order.filled", proposal.id, { orderId: order.id, kind: "close", evidence: "position no longer listed" }, { type: "order", id: order.id });
+        });
+        return { ok: true, final: true, sent: true, status: "closed", etoroPositionId, closeRate: null, pnlUsd: null, note: "eToro's answer to the close request was lost; the position is no longer in the account, so it is closed. The closing price is not known.", proposal };
+      }
+      const ageMin = (now().getTime() - new Date(order.created_at).getTime()) / 60000;
+      if (ageMin < policy.execution.lookupGiveUpMinutes) return { ok: false, final: false, sent: true, status: "unknown", reason: "the position is still open; the close may still be processing. It will be checked again and NOT sent again.", proposal };
+      const reason = `the position is still open ${Math.round(ageMin)} minutes after the close request, whose answer was lost: it was not closed`;
+      await settle(order.id, proposal, { status: "failed", error: reason, verifiedAt: at, proposalStatus: "failed", event: "order.not_found" });
+      return { ok: false, final: true, sent: false, status: "not_placed", reason, proposal };
+    }
+    let info;
+    try { info = (await client.getDemoCloseOrder(Number(order.etoro_order_id))).data; }
+    catch (e) { return { ok: false, final: false, sent: true, status: order.status, reason: `the close order could not be looked up: ${clean(e)}`, proposal }; }
+    const s = info?.statusID;
+    if (s === CLOSE_FILLED) {
+      const mine = (Array.isArray(info.positions) ? info.positions : []).find((p) => Number(p?.positionID) === etoroPositionId) || null;
+      const rate = typeof mine?.rate === "number" ? mine.rate : null;
+      let pnl = null;
+      try {
+        await db.withTransaction(async (tx) => {
+          pnl = await markClosed(tx, { rate, units: mine?.units ?? null, occurred: typeof mine?.occurred === "string" ? mine.occurred : null });
+          await tx.query("update trading.orders set status = 'filled', error = null, verification = $2, verified_at = $3 where id = $1", [order.id, JSON.stringify(info), at]);
+          await tx.query("update trading.proposals set status = 'executed', status_reason = null where id = $1 and status = 'executing'", [proposal.id]);
+          await audit(tx, "order.filled", proposal.id, { orderId: order.id, kind: "close", etoroOrderId: Number(order.etoro_order_id), closeRate: rate, proceeds: info.proceeds ?? null, pnlEstimateUsd: pnl }, { type: "order", id: order.id });
+        });
+      } catch (e) { return { ok: false, final: false, sent: true, status: order.status, reason: `eToro reports the position closed, but it could not be recorded: ${clean(e)}`, proposal }; }
+      return { ok: true, final: true, sent: true, status: "closed", etoroPositionId, closeRate: rate, proceedsUsd: typeof info.proceeds === "number" ? info.proceeds : null, pnlUsd: pnl, proposal };
+    }
+    if (CLOSE_NOT_EXECUTED.has(s) || CLOSE_PARTLY_THEN_STOPPED.has(s)) {
+      const partly = CLOSE_PARTLY_THEN_STOPPED.has(s);
+      const reason = `${partly ? "eToro closed only part of the position, then stopped" : "eToro did not close the position"}: ${info.errorMessage || `status ${s}`}${info.errorCode ? ` (code ${info.errorCode})` : ""}${partly ? ". Check the position on eToro; the desk will read its new size at the next check." : ""}`;
+      await settle(order.id, proposal, { status: "rejected", error: reason, verification: info, verifiedAt: at, proposalStatus: "failed", event: "order.rejected" });
+      return { ok: false, final: true, sent: true, status: "rejected", reason, proposal };
+    }
+    if (CLOSE_IN_FLIGHT.has(s)) {
+      if (order.status !== "submitted") await settle(order.id, proposal, { status: "submitted", verification: info, verifiedAt: at, event: "order.in_flight" });
+      return { ok: false, final: false, sent: true, status: "submitted", reason: `eToro has the close order and has not executed it yet (status ${s}${s === 11 ? ": waiting for the market to open" : ""})`, proposal };
+    }
+    return { ok: false, final: false, sent: true, status: order.status, reason: `eToro returned a close status this code does not know (${s}); it will be looked up again`, proposal };
   }
 
   // Every order whose fate is not settled yet. Called every minute.

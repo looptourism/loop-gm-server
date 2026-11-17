@@ -49,13 +49,13 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
     const t = now().toISOString();
     const drafts = await db.query("update trading.proposals set status = 'expired', status_reason = 'not approved before it expired' where status = 'draft' and expires_at <= $1 returning id", [t]);
     // Approval requests nobody answered in time.
-    const late = (await db.query("select a.id, a.proposal_id, a.telegram_message_id, i.symbol, p.amount_usd from trading.approvals a join trading.proposals p on p.id = a.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id where a.decision is null and a.expires_at < $1 and p.status = 'pending_approval'", [t])).rows;
+    const late = (await db.query("select a.id, a.proposal_id, a.telegram_message_id, i.symbol, p.amount_usd, p.action from trading.approvals a join trading.proposals p on p.id = a.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id where a.decision is null and a.expires_at < $1 and p.status = 'pending_approval'", [t])).rows;
     for (const a of late) {
       await db.withTransaction(async (tx) => {
         await tx.query("update trading.proposals set status = 'expired', status_reason = 'the approval request was not answered within its time' where id = $1 and status = 'pending_approval'", [a.proposal_id]);
         await audit(tx, "approval.expired", a.proposal_id, { approvalId: a.id });
       });
-      if (a.telegram_message_id) await notifier.edit(Number(a.telegram_message_id), notify.approvalClosed({ symbol: a.symbol, amountUsd: Number(a.amount_usd), outcome: "expired" }));
+      if (a.telegram_message_id) await notifier.edit(Number(a.telegram_message_id), notify.approvalClosed({ symbol: a.symbol, amountUsd: Number(a.amount_usd), action: a.action, outcome: "expired" }));
     }
     return { drafts: drafts.rowCount, approvals: late.length };
   }
@@ -66,7 +66,7 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
     const off = await tradingOff();
     if (off) { out.skipped = `trading is off: ${off}`; return out; }
     if (inQuietHours(now(), policy.quietHours)) { out.skipped = "quiet hours"; return out; }
-    const drafts = (await db.query("select id from trading.proposals where status = 'draft' and action = 'open' and expires_at > $1 order by created_at", [now().toISOString()])).rows;
+    const drafts = (await db.query("select id from trading.proposals where status = 'draft' and action in ('open', 'close') and expires_at > $1 order by action = 'close' desc, created_at", [now().toISOString()])).rows;
     for (const d of drafts) {
       const proposal = await loadProposal(db, d.id);
       // A cheap look first: while the price is not fresh the proposal simply waits.
@@ -104,7 +104,7 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
         out.sent.push(proposal.symbol);
       } catch (e) {
         // The buttons are on screen but there is no approval behind them: say so, and a tap will find nothing.
-        await notifier.edit(msg.messageId, notify.approvalClosed({ symbol: proposal.symbol, amountUsd: proposal.amountUsd, outcome: "withdrawn", note: "the request could not be recorded" }));
+        await notifier.edit(msg.messageId, notify.approvalClosed({ symbol: proposal.symbol, amountUsd: proposal.amountUsd, action: proposal.action, outcome: "withdrawn", note: "the request could not be recorded" }));
         log("could not record an approval request:", clean(e));
       }
     }
@@ -157,7 +157,7 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
     await notifier.answer(cq.id, r.outcome === "approved" ? "Approved — checking and sending" : r.outcome === "rejected" ? "Rejected" : r.message.slice(0, 180));
     const messageId = cq.message?.message_id ?? r.messageId;
     if (messageId && r.proposal && r.outcome !== "already_decided") {
-      await notifier.edit(messageId, notify.approvalClosed({ symbol: r.proposal.symbol, amountUsd: r.proposal.amountUsd, outcome: r.outcome, note: r.outcome === "approved" || r.outcome === "rejected" ? null : r.message, at: now() }));
+      await notifier.edit(messageId, notify.approvalClosed({ symbol: r.proposal.symbol, amountUsd: r.proposal.amountUsd, action: r.proposal.action, outcome: r.outcome, note: r.outcome === "approved" || r.outcome === "rejected" ? null : r.message, at: now() }));
     }
     return true;
   }
