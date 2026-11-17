@@ -11,6 +11,7 @@ const { AGENTS } = require("../config");
 const { readAllowlists } = require("../db/store");
 const { readHalted } = require("../risk/context");
 const { readQuietHours } = require("../approvals");
+const { trackRecord } = require("../report");
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 const n = (v) => (v === null || v === undefined ? null : Number(v));
@@ -119,6 +120,7 @@ async function buildDesk({ db, config, agents, positions, approvals, watches = n
       runs: runs.map((x) => ({ at: x.at, ok: x.ok ?? null, warning: x.warning ?? null, skipped: x.skipped ?? null, mode: x.mode ?? null, trigger: x.trigger ?? null, shortlist: x.screen?.shortlist ?? null, screened: x.screen?.results?.length ?? null, proposals: (x.proposals || []).length, costUsd: x.usage?.estimatedCostUsd ?? null })),
       analyses: analyses.map((a) => ({ id: a.id, agent: a.agent, symbol: a.symbol, recommendation: a.recommendation, confidence: n(a.confidence), model: a.model, at: iso(a.created_at), text: (a.thesis || a.summary || "").slice(0, 600) })),
       watches: watches && typeof watches.list === "function" ? await watches.list(10) : [],
+      record: await trackRecord(db, { now, days: 30 }),
       portfolioManager: pm ? { at: iso(pm.created_at), note: pm.output?.portfolio_note ?? null, decisions: (pm.output?.decisions || []).map((d) => ({ symbol: d.symbol, decision: d.decision, amountUsd: d.amount_usd ?? null, rationale: String(d.rationale || "").slice(0, 500), disagreements: d.disagreements || [] })) } : null,
     },
     pending: pending.map((p) => {

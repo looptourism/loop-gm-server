@@ -235,6 +235,7 @@ const COMMANDS = [
   { command: "trade_stop", description: "مكتب التداول (تجريبي): إيقاف التداول فورًا" },
   { command: "trade_resume", description: "مكتب التداول (تجريبي): السماح بالتداول من جديد" },
   { command: "trade_quiet", description: "مكتب التداول (تجريبي): ساعات الهدوء، مثال: /trade_quiet 23:00-07:00" },
+  { command: "trade_report", description: "مكتب التداول (تجريبي): تقرير الأسبوع وسجل توقعات الوكلاء" },
   { command: "trade_e2e", description: "مكتب التداول (تجريبي): قائمة فحص التشغيل الكامل" },
   { command: "trade_drill_exit", description: "مكتب التداول (تجريبي): تمرين شرط خروج، مثال: /trade_drill_exit BTC" },
 ];

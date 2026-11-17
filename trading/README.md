@@ -36,6 +36,7 @@ Telegram uses the server's existing bot. Nothing extra is needed.
 | `/trade_close BTC` | Proposes closing the desk's position in BTC. Needs your Approve |
 | `/trade_quiet 23:00-07:00` | No approval requests in this window (Dubai time, or add a zone like `UTC`). `/trade_quiet off` removes it |
 | `/trade_stop`, `/trade_resume` | Stop / allow trading at once (see below) |
+| `/trade_report` | This week's report and the agents' track record (also sent every Saturday 08:00 Dubai) |
 | `/trade_e2e` | The end-to-end checklist (`docs/trading-desk-e2e.md`) |
 | `/trade_drill_exit BTC` | Drill: makes the monitor's exit alert and close proposal fire on an open position |
 
