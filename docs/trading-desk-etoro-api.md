@@ -47,7 +47,22 @@ Balance: there is no "demo balance" endpoint. eToro's guide derives it from the 
 Rate limits are per user key over a rolling 60 seconds. Over the limit → HTTP 429 with
 `Retry-After`. Responses carry `RateLimit-Limit / -Remaining / -Reset`.
 
-## Order endpoints (Stage 5 — implemented for DEMO, not yet confirmed by a real call)
+## Order endpoints (Stage 5 — confirmed by a real demo order, 2026-11-16)
+
+**First real demo order** (`/trade_test BTC 50`, approved on Telegram, 20:11 UTC): submit
+answered `{ token, orderId: 394595302, referenceId }` with the referenceId equal to our request
+ID; the lookup returned status 3 Filled within a second. What the real answer showed:
+
+- `requestedAmount` 49.97 and `totalCosts` 0.47 (fees): eToro takes the fees **out of** the
+  $50, and `frozenAmount` was 50.44. The position holds $49.97.
+- **`positionExecutions[].investedAmountCurrency` was `1`** — not a dollar figure despite its
+  name. The invested dollars are in `marginAccountCurrency` (49.97) and
+  `initialExposureAccountCurrency` (49.97347584). The desk reads those since 2026-11-17.
+- `asset.settlementType` was `REAL`: the demo position holds the coin itself, not a CFD.
+- `openStopLossRate` / `stopLossRate` were `0.01` and `takeProfitRate` 0: eToro's placeholders
+  for "no stop / no target set at eToro". The desk watches its own stop instead.
+- The demo account's PnL endpoint then listed the position with amount 49.97.
+
 
 Re-read on the official portal on 2026-11-16 (OpenAPI v1.415.0; the changelog's newest entry
 is still 12 Oct 2026).

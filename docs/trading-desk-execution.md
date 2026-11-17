@@ -4,9 +4,11 @@ From a draft proposal to a demo order. Every step here is plain code; no agent t
 
 **Status (2026-11-16):** built and tested with stand-ins for eToro and Telegram and a local
 Postgres 16 (138 tests pass, including one for every way a trade can be refused).
-**No real demo order has been placed yet**, so by the project's rules this does not count as
-working. The order request and the order lookup were checked against eToro's official
-reference on 2026-11-16, but eToro's real answers to them have not been seen.
+**Confirmed by a real demo order on 2026-11-16**: `/trade_test BTC 50` → risk engine → your
+Approve on Telegram → one order → filled at 65,069.63 → verified by lookup → position recorded
+and watched. One field was misread on that first fill (the position was recorded as $1.00
+invested); the position check corrected it from eToro's account figures, and the gateway reads
+the right field since 2026-11-17. A real proposal from the agents has not reached you yet.
 
 ## The path of one trade
 
