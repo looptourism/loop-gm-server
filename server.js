@@ -2104,7 +2104,7 @@ function tgEnqueue(fn) {
 
 async function tgHandleMessage(msg) {
   const text = (msg.text || msg.caption || "").trim();
-  const command = /^\/([a-z_]+)(@\w+)?(\s|$)/i.exec(msg.text || "")?.[1]?.toLowerCase();
+  const command = /^\/([a-z0-9_]+)(@\w+)?(\s|$)/i.exec(msg.text || "")?.[1]?.toLowerCase();
   // Trading Desk commands are answered by the Trading Desk's own code and
   // stop here: they are never passed to the GM agent.
   if (command && tradingDesk.telegramCommands.has(command)) return tradingDesk.handleTelegramCommand(command, text);
