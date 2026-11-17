@@ -41,8 +41,28 @@ If a buy goes through by mistake, close it with `/trade_close BTC`.
 
 ## Results
 
-`/trade_e2e` shows the live status. The results are recorded here once the run is done.
+`/trade_e2e` shows the live status. Run started 2026-11-17 12:27 UTC. Recorded from the owner's
+`/trade_e2e` screenshots; every ✅ is a record the live desk wrote.
 
-| Step | Stock | Crypto |
+| Step | Stock — NKE | Crypto — BTC |
 | --- | --- | --- |
-| Not run yet | | |
+| Monitoring: stored eToro price | ✅ bid 37.86, 11-17 12:18 UTC | ✅ bid 64823.06, 11-17 12:19 UTC |
+| Analysis by the agent | ✅ 9a54ce64, **hold** (investor day that day: "a coin flip, not an edge") | ✅ bbd66a33, **avoid** |
+| Proposal by the Portfolio Manager | no trade — not a failure; waiting for an agent buy | no trade — same |
+| Risk → Telegram approval → order → lookup → alert → close proposal → approval → close | not reached yet | not reached yet |
+
+Already proven on eToro DEMO before this run, outside the agents: a filled open order through
+Approve (BTC $50 `/trade_test`, 2026-11-16) and a close through Approve (`/trade_close BTC`).
+
+| Safety check | Result |
+| --- | --- |
+| Kill switch | ✅ 2026-11-17 13:02 UTC: `/trade_test BTC 10`, `/trade_stop`, Approve → refused ("trading was stopped"), no order |
+| Owner rejection, risk-engine rejection, expiry, duplicate tap, quiet hours | not run live (optional); covered by the automated tests against a real database |
+
+Found during the run and fixed:
+- `/trade_e2e` went to the GM agent: the command pattern allowed no digits (PR #23).
+- A refused order after Approve sent no message, only "Approved" (PR #25). Now "No order was sent" with the reason.
+- The checklist ignored analyses that led to no trade (PR #24).
+- The analyst's "look again when …" was not acted on: revisit watches (PR #26).
+
+**Stage 8 is not finished** until an agent-made proposal goes through the whole chain to a close.
