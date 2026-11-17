@@ -41,6 +41,7 @@ const { createOrderClient } = require("./execution/etoro-orders");
 const { createGateway } = require("./execution/gateway");
 const { createApprovals, readQuietHours } = require("./approvals");
 const e2e = require("./e2e");
+const { createWatchKeeper } = require("./watches");
 const { readHalted } = require("./risk/context");
 const { appendAudit } = require("./db/store");
 const { listMonitored } = require("./db/snapshots");
@@ -54,7 +55,8 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   positions = createPositionMonitor({ config, client, db, notifier }),
   orders = createOrderClient({ config }),
   gateway = createGateway({ config, db, client, orders, onOutcome: (outcome) => notifier.send(notify.executionResult(outcome)) }),
-  approvals = createApprovals({ config, db, client, gateway, notifier }), retryMs = 5 * 60 * 1000 } = {}) {
+  approvals = createApprovals({ config, db, client, gateway, notifier }),
+  watches = createWatchKeeper({ config, db, agents, notifier }), retryMs = 5 * 60 * 1000 } = {}) {
   // After every agent run: the summary first, then any new draft goes to the
   // risk engine at once (and, if it passes and trading is on, to the owner).
   hooks.afterRun = async (result) => {
@@ -76,6 +78,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     research.start();
     if (typeof agents.start === "function") agents.start();
     if (typeof positions.start === "function") positions.start();
+    if (typeof watches.start === "function") watches.start();
     if (typeof approvals.start === "function") approvals.start(); // every minute: expire, offer for approval, settle orders
   };
   async function prepareDatabase() {
@@ -490,7 +493,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
 
   // Everything the page shows, read-only. No call to eToro or Claude.
   app.get("/api/trading/desk", dbGuard, async (req, res) => {
-    try { res.json(await buildDesk({ db, config, agents, positions, approvals })); } catch (e) { fail(res, e); }
+    try { res.json(await buildDesk({ db, config, agents, positions, approvals, watches })); } catch (e) { fail(res, e); }
   });
 
   // Approve / Reject from the page. Only for a request that is already waiting;
@@ -551,7 +554,9 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
       }
       let trading = null;
       if (!offBecause && typeof approvals.summary === "function") { try { trading = await approvals.summary(); } catch { /* left out */ } }
-      await notifier.send(notify.statusText({ agents: agents.state(), budget, lastRun, dbState, positions: typeof positions.state === "function" ? positions.state() : null, trading }));
+      let watching = null;
+      if (!offBecause && typeof watches.list === "function") { try { watching = (await watches.list(10)).filter((w) => w.status === "open"); } catch { /* left out */ } }
+      await notifier.send(notify.statusText({ agents: agents.state(), budget, lastRun, dbState, positions: typeof positions.state === "function" ? positions.state() : null, trading, watching }));
       return true;
     }
     // The runtime stop. It can only make the desk stricter: trading needs

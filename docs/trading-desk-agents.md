@@ -133,3 +133,27 @@ The pages remain for details: `/api/trading/agents/status`, `/api/trading/agents
    come with Stage 6.
 6. Analyses are in English.
 7. If Claude declines a request, that step fails; there is no automatic retry on another model.
+
+## Revisit watches (2026-11-17)
+
+Prompted by the first live NKE analysis. The analyst saw Nike's investor day, chose "hold" (opening
+just before it would be a coin flip), and said what would change its mind: "a close back above
+about $40.41". Nothing acted on that. Now:
+
+- An analyst that does not recommend buying may name **one** checkable trigger in `revisit`:
+  `price_above` / `price_below` a level, or `date_after` a date (YYYY-MM-DD). Missing or null =
+  none. A buy never carries one (the validator refuses it).
+- It is saved as a row in `trading.watches` (migration 008), in the same transaction as the
+  analysis. One open watch per instrument: a newer analysis replaces the older watch. It is not
+  kept (status `skipped`) if the price is already past the level or the date is more than 14
+  days away. A watch lasts at most 14 days, then expires.
+- `trading/watches.js` checks open watches every 15 minutes (under `TRADING_MONITOR_ENABLED`),
+  with plain code, against the **fresh** stored bid. A stale price triggers nothing.
+- When one is met, the owner gets "👀 Revisit — NKE" in Telegram and the agents run a full
+  analysis of that instrument (trigger `revisit`). This happens only while
+  `TRADING_AGENTS_SCHEDULE_ENABLED` is `true`, within the monthly budget, at most 3 such runs per
+  UTC day, and one at a time; if the agents are busy it waits for the next check. Otherwise the
+  message says why and suggests `/trade_run NKE`.
+- A new analysis can only lead to a draft proposal → risk engine → your Approve. The watch code
+  requires no order, approval or eToro module (a test checks its `require`s).
+- Shown in `/trade_status` ("👀 Watching to look again") and in the console's Agents section.

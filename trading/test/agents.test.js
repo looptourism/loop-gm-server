@@ -291,7 +291,7 @@ function fakeClaude(opts = {}) {
     const cite = (opts.inventRefs ? ["R99", "R98", "R97"] : seen.slice(0, 4)).map((ref) => ({ ref, claim: `what ${ref} shows` }));
     if (submit === "submit_analysis") {
       const buy = symbol === "MSTR";
-      return reply("tool_use", [use(`c${++id}`, submit, { recommendation: buy ? "buy" : "hold", thesis: `thesis for ${symbol}`, evidence: cite, entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 50-day average" }] : [], suggested_amount_usd: buy ? 450 : null, holding_days: buy ? 8 : null, holding_period: buy ? "about a week" : "n/a", risks: ["volatility"], analytical_confidence: 0.62, assumptions: ["data is current"], data_gaps: [] })]);
+      return reply("tool_use", [use(`c${++id}`, submit, { recommendation: buy ? "buy" : "hold", thesis: `thesis for ${symbol}`, evidence: cite, entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 50-day average" }] : [], suggested_amount_usd: buy ? 450 : null, holding_days: buy ? 8 : null, holding_period: buy ? "about a week" : "n/a", risks: ["volatility"], analytical_confidence: 0.62, assumptions: ["data is current"], data_gaps: [], revisit: !buy && opts.revisit ? opts.revisit : null })]);
     }
     if (submit === "submit_risk_review") {
       return reply("tool_use", [use(`c${++id}`, submit, { stance: "caution", summary: "size is too large for this volatility", concerns: [{ topic: "volatility", severity: "medium", detail: "30-day volatility is high" }], claims_checked: ["price trend confirmed"], evidence: cite, suggested_max_amount_usd: 300, analytical_confidence: 0.7, assumptions: [] })]);
@@ -320,7 +320,7 @@ if (TEST_URL) {
     await admin.close();
     const u = new URL(TEST_URL); u.pathname = "/trading_agents_test";
     db = createDb({ config: { databaseUrl: u.toString() } });
-    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage", "005_positions_monitor", "006_risk_and_execution", "007_close_orders"]) await db.migrate(m);
+    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage", "005_positions_monitor", "006_risk_and_execution", "007_close_orders", "008_watches"]) await db.migrate(m);
     for (const [id, symbol, cls] of [[2001, "MSTR", "stock"], [100000, "BTC", "crypto"], [2009, "NKE", "stock"]]) {
       await db.query("insert into trading.instruments (instrument_id, symbol, display_name, asset_class, exchange, raw, source, fetched_at) values ($1, $2, $3, $4, 'NASDAQ', '{}', 'test', now())", [id, symbol, `${symbol} name`, cls]);
       if (symbol !== "NKE") await db.query(`insert into trading.${cls}_allowlist (symbol, instrument_id, verified_at) values ($1, $2, now())`, [symbol, id]);
@@ -575,4 +575,21 @@ test("the agents' schedule: off by default; with its own switch on, every weekda
   assert.deepStrictEqual(jobs.map((j) => [j.expr, j.o.timezone]), [["0 12 * * 1-5", "UTC"], ["0 12 * * 6", "UTC"]]);
   assert.deepStrictEqual([on.state().schedule.enabled, on.state().schedule.running], [true, true]);
   assert.strictEqual(started.length, 0);
+});
+
+dbTest("a hold with a revisit trigger is kept as a watch in the same transaction; the next analysis replaces it, and a level already passed is not kept", async () => {
+  const claude = fakeClaude({ revisit: { type: "price_above", value: 135, date: null, description: "a break above the recent range" } });
+  const agents = createAgents({ config: cfg, db, client: etoro(), anthropic: claude, now: () => NOW, log: () => {} });
+  await agents.run(["BTC"]);
+  let w = (await db.query("select w.status, w.condition, w.price_at_start, w.expires_at, a.recommendation from trading.watches w join trading.analyses a on a.id = w.analysis_id order by w.created_at")).rows;
+  assert.deepStrictEqual(w.map((x) => [x.status, x.condition.type, x.condition.value, Number(x.price_at_start), x.recommendation]), [["open", "price_above", 135, 129.4, "hold"]]);
+  assert.strictEqual(new Date(w[0].expires_at).toISOString(), new Date(NOW.getTime() + 14 * 86400000).toISOString());   // at most 14 days
+  // the next analysis of BTC replaces it; a level the price is already above is recorded as skipped, not watched
+  const again = createAgents({ config: cfg, db, client: etoro(), anthropic: fakeClaude({ revisit: { type: "price_above", value: 120, date: null, description: "x" } }), now: () => NOW, log: () => {} });
+  await again.run(["BTC"]);
+  w = (await db.query("select status, status_reason from trading.watches order by created_at")).rows;
+  assert.deepStrictEqual(w.map((x) => x.status), ["replaced", "skipped"]);
+  assert.match(w[1].status_reason, /already at or above 120/);
+  // a buy never carries one
+  assert.ok(VALIDATE.analysis({ ...goodAnalysis(), revisit: { type: "price_above", value: 1, description: "x" } }, { has: () => true }).some((e) => /only for a hold or avoid/.test(e)));
 });
