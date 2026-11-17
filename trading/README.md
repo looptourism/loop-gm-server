@@ -18,7 +18,7 @@ Rules: `docs/trading-desk-plan.md`. Limits: `trading/policy.js` (code, not AI).
 | `CONSOLE_PASSWORD` | yes | Console login. The Trading Desk page and its buttons are closed without it |
 | `TRADING_MONITOR_ENABLED` | yes | `true` = prices every minute and positions every 15 minutes |
 | `TRADING_ANTHROPIC_API_KEY` | yes | The desk's own Claude key (falls back to `ANTHROPIC_API_KEY`). Spend is capped at $75/month in code |
-| `TRADING_AGENTS_SCHEDULE_ENABLED` | optional | `true` = agents run weekdays 12:00 UTC (all) and Saturday 12:00 UTC (coins) |
+| `TRADING_AGENTS_SCHEDULE_ENABLED` | optional | `true` = agents run weekdays 12:00 and 18:00 UTC (all) and Saturday 12:00 UTC (coins) |
 | `FINNHUB_API_KEY`, `COINGECKO_API_KEY`, `SEC_USER_AGENT` | optional | News, fundamentals and earnings for the agents |
 
 Telegram uses the server's existing bot. Nothing extra is needed.
