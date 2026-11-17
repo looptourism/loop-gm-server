@@ -37,6 +37,7 @@ const { createBudget, BudgetError } = require("./budget");
 
 const CONFIDENCE_NOTE = "analytical_confidence = how well the evidence supports the conclusion (0 to 1). It is NOT a probability that the trade makes money.";
 
+const { createWatch } = require("../watches");
 function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, now = () => new Date(), anthropic = null, budget = null, cron = null, onFinished = null, log = (...a) => console.log("[trading/agents]", ...a) } = {}) {
   let running = null, lastResult = null, sdk = anthropic, scheduled = false;
   const clean = (t) => db.redact(client.redact(String(t ?? "")));
@@ -118,7 +119,12 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
     return produce({
       agent: i.assetClass, kind: "analysis", system: i.assetClass === "crypto" ? PROMPTS.CRYPTO : PROMPTS.STOCK, toolbox, instrument: i, totals,
       task: `Analyse ${i.symbol}${i.displayName ? ` (${i.displayName})` : ""}, ${i.assetClass === "crypto" ? "a coin" : `a stock listed on ${i.exchange || "an exchange eToro did not name"}`}. Today is ${now().toISOString().slice(0, 10)} (UTC). Read the data with your tools, then call submit_analysis.${btcNote(i, extra)}`,
-      shape: (o) => { const evidence = expandEvidence(o.evidence, toolbox); return { recommendation: o.recommendation, confidence: o.analytical_confidence, rowIds: rowIdsOf(evidence), output: { ...o, evidence } }; },
+      shape: (o) => {
+        const evidence = expandEvidence(o.evidence, toolbox);
+        // A "look again when ..." is kept as a revisit watch, in the same transaction.
+        const afterSave = (tx, row) => createWatch(tx, { instrumentId: i.instrumentId, analysisId: row.id, recommendation: o.recommendation, revisit: o.revisit ?? null, now: now() });
+        return { recommendation: o.recommendation, confidence: o.analytical_confidence, rowIds: rowIdsOf(evidence), output: { ...o, evidence }, afterSave };
+      },
     });
   }
 

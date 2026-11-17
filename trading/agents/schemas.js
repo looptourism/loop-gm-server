@@ -28,6 +28,17 @@ const exitConditions = list("Conditions for closing the position that the desk c
   },
   required: ["type", "description"],
 });
+const revisit = {
+  type: ["object", "null"],
+  description: "Only when you do NOT recommend buying now: the one checkable event after which this instrument should be analysed again within 14 days — a price level the desk can watch, or a date. null if there is none.",
+  properties: {
+    type: { type: "string", enum: ["price_above", "price_below", "date_after"], description: "price_above / price_below = the stored price crosses this level; date_after = on or after this date (UTC)" },
+    value: { type: ["number", "null"], description: "The price level for price_above / price_below; otherwise null" },
+    date: { type: ["string", "null"], description: "YYYY-MM-DD for date_after; otherwise null" },
+    description: str("Why this would change the picture, in one sentence"),
+  },
+  required: ["type", "description"],
+};
 const confidence = { type: "number", description: "0 to 1: how well the evidence supports your conclusion. Not a probability of profit." };
 
 const SUBMIT = {
@@ -49,8 +60,9 @@ const SUBMIT = {
         analytical_confidence: confidence,
         assumptions: list("Assumptions your conclusion depends on"),
         data_gaps: list("Data you needed and did not have, or that was stale. Empty if none."),
+        revisit,
       },
-      required: ["recommendation", "thesis", "evidence", "entry_conditions", "exit_conditions", "suggested_amount_usd", "holding_days", "holding_period", "risks", "analytical_confidence", "assumptions", "data_gaps"],
+      required: ["recommendation", "thesis", "evidence", "entry_conditions", "exit_conditions", "suggested_amount_usd", "holding_days", "holding_period", "risks", "analytical_confidence", "assumptions", "data_gaps", "revisit"],
     },
   },
   risk: {
@@ -153,6 +165,14 @@ const checkHolding = (v, buying, errors, where) => {
   if (buying && !(Number.isInteger(v) && v >= HOLD.min && v <= HOLD.max)) errors.push(`${where}holding_days must be a whole number from ${HOLD.min} to ${HOLD.max} (the desk trades short-term swings)`);
   if (!buying && v !== null && v !== undefined && !Number.isInteger(v)) errors.push(`${where}holding_days must be a whole number or null`);
 };
+// Optional. Missing or null = nothing to watch.
+function checkRevisit(v, buying, errors) {
+  if (v === undefined || v === null) return;
+  if (buying) { errors.push("revisit is only for a hold or avoid: set it to null when recommending a buy"); return; }
+  if (typeof v !== "object" || !["price_above", "price_below", "date_after"].includes(v.type) || !isStr(v.description)) { errors.push('revisit needs a "type" (price_above, price_below or date_after) and a "description", or null'); return; }
+  if ((v.type === "price_above" || v.type === "price_below") && !(isNum(v.value) && v.value > 0)) errors.push(`revisit (${v.type}) needs a positive "value"`);
+  if (v.type === "date_after" && !/^\d{4}-\d{2}-\d{2}$/.test(v.date || "")) errors.push('revisit (date_after) needs "date" as YYYY-MM-DD');
+}
 const checkConfidence = (v, errors, where) => { if (!(isNum(v) && v >= 0 && v <= 1)) errors.push(`${where}analytical_confidence must be a number from 0 to 1`); };
 const checkAmount = (v, buying, errors, where, name) => {
   if (buying && !(isNum(v) && v > 0)) errors.push(`${where}${name} must be a positive number when buying`);
@@ -185,6 +205,7 @@ const VALIDATE = {
     checkConfidence(x.analytical_confidence, errors, "");
     if (!isList(x.assumptions)) errors.push("assumptions must be a list of strings");
     if (!isList(x.data_gaps)) errors.push("data_gaps must be a list of strings");
+    checkRevisit(x.revisit, buying, errors);
     return errors;
   },
   risk(x, toolbox) {

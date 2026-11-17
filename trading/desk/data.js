@@ -16,7 +16,7 @@ const iso = (v) => (v ? new Date(v).toISOString() : null);
 const n = (v) => (v === null || v === undefined ? null : Number(v));
 const r2 = (v) => (v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100);
 
-async function buildDesk({ db, config, agents, positions, approvals, now = new Date() }) {
+async function buildDesk({ db, config, agents, positions, approvals, watches = null, now = new Date() }) {
   const q = async (sql, params = []) => (await db.query(sql, params)).rows;
 
   // ---- overview: the account at the last 15-minute check ---------------------
@@ -118,6 +118,7 @@ async function buildDesk({ db, config, agents, positions, approvals, now = new D
       schedule: state?.schedule ?? null, models: state?.models ?? AGENTS.models, budget,
       runs: runs.map((x) => ({ at: x.at, ok: x.ok ?? null, warning: x.warning ?? null, skipped: x.skipped ?? null, mode: x.mode ?? null, trigger: x.trigger ?? null, shortlist: x.screen?.shortlist ?? null, screened: x.screen?.results?.length ?? null, proposals: (x.proposals || []).length, costUsd: x.usage?.estimatedCostUsd ?? null })),
       analyses: analyses.map((a) => ({ id: a.id, agent: a.agent, symbol: a.symbol, recommendation: a.recommendation, confidence: n(a.confidence), model: a.model, at: iso(a.created_at), text: (a.thesis || a.summary || "").slice(0, 600) })),
+      watches: watches && typeof watches.list === "function" ? await watches.list(10) : [],
       portfolioManager: pm ? { at: iso(pm.created_at), note: pm.output?.portfolio_note ?? null, decisions: (pm.output?.decisions || []).map((d) => ({ symbol: d.symbol, decision: d.decision, amountUsd: d.amount_usd ?? null, rationale: String(d.rationale || "").slice(0, 500), disagreements: d.disagreements || [] })) } : null,
     },
     pending: pending.map((p) => {

@@ -29,4 +29,7 @@ The owner works only from a phone. Keep their manual steps to a minimum.
 - **Stage 8 (end-to-end run):** `/trade_e2e` checklist (`trading/e2e.js`, read-only), runbook
   docs/trading-desk-e2e.md, operator README trading/README.md. Quiet hours can be set from
   Telegram (`/trade_quiet`, desk_state `quiet_hours`) and are approvals code.
+- **Revisit watches (2026-11-17):** an analyst's `revisit` trigger becomes a row in `trading.watches`;
+  `trading/watches.js` (plain code, no trading imports) checks it and starts a re-analysis within the
+  schedule switch, budget and 3/day cap. See docs/trading-desk-agents.md.
 - **Trading style (2026-11-16):** short-term swing trades, held 1 to 14 days (`trading/policy.js`).

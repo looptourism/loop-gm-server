@@ -161,6 +161,12 @@ const AGENTS = {
     { cron: "0 12 * * 6", scope: "crypto", label: "Sat 12:00 UTC — coins only, screened" },
   ],
 
+  // Revisit watches (2026-11-17): an analyst's "look again when ..." is
+  // watched by plain code; when it is met the instrument is analysed again.
+  // A watch lasts at most maxDays; at most maxRunsPerDay such runs start per
+  // UTC day (each costs about $0.70), and only while the agents' schedule is on.
+  watch: { maxDays: 14, maxRunsPerDay: 3, everyMinutes: 15 },
+
   maxTokens: 16000,
   maxTurns: 12,             // tool rounds per agent before the run is abandoned
   timeoutMs: 5 * 60 * 1000, // per Claude request

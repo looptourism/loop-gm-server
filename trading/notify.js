@@ -170,7 +170,7 @@ function limitAlert({ limits, level }) {
 }
 
 // The answer to /trade_status.
-function statusText({ agents, budget, lastRun, dbState, positions = null, trading = null }) {
+function statusText({ agents, budget, lastRun, dbState, positions = null, trading = null, watching = null }) {
   const lines = ["📈 <b>Trading Desk status</b> (DEMO)"];
   if (trading) {
     const p = trading.proposals || {}, o = Object.values(trading.ordersInFlight || {}).reduce((a, b) => a + b, 0);
@@ -192,6 +192,7 @@ function statusText({ agents, budget, lastRun, dbState, positions = null, tradin
     if (Array.isArray(lim) && lim.length) lines.push(`📏 Limits: ${lim.map((l) => `${esc(l.short)} ${l.unit === "$" ? usd(l.value) : l.value}/${l.unit === "$" ? usd(l.limit) : l.limit}`).join(" · ")}`);
     lines.push(!positions.scheduled ? "👁 Position checks: off" : !c ? "👁 Position checks: on, first check pending" : c.error ? `⚠️ Position checks: last one failed at ${when(c.startedAt)}` : `👁 Positions: ${c.account?.openPositions ?? 0} open, checked ${when(c.startedAt)}${c.account?.openPositions ? `, profit/loss ${c.account.unrealizedPnlUsd < 0 ? "-" : "+"}${usd(Math.abs(c.account.unrealizedPnlUsd))}` : ""}`);
   }
+  if (watching && watching.length) lines.push(`👀 Watching to look again: ${watching.map((w) => `${esc(w.symbol)} ${esc(w.text)}`).join("; ")}`);
   lines.push("/trade_run — start a screened run · /trade_run crypto — coins only");
   lines.push("/trade_stop — stop all trading now · /trade_resume — allow it again");
   lines.push("/trade_test BTC 50 — a small test trade through the same checks and your approval");
