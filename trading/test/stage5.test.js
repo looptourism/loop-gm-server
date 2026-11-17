@@ -244,7 +244,7 @@ async function world(db) {
       if (w.lookup === 404) throw Object.assign(new Error("eToro 404"), { status: 404 });
       if (w.lookup === "down") throw Object.assign(new Error("eToro 503"), { status: 503 });
       return { data: { orderId: 555, status: { id: w.lookup, name: { 3: "Filled", 4: "Rejected", 11: "WaitingForMarket" }[w.lookup] || "?", errorCode: w.lookup === 4 ? 720 : 0, errorMessage: w.lookup === 4 ? "Market is closed" : null },
-        positionExecutions: w.lookup === 3 ? [{ positionId: 9001, investedAmountCurrency: 400, remainingUnits: 3.99, openingData: { openTime: "2099-11-16T15:10:05Z", units: 3.99, avgPrice: 100.12 } }] : [] } };
+        positionExecutions: w.lookup === 3 ? [{ positionId: 9001, investedAmountCurrency: 1, marginAccountCurrency: 399.6, initialExposureAccountCurrency: 399.60123, remainingUnits: 3.99, openingData: { openTime: "2099-11-16T15:10:05Z", units: 3.99, avgPrice: 100.12 } }] : [] } };
     },
   };
   w.orders = { redact: (x) => String(x ?? ""), placeDemoOrder: async (body, { idempotencyKey }) => {
@@ -298,7 +298,7 @@ dbTest("the whole path: risk check → Telegram request → Approve → live re-
   assert.deepStrictEqual([a2.decision, a2.channel, a2.actor, a2.consumed_at.toISOString(), a2.decided_at.toISOString()], ["approved", "telegram", "42", "2099-11-16T15:13:00.000Z", "2099-11-16T15:13:00.000Z"]);
   // the position, with what you approved as its exit conditions, plus the planned holding period
   const pos = (await w.db.query("select * from trading.positions")).rows[0];
-  assert.deepStrictEqual([Number(pos.etoro_position_id), Number(pos.amount_usd), Number(pos.open_rate), pos.opened_by_order_id, pos.status], [9001, 400, 100.12, o.id, "open"]);
+  assert.deepStrictEqual([Number(pos.etoro_position_id), Number(pos.amount_usd), Number(pos.open_rate), pos.opened_by_order_id, pos.status], [9001, 399.6, 100.12, o.id, "open"]);
   assert.deepStrictEqual(pos.exit_conditions.map((c) => [c.type, c.value ?? c.date]), [["price_below", 95], ["price_above", 110], ["date_after", "2099-11-23"]]);
   // both verdicts are on record, with the limits used
   const v = (await w.db.query("select phase, passed, policy, inputs from trading.risk_assessments order by created_at")).rows;
@@ -660,4 +660,24 @@ dbTest("/trade_test: a small trade you start by hand goes through the same engin
   assert.strictEqual(w.orderCalls.length, 0);                                      // creating it sends nothing
   assert.strictEqual((await w.db.query("select actor from trading.audit_log where event_type = 'proposal.created'")).rows[0].actor, "owner:telegram");
   assert.deepStrictEqual([POLICY.testTrade.maxUsd, POLICY.testTrade.stopPctBelowBid, POLICY.testTrade.holdingDays], [50, 5, 3]);
+});
+
+test("recording a filled position reads the invested dollars from the fields eToro really fills (first real order, 2026-11-16)", async () => {
+  // positionExecutions[0] of eToro's real lookup answer for the first demo order (BTC, $50), as returned.
+  const real = { state: "open", addedFunds: 0, positionId: 3643444338, stopLossRate: 0.01, remainingUnits: 0.000768, takeProfitRate: 0, remainingContracts: 0.000768,
+    marginAssetCurrency: 49.97, marginAccountCurrency: 49.97, investedAmountCurrency: 1, initialExposureAssetCurrency: 49.97347584, initialExposureAccountCurrency: 49.97347584,
+    openingData: { fees: 0.47, taxes: 0, units: 0.000768, markup: 0, orderId: 394595302, priceId: 0, avgPrice: 65069.63, openTime: "2026-11-16T20:11:25.527Z", contracts: 0.000768, marketSpread: 0, executionTime: "2026-11-16T20:11:25.63Z", avgConversionRate: 1 } };
+  const rows = [];
+  const db = { redact: (t) => String(t ?? ""), query: async (sql, params) => { rows.push({ sql, params }); return { rows: [] }; },
+    withTransaction: async (fn) => fn({ query: async (sql, params) => { rows.push({ sql, params }); return { rows: sql.includes("from trading.orders where id") ? [] : [] }; } }) };
+  const proposal = { id: "p", instrumentId: 100000, amountUsd: 50, details: { holding_days: 3, exit_conditions: [{ type: "price_below", value: 61740.3, description: "stop" }] } };
+  const gw = createGateway({ config: { tradingEnabled: true }, db, client: { redact: (t) => t }, orders: { redact: (t) => t }, now: () => new Date("2026-11-16T20:11:26Z"), log: () => {} });
+  const made = await gw._recordPositionsForTest({ query: db.query }, { id: "o1" }, proposal, { positionExecutions: [real] });
+  assert.deepStrictEqual(made.map((m) => [m.positionId, m.amountUsd, m.openRate]), [[3643444338, 49.97, 65069.63]]);
+  const insert = rows.find((r) => /insert into trading.positions/.test(r.sql));
+  assert.deepStrictEqual([insert.params[0], insert.params[2], insert.params[3], insert.params[5]], [3643444338, 49.97, 0.000768, "2026-11-16T20:11:25.527Z"]);
+  assert.deepStrictEqual(JSON.parse(insert.params[6]).map((c) => c.value ?? c.date), [61740.3, "2026-11-19"]);
+  // with neither dollar field, the approved amount is used rather than a guess
+  const fallback = await gw._recordPositionsForTest({ query: db.query }, { id: "o1" }, proposal, { positionExecutions: [{ ...real, marginAccountCurrency: null, initialExposureAccountCurrency: 0 }] });
+  assert.strictEqual(fallback[0].amountUsd, 50);
 });

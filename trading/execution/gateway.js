@@ -160,7 +160,13 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
       const opened = parseUtc(x.openingData?.openTime || "") || now();
       const conditions = [...exits];
       if (Number.isInteger(proposal.details.holding_days)) conditions.push({ type: "date_after", date: new Date(opened.getTime() + proposal.details.holding_days * DAY).toISOString().slice(0, 10), description: `planned holding period of ${proposal.details.holding_days} day(s)` });
-      const amount = typeof x.investedAmountCurrency === "number" && x.investedAmountCurrency > 0 ? x.investedAmountCurrency : proposal.amountUsd;
+      // The dollars invested in the position. eToro's real answer (first demo
+      // order, 2026-11-16) carried them in marginAccountCurrency and
+      // initialExposureAccountCurrency (49.97 for a $50 order, after $0.47
+      // fees); investedAmountCurrency was 1, not a dollar figure, and is not
+      // used. At leverage 1 margin and exposure are the same amount.
+      const dollars = (v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : null);
+      const amount = dollars(x.marginAccountCurrency) ?? dollars(x.initialExposureAccountCurrency) ?? proposal.amountUsd;
       await tx.query(
         `insert into trading.positions (etoro_position_id, instrument_id, direction, leverage, amount_usd, units, open_rate, opened_at, exit_conditions, source, last_synced_at, opened_by_order_id)
          values ($1, $2, 'buy', 1, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -233,7 +239,7 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
     return out;
   }
 
-  return { execute, reconcileOrder, reconcileAll, hashOf };
+  return { execute, reconcileOrder, reconcileAll, hashOf, _recordPositionsForTest: recordPositions };
 }
 
 module.exports = { createGateway };
