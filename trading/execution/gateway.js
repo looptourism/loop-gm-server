@@ -58,7 +58,13 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
         await audit(tx, "execution.refused", proposalId, { reason, ...extra });
       });
     } catch (e) { log("could not record a refusal:", clean(e)); }
-    return { ok: false, sent: false, status: "refused", reason, ...extra };
+    // Tell the owner, the same as any other outcome: an approval that ends
+    // with no order must never look like a trade that went through.
+    let proposal = null;
+    try { proposal = await loadProposal(db, proposalId); } catch { /* the message names no symbol */ }
+    const out = { ok: false, sent: false, status: "refused", reason, ...extra, proposal };
+    tell(out);
+    return out;
   }
 
   async function execute(proposalId) {

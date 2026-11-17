@@ -70,7 +70,8 @@ async function world(db) {
   };
   w.orders = { redact: (x) => String(x ?? ""), placeDemoOrder: async (body, { idempotencyKey }) => { w.orderCalls.push({ body, idempotencyKey }); return { accepted: true, orderId: 9, response: {}, fetchedAt: now().toISOString() }; } };
   w.notifier = { enabled: true, send: async (h) => { w.sent.push(h); return true; }, sendButtons: async (h) => { w.buttons.push(h); return { ok: true, messageId: 500 + w.buttons.length }; }, edit: async (id, h) => { w.edits.push({ id, html: h }); return true; }, answer: async () => true };
-  w.gateway = createGateway({ config: w.config, db, client: w.client, orders: w.orders, now, log: () => {} });
+  w.outcomes = [];
+  w.gateway = createGateway({ config: w.config, db, client: w.client, orders: w.orders, now, onOutcome: (o) => w.outcomes.push(o), log: () => {} });
   w.approvals = createApprovals({ config: w.config, db, client: w.client, gateway: w.gateway, notifier: w.notifier, now, log: () => {} });
   w.draft = async (symbol, amountUsd = 50) => {
     const i = (await db.query("select instrument_id, asset_class from trading.instruments where symbol = $1", [symbol])).rows[0];
@@ -127,9 +128,16 @@ dbTest("a duplicate tap and an approve while trading is stopped: nothing is sent
   await w.approvals.tick();
   const ap1 = await w.approvalOf(a1);
   await w.db.query("insert into trading.desk_state (key, value, updated_by) values ('trading_halted', '{\"halted\":true}', 'test')");  // /trade_stop after the request was sent
-  const r = await w.approvals.decide(ap1, true, { channel: "telegram", actor: "1" });
-  assert.deepStrictEqual([r.outcome, r.execution.status, w.orderCalls.length], ["approved", "refused", 0]);
+  // the tap, exactly as Telegram delivers it
+  assert.strictEqual(await w.approvals.handleTelegramCallback({ id: "cq1", data: `td:ok:${ap1}`, from: { id: 1 }, message: { message_id: 501 } }), true);
+  await new Promise((r2) => setTimeout(r2, 20));
+  assert.strictEqual(w.orderCalls.length, 0);
+  const r = { execution: w.outcomes[0] };
+  assert.deepStrictEqual([w.outcomes.length, r.execution.status, r.execution.sent, r.execution.proposal.symbol], [1, "refused", false, "NKE"]);
   assert.match(r.execution.reason, /\/trade_stop/);
+  // the owner is told, and the "Approved" message itself says nothing was sent
+  assert.match(notify.executionResult(r.execution), /No order was sent — BUY NKE \$50\.00 \(DEMO\)[\s\S]*trading was stopped/);
+  assert.match(w.edits.at(-1).html, /Approved<\/b> — BUY NKE[\s\S]*but NO order was sent: trading was stopped/);
   const again = await w.approvals.decide(ap1, true, { channel: "dashboard", actor: "console" });
   assert.deepStrictEqual([again.outcome, w.orderCalls.length], ["already_decided", 0]);
   assert.deepStrictEqual((await w.events("approval.duplicate")).map((e) => [e.data.attempted, e.data.previous, e.actor]), [["approve", "approved", "owner:dashboard"]]);
