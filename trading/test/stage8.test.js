@@ -192,7 +192,7 @@ dbTest("the checklist follows one flow from the stored price to the close, step 
   const analysis = (await db.query("insert into trading.analyses (agent, instrument_id, recommendation, confidence, output, snapshot_ids, model) values ('crypto', 100000, 'buy', 0.6, '{}', $1, 'm') returning id", [[snap]])).rows[0].id;
   const pm = (await db.query("insert into trading.analyses (agent, instrument_id, recommendation, output, model) values ('portfolio_manager', null, null, '{}', 'm') returning id")).rows[0].id;
   const step = async () => (await e2e.buildE2E({ db, since: SINCE })).flows.crypto;
-  assert.strictEqual((await step()).done, 0);
+  assert.deepStrictEqual([(await step()).done, (await step()).proposalId], [2, null]);   // analysed, nothing proposed yet
   const pid = await w.draft("BTC");
   await db.query("update trading.proposals set analysis_id = $2 where id = $1", [pid, pm]);
   let f = await step();
@@ -222,4 +222,17 @@ dbTest("the checklist follows one flow from the stored price to the close, step 
   assert.strictEqual((await e2e.buildE2E({ db, since: SINCE })).flows.stock.steps.approval, null);
   // records from before the run's start do not count
   assert.strictEqual((await e2e.buildE2E({ db, since: "2999-01-01T00:00:00Z" })).flows.crypto.done, 0);
+});
+
+dbTest("no proposal yet: the checklist still ticks the stored price and the analysis, and says what the agents decided", async (w) => {
+  const db = w.db;
+  const snap = await w.rate(2002, "2099-11-17T12:00:00Z", 74.2);
+  await db.query("insert into trading.analyses (agent, instrument_id, recommendation, confidence, output, snapshot_ids, model) values ('stock', 2002, 'hold', 0.5, '{}', $1, 'm')", [[snap]]);
+  await db.query("insert into trading.analyses (agent, instrument_id, output, model) values ('portfolio_manager', null, $1, 'm')", [JSON.stringify({ decisions: [{ symbol: "NKE", decision: "no_trade" }] })]);
+  const r = await e2e.buildE2E({ db, since: SINCE });
+  const f = r.flows.stock;
+  assert.deepStrictEqual([f.symbol, f.done, f.proposalId, f.noTrade], ["NKE", 2, null, { analyst: "hold", manager: "no_trade" }]);
+  assert.match(f.steps.monitoring.ref, /bid 74.2 from eToro rates/);
+  assert.match(e2e.e2eText(r), /Stock — NKE<\/b> \(2\/11\)[\s\S]*✅ Analysis by the agent[\s\S]*⬜ Proposal by the Portfolio Manager\n    → the agents decided not to buy NKE \(analyst: hold, manager: no_trade\)/);
+  assert.strictEqual(r.flows.crypto.done, 0);
 });
