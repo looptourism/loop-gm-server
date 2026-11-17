@@ -20,6 +20,17 @@ test("the new commands are the desk's, listed for the bot, and the checklist nam
   assert.deepStrictEqual(e2e.CHECK_STEPS.map(([k]) => k), ["ownerReject", "riskReject", "expired", "duplicate", "quietHours", "killSwitch"]);
 });
 
+test("server.js hands every desk command to the desk: its command pattern accepts each name (/trade_e2e has a digit)", () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "..", "..", "server.js"), "utf8");
+  const m = /const command = (\/\^.*?\/i)\.exec\(msg\.text/.exec(src);
+  assert.ok(m, "command pattern not found in server.js");
+  const pattern = eval(m[1]);
+  for (const { command } of notify.COMMANDS) {
+    assert.strictEqual(pattern.exec(`/${command}`)?.[1]?.toLowerCase(), command, command);
+    assert.strictEqual(pattern.exec(`/${command}@LoopHQBot restart`)?.[1]?.toLowerCase(), command, command);
+  }
+});
+
 test("quiet hours: a window across midnight in Dubai time", () => {
   const q = { start: "23:00", end: "07:00", timeZone: "Asia/Dubai" };
   assert.strictEqual(inQuietHours(new Date("2099-11-17T19:30:00Z"), q), true);   // 23:30 Dubai
