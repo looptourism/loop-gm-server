@@ -250,12 +250,22 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
   // not closed by this request. The close is never sent again by itself.
   async function reconcileClose(order, proposal) {
     const position = (await db.query("select id, etoro_position_id, open_rate, units, amount_usd from trading.positions where id = $1", [proposal.positionId])).rows[0];
+    let resultBasis = null;
     const etoroPositionId = position ? Number(position.etoro_position_id) : null;
     const at = now().toISOString();
-    const markClosed = async (tx, { rate = null, units = null, occurred = null }) => {
+    // The result of a close. eToro's own proceeds minus the dollars invested
+    // is the authoritative figure: it includes eToro's closing costs. (First
+    // real close, 2026-11-17: proceeds 49.06 on 49.97 invested = -0.91, while
+    // the price change alone gave -0.44.) Only when eToro reports no proceeds
+    // is the price-based figure used, and it is labelled as such.
+    const markClosed = async (tx, { rate = null, units = null, occurred = null, proceeds = null }) => {
       const openRate = position?.open_rate === null || position?.open_rate === undefined ? null : Number(position.open_rate);
       const u = typeof units === "number" && units > 0 ? units : position?.units === null || position?.units === undefined ? null : Number(position.units);
-      const pnl = typeof rate === "number" && openRate !== null && u !== null ? Math.round((rate - openRate) * u * 100) / 100 : null;
+      const invested = position?.amount_usd === null || position?.amount_usd === undefined ? null : Number(position.amount_usd);
+      const fromProceeds = typeof proceeds === "number" && proceeds > 0 && invested !== null ? Math.round((proceeds - invested) * 100) / 100 : null;
+      const fromPrices = typeof rate === "number" && openRate !== null && u !== null ? Math.round((rate - openRate) * u * 100) / 100 : null;
+      const pnl = fromProceeds ?? fromPrices;
+      resultBasis = fromProceeds !== null ? "proceeds" : fromPrices !== null ? "prices" : null;
       await tx.query("update trading.positions set status = 'closed', closed_at = coalesce(closed_at, $2), close_rate = coalesce($3, close_rate), realized_pnl_usd = coalesce($4, realized_pnl_usd), closed_by_order_id = $5, last_synced_at = $6 where id = $1",
         [proposal.positionId, occurred || at, rate, pnl, order.id, at]);
       return pnl;
@@ -289,13 +299,13 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
       let pnl = null;
       try {
         await db.withTransaction(async (tx) => {
-          pnl = await markClosed(tx, { rate, units: mine?.units ?? null, occurred: typeof mine?.occurred === "string" ? mine.occurred : null });
+          pnl = await markClosed(tx, { rate, units: mine?.units ?? null, occurred: typeof mine?.occurred === "string" ? mine.occurred : null, proceeds: typeof info.proceeds === "number" ? info.proceeds : null });
           await tx.query("update trading.orders set status = 'filled', error = null, verification = $2, verified_at = $3 where id = $1", [order.id, JSON.stringify(info), at]);
           await tx.query("update trading.proposals set status = 'executed', status_reason = null where id = $1 and status = 'executing'", [proposal.id]);
           await audit(tx, "order.filled", proposal.id, { orderId: order.id, kind: "close", etoroOrderId: Number(order.etoro_order_id), closeRate: rate, proceeds: info.proceeds ?? null, pnlEstimateUsd: pnl }, { type: "order", id: order.id });
         });
       } catch (e) { return { ok: false, final: false, sent: true, status: order.status, reason: `eToro reports the position closed, but it could not be recorded: ${clean(e)}`, proposal }; }
-      return { ok: true, final: true, sent: true, status: "closed", etoroPositionId, closeRate: rate, proceedsUsd: typeof info.proceeds === "number" ? info.proceeds : null, pnlUsd: pnl, proposal };
+      return { ok: true, final: true, sent: true, status: "closed", etoroPositionId, closeRate: rate, proceedsUsd: typeof info.proceeds === "number" ? info.proceeds : null, investedUsd: position ? Number(position.amount_usd) : null, pnlUsd: pnl, resultBasis, proposal };
     }
     if (CLOSE_NOT_EXECUTED.has(s) || CLOSE_PARTLY_THEN_STOPPED.has(s)) {
       const partly = CLOSE_PARTLY_THEN_STOPPED.has(s);

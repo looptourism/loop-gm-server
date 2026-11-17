@@ -139,8 +139,10 @@ function executionResult(o) {
   const what = `${p.action === "close" ? "CLOSE" : "BUY"} ${esc(p.symbol)} ${usd(p.amountUsd)} (DEMO)`;
   if (o.status === "closed") {
     const lines = [`✅ <b>Position closed — ${esc(p.symbol)}</b> (DEMO)`, `Position ${esc(o.etoroPositionId)}${o.closeRate ? ` closed at ${o.closeRate}` : ""}`];
-    if (typeof o.pnlUsd === "number") lines.push(`Result: about ${o.pnlUsd < 0 ? "-" : "+"}${usd(Math.abs(o.pnlUsd))} (from the open and close prices; fees not included)`);
-    if (typeof o.proceedsUsd === "number") lines.push(`eToro reports proceeds of ${usd(o.proceedsUsd)}`);
+    const sign = (n) => `${n < 0 ? "-" : "+"}${usd(Math.abs(n))}`;
+    if (typeof o.pnlUsd === "number" && o.resultBasis === "proceeds") lines.push(`Result: ${sign(o.pnlUsd)} — eToro's proceeds ${usd(o.proceedsUsd)} minus ${usd(o.investedUsd)} invested (after eToro's closing costs; the fee taken when it opened is not in this figure)`);
+    else if (typeof o.pnlUsd === "number") lines.push(`Result: about ${sign(o.pnlUsd)} (from the open and close prices only; eToro reported no proceeds, so fees are not included)`);
+    else if (typeof o.proceedsUsd === "number") lines.push(`eToro reports proceeds of ${usd(o.proceedsUsd)}`);
     if (o.note) lines.push(esc(o.note));
     return lines.join("\n");
   }
