@@ -463,7 +463,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
       const [proposals, approvalRows, orderRows, verdicts] = await Promise.all([
         analysesStore.listProposals(db, 15),
         db.query("select a.id, i.symbol, a.requested_at, a.expires_at, a.decision, a.decided_at, a.channel, a.consumed_at from trading.approvals a join trading.proposals p on p.id = a.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id order by a.requested_at desc limit 15"),
-        db.query("select o.id, i.symbol, o.status, o.etoro_order_id, o.error, o.request, o.created_at, o.submitted_at, o.verified_at from trading.orders o join trading.proposals p on p.id = o.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id order by o.created_at desc limit 15"),
+        db.query("select o.id, i.symbol, o.status, o.etoro_order_id, o.error, o.request, o.response, o.verification, o.created_at, o.submitted_at, o.verified_at from trading.orders o join trading.proposals p on p.id = o.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id order by o.created_at desc limit 15"),
         db.query("select r.created_at, i.symbol, r.phase, r.passed, r.checks, r.engine_version from trading.risk_assessments r join trading.proposals p on p.id = r.proposal_id join trading.instruments i on i.instrument_id = p.instrument_id order by r.created_at desc limit 10"),
       ]);
       res.json({
