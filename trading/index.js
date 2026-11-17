@@ -42,6 +42,7 @@ const { createGateway } = require("./execution/gateway");
 const { createApprovals, readQuietHours } = require("./approvals");
 const e2e = require("./e2e");
 const { createWatchKeeper } = require("./watches");
+const report = require("./report");
 const { readHalted } = require("./risk/context");
 const { appendAudit } = require("./db/store");
 const { listMonitored } = require("./db/snapshots");
@@ -56,7 +57,8 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   orders = createOrderClient({ config }),
   gateway = createGateway({ config, db, client, orders, onOutcome: (outcome) => notifier.send(notify.executionResult(outcome)) }),
   approvals = createApprovals({ config, db, client, gateway, notifier }),
-  watches = createWatchKeeper({ config, db, agents, notifier }), retryMs = 5 * 60 * 1000 } = {}) {
+  watches = createWatchKeeper({ config, db, agents, notifier }),
+  reporter = report.createReporter({ config, db, notifier, agents }), retryMs = 5 * 60 * 1000 } = {}) {
   // After every agent run: the summary first, then any new draft goes to the
   // risk engine at once (and, if it passes and trading is on, to the owner).
   hooks.afterRun = async (result) => {
@@ -79,6 +81,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     if (typeof agents.start === "function") agents.start();
     if (typeof positions.start === "function") positions.start();
     if (typeof watches.start === "function") watches.start();
+    if (typeof reporter.start === "function") reporter.start();
     if (typeof approvals.start === "function") approvals.start(); // every minute: expire, offer for approval, settle orders
   };
   async function prepareDatabase() {
@@ -534,6 +537,11 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     } catch (e) { fail(res, e); }
   });
 
+  // --- The weekly report and the agents' track record (read-only) ------------
+  app.get("/api/trading/report", dbGuard, async (req, res) => {
+    try { res.json({ ok: true, environment: "demo", ...(await reporter.build()) }); } catch (e) { fail(res, e); }
+  });
+
   // --- Telegram commands (the server's existing bot) -----------------------
   // server.js hands exactly these commands to this function, before anything
   // goes to the GM agent. Plain code: no Claude call decides or writes here.
@@ -625,6 +633,12 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
       const trading = await approvals.summary();
       await say(`🔴 <b>Close proposed — ${notify.esc(symbol)}</b> (DEMO)\nPosition ${made.etoroPositionId}, $${made.amountUsd.toFixed(2)} invested.\n${trading.tradingOff ? `Trading is off (${notify.esc(trading.tradingOff)}): it will be offered to you when trading is back on.` : "It now goes to the risk engine; if it passes you get the Approve / Reject request."}`);
       if (!trading.tradingOff && typeof approvals.tick === "function") await approvals.tick();
+      return true;
+    }
+    // trade_report — this week's report now (it is also sent every Saturday).
+    if (command === "trade_report") {
+      if (offBecause) { await notifier.send(`⛔ ${notify.esc(offBecause)}`); return true; }
+      await notifier.send(report.weeklyText(await reporter.build()));
       return true;
     }
     // trade_e2e — the Stage 8 checklist. The first use starts the run;

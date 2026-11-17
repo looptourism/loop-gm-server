@@ -205,6 +205,11 @@ function agents() {
   const an = a.analyses.map((x) => `<div><div class="row between"><span>${sym(x.symbol)} <span class="sub">${AGENT[x.agent] || esc(x.agent)}</span></span><span class="pill">${esc(REC[x.recommendation] || x.recommendation || "")}</span></div><div class="sub">${when(x.at)}${x.confidence !== null ? ` · ثقة التحليل <span class="ltr mono">${x.confidence}</span>` : ""}</div><details><summary>النص</summary><div class="txt" dir="auto">${esc(x.text)}</div></details></div>`).join("");
   const WS = { open: "يُراقَب", triggered: "تحقّق", done: "انتهى", expired: "انتهت مدته", replaced: "استُبدل", skipped: "لم يُعتمد" };
   const ws = (a.watches || []).map((w) => `<div><div class="row between">${sym(w.symbol)}<span class="pill">${esc(WS[w.status] || w.status)}</span></div><div class="sub"><span class="ltr mono" dir="ltr">${esc(w.text)}</span> · حتى ${when(w.expiresAt)}</div><div class="txt" dir="auto">${esc(w.condition && w.condition.description)}</div>${w.reason && w.status !== "open" ? `<div class="sub" dir="auto">${esc(w.reason)}</div>` : ""}</div>`).join("");
+  const REC2 = { buy: "شراء", hold: "انتظار", avoid: "تجنّب" };
+  const mv = (o) => (o ? `<span class="ltr mono" style="color:${o.pct >= 0 ? "var(--mint)" : "var(--coral)"}">${o.pct >= 0 ? "+" : ""}${Number(o.pct).toFixed(2)}%</span>` : '<span class="sub">—</span>');
+  const rec = a.record || { items: [], summary: {} };
+  const recSum = ["buy", "hold", "avoid"].filter((k) => rec.summary[k] && rec.summary[k].count).map((k) => { const s = rec.summary[k]; return `<div class="row between"><span>${REC2[k]} <span class="sub">(${num(s.count)})</span></span><span class="sub">بعد 5 أيام ${s.after5d ? mv({ pct: s.after5d.avgPct }) : "—"} · بعد 14 يومًا ${s.after14d ? mv({ pct: s.after14d.avgPct }) : "—"}</span></div>`; }).join("");
+  const recRows = rec.items.slice(0, 12).map((x) => `<div class="row between"><span>${sym(x.symbol)} <span class="sub">${esc(REC2[x.recommendation] || x.recommendation)} · ${when(x.at)}</span></span><span class="sub">1: ${mv(x.after[1])} · 5: ${mv(x.after[5])} · 14: ${mv(x.after[14])}</span></div>`).join("");
   const pm = a.portfolioManager;
   const pmHtml = pm ? pm.decisions.map((d) => `<div><div class="row between">${sym(d.symbol)}<span class="pill">${esc(REC[d.decision] || d.decision)}</span></div><div class="txt" dir="auto">${esc(d.rationale)}</div>${d.disagreements.map((g) => `<div class="card warn" style="margin-top:6px;padding:10px"><div class="txt" dir="auto"><b>${esc(g.issue)}</b>\nالمحلل: ${esc(g.analyst_position)}\nالمراجع: ${esc(g.risk_position)}\nمدير المحفظة: ${esc(g.my_view)}</div></div>`).join("")}</div>`).join("") : "";
   return `
@@ -215,6 +220,7 @@ function agents() {
   ${ws ? `<h2>بانتظار إعادة النظر</h2><div class="card list">${ws}</div><div class="sub">حين يقول المحلل «انظر مجددًا عند…»، يراقب الكود الشرط ويطلب تحليلًا جديدًا عند تحقّقه.</div>` : ""}
   <h2>آخر التشغيلات</h2><div class="card list">${runs || '<div class="sub">لا توجد تشغيلات بعد.</div>'}</div>
   ${pm ? `<h2>آخر قرار لمدير المحفظة <span class="sub">${when(pm.at)}</span></h2><div class="card list">${pmHtml}${pm.note ? `<div class="txt" dir="auto">${esc(pm.note)}</div>` : ""}</div>` : ""}
+  ${rec.items.length ? `<h2>سجل توقعات الوكلاء <span class="sub">30 يومًا</span></h2><div class="card list">${recSum}${recRows}</div><div class="sub">حركة السعر المخزّن بعد 1 و5 و14 يومًا من كل توصية. وصفٌ لما حدث، وليس حكمًا على التوصية.</div>` : ""}
   <h2>آخر التحليلات</h2><div class="card list">${an || '<div class="sub">لا توجد تحليلات بعد.</div>'}</div>
   <div class="sub">ثقة التحليل = مدى دعم الأدلة للاستنتاج، وليست احتمال الربح. التحليلات بالإنجليزية كما كتبها الوكلاء.</div>`;
 }

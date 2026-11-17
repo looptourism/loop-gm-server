@@ -157,3 +157,18 @@ about $40.41". Nothing acted on that. Now:
 - A new analysis can only lead to a draft proposal → risk engine → your Approve. The watch code
   requires no order, approval or eToro module (a test checks its `require`s).
 - Shown in `/trade_status` ("👀 Watching to look again") and in the console's Agents section.
+
+## Weekly report and track record (2026-11-17)
+
+`trading/report.js`, plain code over stored records (it requires only `./notify`).
+
+- **Track record:** for every analyst call (buy / hold / avoid) in the last 30 days, the stored bid
+  when it was analysed against the stored bid 1, 5 and 14 days later. A later price must be newer
+  than the starting one and at most 3 days before the target time (weekends); otherwise it is
+  shown as unknown, never guessed. It describes what the price did; it does not grade the call.
+- **Weekly report:** proposals, approvals, positions opened / closed with results, the account
+  over the week, agent runs and analyses, Claude spend (week and month), what was passed on and
+  how the price moved since, and the track record summary. Sent to Telegram every Saturday from
+  04:00 UTC (08:00 Dubai), once per week (desk_state `weekly_report`), under
+  `TRADING_MONITOR_ENABLED`. On demand: `/trade_report`. JSON: `/api/trading/report`.
+- The console's Agents section shows the track record.
