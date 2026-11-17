@@ -23,4 +23,7 @@ The owner works only from a phone. Keep their manual steps to a minimum.
 - **Stage 5–6 code** (`trading/risk/`, `trading/approvals.js`, `trading/execution/`, and the
   close proposals in `trading/positions.js`) is the
   order-execution, approval and kill-switch code the exception above is about.
+- **Console (Stage 7):** the Trading Desk tab shows `/trading-desk` (`trading/desk/`); its Approve /
+  Reject goes through `approvals.decideFromDashboard`, so it counts as approvals code. See
+  docs/trading-desk-console.md.
 - **Trading style (2026-11-16):** short-term swing trades, held 1 to 14 days (`trading/policy.js`).

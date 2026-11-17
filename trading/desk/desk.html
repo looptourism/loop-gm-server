@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>مكتب التداول — تجريبي</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+/* The Trading Desk page (Stage 7). Same tokens as the console, with its own
+   teal accent and a permanent DEMO band, so it never looks like a company
+   department. It reads one endpoint (/api/trading/desk) and sends one kind of
+   action: Approve / Reject of a request that is already waiting. */
+:root{
+  --bg:#07080F; --surface:rgba(255,255,255,.035); --surface-2:rgba(255,255,255,.05);
+  --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.14);
+  --text:#ECEEF6; --text-strong:#FFFFFF; --muted:#A3A9C2; --dim:#8C92AB;
+  --desk:#5BD9F5; --desk-soft:rgba(91,217,245,.12); --desk-line:rgba(91,217,245,.32);
+  --amber:#F5B85B; --amber-soft:rgba(245,184,91,.13); --amber-line:rgba(245,184,91,.38);
+  --coral:#FF7A85; --coral-soft:rgba(255,122,133,.1); --coral-line:rgba(255,122,133,.4);
+  --mint:#7CF2C4; --mint-soft:rgba(124,242,196,.12);
+  --r-lg:24px; --r-md:18px; --r-sm:14px;
+  --font:'IBM Plex Sans Arabic','Noto Sans Arabic',Tahoma,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--desk);outline-offset:2px;border-radius:10px}
+.ltr{direction:ltr;unicode-bidi:isolate}
+.mono{font-family:var(--mono)}
+.wrap{max-width:760px;margin:0 auto;padding:0 16px calc(env(safe-area-inset-bottom,0px) + 32px)}
+.demo{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:10px;justify-content:space-between;padding:calc(env(safe-area-inset-top,0px) + 10px) 16px 10px;background:rgba(7,8,15,.92);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--amber-line)}
+.demo .t{font-weight:700;color:var(--text-strong);font-size:17px}
+.demo .badge{flex-shrink:0;padding:4px 10px;border-radius:999px;background:var(--amber);color:#2A1806;font:700 12px/1.2 var(--mono);letter-spacing:.06em}
+.demo .sw{font-size:12px;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid var(--line-2)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+nav.tabs{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:12px 0 4px;margin:0 -16px;padding-inline:16px}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{flex-shrink:0;height:38px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);color:#C7CBDD;font-size:13px;display:inline-flex;align-items:center;gap:6px}
+nav.tabs button[aria-pressed="true"]{background:var(--desk-soft);border-color:var(--desk-line);color:#fff;font-weight:600}
+nav.tabs .n{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--coral);color:#1A0A0C;font:600 10px/18px var(--mono);text-align:center}
+section{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+h2{margin:6px 0 0;font-size:15px;color:var(--text-strong)}
+.card{border-radius:var(--r-lg);border:1px solid var(--line);background:var(--surface);padding:14px 16px}
+.card.desk{border-color:var(--desk-line)}
+.card.warn{border-color:var(--amber-line);background:var(--amber-soft)}
+.card.bad{border-color:var(--coral-line);background:var(--coral-soft)}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (min-width:640px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.stat .k{font-size:12px;color:var(--muted)}
+.stat .v{font:600 20px/1.3 var(--mono);color:var(--text-strong);margin-top:4px}
+.sub{font-size:12px;color:var(--muted);line-height:1.6}
+.row{display:flex;align-items:center;gap:10px}
+.between{justify-content:space-between}
+.grow{flex:1;min-width:0}
+.bar{height:8px;border-radius:4px;background:var(--surface-2);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--desk)}
+.bar i.w{background:var(--amber)} .bar i.x{background:var(--coral)}
+.pos{color:var(--mint)} .neg{color:var(--coral)}
+.pill{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:11px;border:1px solid var(--line-2);color:#D9DCE8;white-space:nowrap}
+.pill.buy{border-color:var(--desk-line);color:var(--desk)} .pill.close{border-color:var(--coral-line);color:var(--coral)}
+.pill.ok{border-color:rgba(124,242,196,.35);color:var(--mint)} .pill.no{border-color:var(--coral-line);color:var(--coral)} .pill.wait{border-color:var(--amber-line);color:var(--amber)}
+.btn{height:48px;padding:0 18px;border-radius:14px;border:1px solid var(--line-2);background:transparent;color:#D9DCE8;font-size:15px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn.approve{border:none;background:var(--mint);color:#062016;font-weight:700}
+.btn.reject{border-color:var(--coral-line);color:var(--coral)}
+.btn:disabled{opacity:.5;cursor:default}
+.list{display:flex;flex-direction:column}
+.list > div{padding:10px 0;border-top:1px solid var(--line)}
+.list > div:first-child{border-top:none}
+.txt{font-size:13px;line-height:1.75;color:#D9DCE8;white-space:pre-wrap;overflow-wrap:anywhere}
+.empty{padding:22px 8px;text-align:center;color:var(--muted);font-size:14px;line-height:1.7}
+.syms{display:flex;flex-wrap:wrap;gap:6px}
+.syms span{font:500 12px/1 var(--mono);padding:6px 8px;border-radius:8px;border:1px solid var(--line);direction:ltr}
+.syms span.off{opacity:.45;text-decoration:line-through}
+.sheet{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}
+.sheet .in{width:100%;max-width:520px;margin:0 8px calc(env(safe-area-inset-bottom,0px) + 8px);border-radius:24px;background:#12131F;border:1px solid var(--line-2);padding:18px;display:flex;flex-direction:column;gap:12px}
+.toast{position:fixed;z-index:40;left:50%;top:calc(env(safe-area-inset-top,0px) + 64px);transform:translateX(-50%);max-width:92vw;padding:10px 16px;border-radius:14px;background:#1B1D2C;border:1px solid var(--line-2);color:#fff;font-size:13px;line-height:1.6}
+details summary{cursor:pointer;color:var(--desk);font-size:13px}
+</style>
+</head>
+<body>
+<header class="demo" role="banner">
+  <div class="row"><span class="badge">DEMO</span><span class="t">مكتب التداول</span></div>
+  <span class="sw" id="sw" aria-live="polite">…</span>
+</header>
+<div class="wrap">
+  <nav class="tabs" id="tabs" aria-label="أقسام مكتب التداول"></nav>
+  <main id="view" aria-live="polite"><div class="empty">جارٍ التحميل…</div></main>
+</div>
+<div id="sheetHost"></div><div id="toastHost" role="status"></div>
+<script>
+"use strict";
+// ---- helpers ------------------------------------------------------------------
+const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const usd = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? "—" : `<span class="ltr mono">$${Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`);
+const signed = (v) => (v === null || v === undefined ? "—" : `<span class="ltr mono ${v < 0 ? "neg" : v > 0 ? "pos" : ""}">${v < 0 ? "-" : v > 0 ? "+" : ""}$${Math.abs(Number(v)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`);
+const num = (v) => (v === null || v === undefined ? "—" : `<span class="ltr mono">${esc(v)}</span>`);
+const when = (iso) => { if (!iso) return "—"; const d = new Date(iso); return `<span class="ltr mono">${d.toLocaleString("en-GB", { timeZone: "Asia/Dubai", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>`; };
+const ago = (iso) => { if (!iso) return ""; const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000); return m < 1 ? "الآن" : m < 60 ? `قبل ${m} د` : m < 1440 ? `قبل ${Math.round(m / 60)} س` : `قبل ${Math.round(m / 1440)} يوم`; };
+const sym = (s) => `<b class="ltr mono">${esc(s)}</b>`;
+const action = (a) => (a === "close" ? '<span class="pill close">إغلاق</span>' : '<span class="pill buy">شراء</span>');
+const STATUS = { draft: ["مسودة", "wait"], risk_rejected: ["رفضه محرك المخاطر", "no"], pending_approval: ["بانتظار قرارك", "wait"], approved: ["معتمد", "ok"], rejected: ["رفضته", "no"], expired: ["انتهت صلاحيته", "no"], executing: ["قيد التنفيذ", "wait"], executed: ["نُفّذ", "ok"], failed: ["لم يُنفّذ", "no"], cancelled: ["أُلغي", "no"] };
+const status = (s) => { const [t, c] = STATUS[s] || [s, ""]; return `<span class="pill ${c}">${esc(t)}</span>`; };
+const AGENT = { stock: "محلل الأسهم", crypto: "محلل العملات", risk: "مراجع المخاطر", portfolio_manager: "مدير المحفظة" };
+const REC = { buy: "شراء", hold: "انتظار", avoid: "تجنّب", no_objection: "لا اعتراض", caution: "حذر", object: "اعتراض", propose_buy: "اقتراح شراء", no_trade: "لا صفقة" };
+const exits = (list) => (list || []).map((c) => c.type === "price_below" ? `وقف عند ${num(c.value)}` : c.type === "price_above" ? `هدف ${num(c.value)}` : c.type === "date_after" && c.date ? `حتى ${num(c.date)}` : esc(c.description || "")).join(" · ") || "—";
+function toast(t) { const h = document.getElementById("toastHost"); h.innerHTML = `<div class="toast">${esc(t)}</div>`; clearTimeout(toast.t); toast.t = setTimeout(() => (h.innerHTML = ""), 4200); }
+
+// ---- state --------------------------------------------------------------------
+let D = null, tab = "overview", busy = false, sheetOpen = false;
+try { tab = sessionStorage.getItem("desk-tab") || "overview"; } catch { /* private mode */ }
+const TABS = [["overview", "نظرة عامة"], ["pending", "بانتظار قرارك"], ["positions", "المراكز"], ["agents", "الوكلاء"], ["history", "السجل"], ["alerts", "التنبيهات"], ["settings", "الإعدادات"]];
+
+async function load() {
+  try {
+    const r = await fetch("/api/trading/desk", { credentials: "same-origin", headers: { Accept: "application/json" } });
+    if (r.status === 401) { (window.top || window).location.href = "/login?next=/%23trading"; return; }
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    D = j;
+  } catch (e) { if (!D) { document.getElementById("view").innerHTML = `<div class="card bad"><div class="txt">تعذّر تحميل مكتب التداول: ${esc(e.message)}</div></div>`; } return; }
+  if (!sheetOpen) render();
+}
+
+function render() {
+  const s = D.settings;
+  document.getElementById("sw").innerHTML = s.tradingOn ? '<span class="dot" style="background:var(--mint)"></span>التداول مفعّل' : `<span class="dot" style="background:var(--coral)"></span>التداول متوقف`;
+  document.getElementById("tabs").innerHTML = TABS.map(([k, l]) => `<button type="button" data-tab="${k}" aria-pressed="${tab === k}">${l}${k === "pending" && D.pending.length ? `<span class="n">${D.pending.length}</span>` : ""}</button>`).join("");
+  const views = { overview, pending, positions, agents, history, alerts, settings };
+  document.getElementById("view").innerHTML = (views[tab] || overview)();
+  document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { tab = b.dataset.tab; try { sessionStorage.setItem("desk-tab", tab); } catch {} render(); scrollTo(0, 0); }));
+  document.querySelectorAll("[data-decide]").forEach((b) => (b.onclick = () => confirmDecision(b.dataset.decide, b.dataset.approval)));
+}
+
+// ---- sections ------------------------------------------------------------------
+function overview() {
+  const o = D.overview;
+  const off = !D.settings.tradingOn ? `<div class="card warn"><div class="txt">التداول متوقف: ${D.settings.tradingEnabled ? "أُوقف بالأمر /trade_stop" : "المتغيّر TRADING_ENABLED ليس true"}. لا تُرسل طلبات موافقة ولا أوامر. المراكز المفتوحة تبقى مراقَبة.</div></div>` : "";
+  const pend = D.pending.length ? `<div class="card desk row between"><span>${D.pending.length} طلب بانتظار قرارك</span><button class="btn" data-tab="pending">افتح</button></div>` : "";
+  if (!o) return off + pend + '<div class="empty">لا توجد قراءة للحساب بعد. تُؤخذ كل 15 دقيقة عندما تعمل مراقبة المراكز.</div>';
+  const lim = (o.limits || []).map((l) => { const p = Math.min(100, l.pct); const c = l.pct >= 100 ? "x" : l.pct >= 80 ? "w" : ""; const name = { total_exposure: "إجمالي التعرّض", crypto_exposure: "تعرّض العملات (يشمل MSTR)", open_positions: "المراكز المفتوحة", daily_loss: "خسارة اليوم" }[l.name] || l.label; const v = l.unit === "$" ? `${usd(l.value)} / ${usd(l.limit)}` : `${num(l.value)} / ${num(l.limit)}`; return `<div><div class="row between"><span class="sub">${name}</span><span>${v}</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`; }).join("");
+  const total = (o.split.stockUsd || 0) + (o.split.cryptoUsd || 0);
+  const pc = (v) => (total > 0 ? Math.round((v / total) * 100) : 0);
+  return `${off}${pend}
+  <div class="grid">
+    <div class="card stat"><div class="k">النقد المتاح</div><div class="v">${usd(o.availableCashUsd)}</div></div>
+    <div class="card stat"><div class="k">المستثمر</div><div class="v">${usd(o.investedUsd)}</div></div>
+    <div class="card stat"><div class="k">الربح/الخسارة غير المحققة</div><div class="v">${signed(o.unrealizedPnlUsd)}</div></div>
+    <div class="card stat"><div class="k">نتيجة اليوم</div><div class="v">${signed(o.todayPnlUsd)}</div></div>
+    <div class="card stat"><div class="k">المراكز المفتوحة</div><div class="v">${num(o.openPositions)}</div></div>
+    <div class="card stat"><div class="k">قيمة الحساب</div><div class="v">${usd(o.equityUsd)}</div></div>
+  </div>
+  <div class="sub">من حساب eToro التجريبي عند آخر فحص: ${when(o.at)} (${ago(o.at)})</div>
+  <h2>الحدود</h2>
+  <div class="card list" style="gap:10px">${lim || '<div class="sub">تظهر الحدود بعد أول فحص للمراكز منذ آخر تشغيل للسيرفر.</div>'}</div>
+  <h2>الأسهم مقابل العملات</h2>
+  <div class="card"><div class="row between"><span>الأسهم ${usd(o.split.stockUsd)}</span><span>العملات ${usd(o.split.cryptoUsd)}</span></div>
+  <div class="bar" style="margin-top:8px"><i style="width:${pc(o.split.stockUsd)}%"></i></div>
+  <div class="sub" style="margin-top:6px">المراكز المسجّلة في المكتب فقط.</div></div>`;
+}
+
+function pending() {
+  const items = D.pending.map((p) => `
+  <div class="card desk">
+    <div class="row between"><div class="row">${action(p.action)} ${sym(p.symbol)}</div><span class="sub">أجب قبل ${when(p.answerBy)}</span></div>
+    <div class="grid" style="margin-top:10px">
+      <div class="stat"><div class="k">${p.action === "close" ? "المستثمر في المركز" : "المبلغ"}</div><div class="v">${usd(p.amountUsd)}</div></div>
+      ${p.price ? `<div class="stat"><div class="k">السعر <span class="ltr">bid / ask</span></div><div class="v" style="font-size:15px"><span class="ltr mono">${esc(p.price.bid)} / ${esc(p.price.ask)}</span></div></div>` : ""}
+      ${p.action !== "close" ? `<div class="stat"><div class="k">مدة الاحتفاظ</div><div class="v">${num(p.holdingDays)} <span class="sub">يوم</span></div></div>` : `<div class="stat"><div class="k">المركز</div><div class="v" style="font-size:14px">${num(p.etoroPositionId)}</div></div>`}
+    </div>
+    ${p.action !== "close" ? `<div class="sub" style="margin-top:8px">الخطة: ${exits(p.exitConditions)}</div>` : ""}
+    ${p.rationale ? `<div class="txt" dir="auto" style="margin-top:8px">${esc(p.rationale)}</div>` : ""}
+    ${p.disagreements.length ? `<details style="margin-top:8px"><summary>خلاف بين المحلل والمراجع (${p.disagreements.length})</summary>${p.disagreements.map((d) => `<div class="txt" dir="auto" style="margin-top:6px"><b>${esc(d.issue)}</b>\nالمحلل: ${esc(d.analyst_position)}\nالمراجع: ${esc(d.risk_position)}\nمدير المحفظة: ${esc(d.my_view)}</div>`).join("")}</details>` : ""}
+    ${p.warnings.map((w) => `<div class="sub" dir="auto" style="color:var(--amber);margin-top:6px">⚠ ${esc(w)}</div>`).join("")}
+    <div class="sub" style="margin-top:6px">محرك المخاطر: ${num(p.checksPassed)} من ${num(p.checksTotal)} فحصًا ناجحًا. يُعاد كل شيء على السعر الحي قبل الإرسال.</div>
+    <div class="row" style="margin-top:12px"><button class="btn approve grow" data-decide="approve" data-approval="${esc(p.approvalId)}">اعتماد</button><button class="btn reject grow" data-decide="reject" data-approval="${esc(p.approvalId)}">رفض</button></div>
+  </div>`).join("");
+  const prog = D.inProgress.map((x) => `<div><div class="row between"><div class="row">${action(x.action)} ${sym(x.symbol)} ${usd(x.amountUsd)}</div><span class="sub">${ago(x.at)}</span></div>${x.note ? `<div class="sub" dir="auto">${esc(x.note)}</div>` : ""}</div>`).join("");
+  return `${items || '<div class="empty">لا يوجد طلب بانتظار قرارك.<br>تصلك الطلبات أيضًا على تيليجرام.</div>'}
+  ${prog ? `<h2>قيد التجهيز أو التنفيذ</h2><div class="card list">${prog}</div>` : ""}`;
+}
+
+function positions() {
+  if (!D.positions.length) return '<div class="empty">لا توجد مراكز مفتوحة مسجّلة في المكتب.</div>';
+  return D.positions.map((p) => `
+  <div class="card">
+    <div class="row between"><div class="row">${sym(p.symbol)} <span class="sub">${esc(p.name || "")}</span></div>${p.closeStatus && ["draft", "pending_approval", "approved", "executing"].includes(p.closeStatus) ? status(p.closeStatus) : ""}</div>
+    <div class="grid" style="margin-top:10px">
+      <div class="stat"><div class="k">المستثمر</div><div class="v">${usd(p.amountUsd)}</div></div>
+      <div class="stat"><div class="k">سعر الفتح</div><div class="v" style="font-size:15px">${num(p.openRate)}</div></div>
+      <div class="stat"><div class="k">النتيجة التقديرية</div><div class="v">${signed(p.estimatedPnlUsd)}</div></div>
+    </div>
+    <div class="sub" style="margin-top:8px">آخر سعر شراء مخزّن ${num(p.bid)} عند ${when(p.bidAt)} · فُتح ${when(p.openedAt)}</div>
+    <div class="sub">شروط الخروج: ${exits(p.exitConditions)}</div>
+    <div class="sub">النتيجة التقديرية من آخر سعر مخزّن، بلا رسوم. للإغلاق: <span class="ltr mono">/trade_close ${esc(p.symbol)}</span> في تيليجرام.</div>
+  </div>`).join("");
+}
+
+function agents() {
+  const a = D.agents, b = a.budget;
+  const runs = a.runs.map((r) => `<div><div class="row between"><span>${when(r.at)} <span class="sub">${esc(r.trigger || "")}</span></span><span class="ltr mono">${r.costUsd !== null ? `$${Number(r.costUsd).toFixed(2)}` : ""}</span></div><div class="sub">${r.warning ? esc(r.warning) : r.skipped ? `لم يُنفَّذ: ${esc(r.skipped)}` : `${r.screened !== null ? `فُحص ${num(r.screened)} · ` : ""}قائمة مختصرة: ${r.shortlist && r.shortlist.length ? r.shortlist.map(esc).join("، ") : "لا شيء"} · مقترحات: ${num(r.proposals)}`}</div></div>`).join("");
+  const an = a.analyses.map((x) => `<div><div class="row between"><span>${sym(x.symbol)} <span class="sub">${AGENT[x.agent] || esc(x.agent)}</span></span><span class="pill">${esc(REC[x.recommendation] || x.recommendation || "")}</span></div><div class="sub">${when(x.at)}${x.confidence !== null ? ` · ثقة التحليل <span class="ltr mono">${x.confidence}</span>` : ""}</div><details><summary>النص</summary><div class="txt" dir="auto">${esc(x.text)}</div></details></div>`).join("");
+  const pm = a.portfolioManager;
+  const pmHtml = pm ? pm.decisions.map((d) => `<div><div class="row between">${sym(d.symbol)}<span class="pill">${esc(REC[d.decision] || d.decision)}</span></div><div class="txt" dir="auto">${esc(d.rationale)}</div>${d.disagreements.map((g) => `<div class="card warn" style="margin-top:6px;padding:10px"><div class="txt" dir="auto"><b>${esc(g.issue)}</b>\nالمحلل: ${esc(g.analyst_position)}\nالمراجع: ${esc(g.risk_position)}\nمدير المحفظة: ${esc(g.my_view)}</div></div>`).join("")}</div>`).join("") : "";
+  return `
+  <div class="card ${a.ready ? "" : "bad"}"><div class="row between"><span>${a.running ? `يعمل الآن: ${esc(a.running.step)}` : a.ready ? "جاهز" : `غير جاهز: ${esc(a.notReadyBecause)}`}</span><span class="sub">${a.schedule && a.schedule.running ? "الجدول مفعّل" : "الجدول متوقف"}</span></div>
+  ${b && b.available ? `<div class="row between" style="margin-top:10px"><span class="sub">ميزانية الشهر</span><span>${usd(b.spentUsd)} / ${usd(b.budgetUsd)}</span></div><div class="bar"><i class="${b.reached ? "x" : b.warning ? "w" : ""}" style="width:${Math.min(100, Math.round((b.spentUsd / b.budgetUsd) * 100))}%"></i></div>` : ""}
+  <div class="sub" style="margin-top:8px">${Object.entries(a.models || {}).map(([k, m]) => `${k === "screen" ? "الفرز" : AGENT[k] || k}: <span class="ltr mono">${esc(m)}</span>`).join(" · ")}</div>
+  <div class="sub">للتشغيل الآن: <span class="ltr mono">/trade_run</span> في تيليجرام.</div></div>
+  <h2>آخر التشغيلات</h2><div class="card list">${runs || '<div class="sub">لا توجد تشغيلات بعد.</div>'}</div>
+  ${pm ? `<h2>آخر قرار لمدير المحفظة <span class="sub">${when(pm.at)}</span></h2><div class="card list">${pmHtml}${pm.note ? `<div class="txt" dir="auto">${esc(pm.note)}</div>` : ""}</div>` : ""}
+  <h2>آخر التحليلات</h2><div class="card list">${an || '<div class="sub">لا توجد تحليلات بعد.</div>'}</div>
+  <div class="sub">ثقة التحليل = مدى دعم الأدلة للاستنتاج، وليست احتمال الربح. التحليلات بالإنجليزية كما كتبها الوكلاء.</div>`;
+}
+
+function history() {
+  if (!D.history.length) return '<div class="empty">لا يوجد سجل بعد.</div>';
+  return `<div class="card list">${D.history.map((h) => `<div><div class="row between"><div class="row">${action(h.action)} ${sym(h.symbol)} ${usd(h.amountUsd)}</div>${status(h.status)}</div>
+  <div class="sub">${when(h.at)} · ${h.source && h.source !== "agents" ? esc(h.source) : "الوكلاء"}${h.closeRate !== null ? ` · أُغلق عند ${num(h.closeRate)}` : ""}${h.resultUsd !== null ? ` · النتيجة ${signed(h.resultUsd)}` : ""}</div>
+  ${h.reason && ["risk_rejected", "failed", "rejected", "expired"].includes(h.status) ? `<div class="sub" dir="auto" style="color:var(--coral)">${esc(h.reason)}</div>` : ""}</div>`).join("")}</div>`;
+}
+
+function alerts() {
+  if (!D.alerts.length) return '<div class="empty">لا توجد تنبيهات.</div>';
+  const label = { position: "مركز", account: "الحساب", risk: "محرك المخاطر" };
+  return `<div class="card list">${D.alerts.map((a) => `<div><div class="row between"><span>${a.symbol ? sym(a.symbol) : ""} <span class="sub">${label[a.scope] || ""}</span></span><span class="sub">${when(a.at)}</span></div><div class="txt" dir="auto">${esc(a.message)}</div></div>`).join("")}</div>`;
+}
+
+function settings() {
+  const s = D.settings, p = s.policy;
+  const line = (k, v) => `<div class="row between"><span class="sub">${k}</span><span>${v}</span></div>`;
+  return `
+  <h2>المفاتيح</h2>
+  <div class="card list">
+    <div>${line("TRADING_ENABLED (Render)", s.tradingEnabled ? '<span class="pill ok">true</span>' : '<span class="pill no">مطفأ</span>')}</div>
+    <div>${line("الإيقاف من تيليجرام <span class=\"ltr mono\">/trade_stop</span>", s.stopped ? '<span class="pill no">موقوف</span>' : '<span class="pill ok">غير موقوف</span>')}</div>
+    <div>${line("مراقبة الأسعار والمراكز", s.monitorEnabled ? '<span class="pill ok">مفعّلة</span>' : '<span class="pill no">متوقفة</span>')}</div>
+    <div>${line("جدول الوكلاء", s.agentsScheduleEnabled ? '<span class="pill ok">مفعّل</span>' : '<span class="pill no">متوقف</span>')}</div>
+    <div class="sub">الإيقاف والاستئناف: <span class="ltr mono">/trade_stop</span> و<span class="ltr mono">/trade_resume</span> في تيليجرام. المتغيّرات تُغيَّر من Render.</div>
+  </div>
+  <h2>الحدود</h2>
+  <div class="card list">
+    <div>${line("حد الصفقة — سهم", usd(p.maxPerTradeUsd.stock))}</div>
+    <div>${line("حد الصفقة — عملة", usd(p.maxPerTradeUsd.crypto))}</div>
+    <div>${line("إجمالي التعرّض", usd(p.maxTotalExposureUsd))}</div>
+    <div>${line("تعرّض العملات" + (p.cryptoCorrelatedCountsTowardCryptoCap ? " (يشمل MSTR)" : ""), usd(p.maxCryptoExposureUsd))}</div>
+    <div>${line("خسارة يومية قصوى", usd(p.maxDailyLossUsd))}</div>
+    <div>${line("أقصى عدد للمراكز", num(p.maxOpenPositions))}</div>
+    <div>${line("الرافعة · الاتجاه", `${num(p.leverage)} · شراء فقط`)}</div>
+    <div>${line("مدة الاحتفاظ", `من ${num(p.holdingDays.min)} إلى ${num(p.holdingDays.max)} يومًا`)}</div>
+    <div>${line("صلاحية طلب الموافقة", `${num(p.approvalValidMinutes)} دقيقة`)}</div>
+    <div>${line("ساعات الهدوء", p.quietHours ? `<span class="ltr mono">${esc(p.quietHours.start)}–${esc(p.quietHours.end)} ${esc(p.quietHours.timeZone || "UTC")}</span>` : "لا يوجد")}</div>
+    <div class="sub">الحدود في الملف trading/policy.js، وتُطبَّق بالكود ولا يستطيع أي وكيل تجاوزها.</div>
+  </div>
+  <h2>الوكلاء والميزانية</h2>
+  <div class="card list">
+    <div>${line("الميزانية الشهرية", usd(s.agents.monthlyBudgetUsd))}</div>
+    <div>${line("القائمة المختصرة", `حتى ${num(s.agents.shortlistMax)} · درجة ${num(s.agents.shortlistMinScore)} فأكثر`)}</div>
+    <div class="sub ltr" style="text-align:left">${s.agents.schedule.map(esc).join("<br>")}</div>
+  </div>
+  <h2>قائمة الأسهم المسموحة (${num(s.allowlists.stocks.length)})</h2>
+  <div class="card"><div class="syms">${s.allowlists.stocks.map((x) => `<span class="${x.tradable ? "" : "off"}" title="${x.tradable ? "" : "غير قابل للتداول"}">${esc(x.symbol)}${x.cryptoCorrelated ? " ₿" : ""}</span>`).join("")}</div><div class="sub" style="margin-top:8px">المشطوب: غير مُتحقَّق منه على eToro أو متوقف. ₿ = يتبع العملات المشفّرة.</div></div>
+  <h2>قائمة العملات المسموحة (${num(s.allowlists.crypto.length)})</h2>
+  <div class="card"><div class="syms">${s.allowlists.crypto.map((x) => `<span class="${x.tradable ? "" : "off"}">${esc(x.symbol)}</span>`).join("")}</div></div>`;
+}
+
+// ---- Approve / Reject ------------------------------------------------------------
+function confirmDecision(decision, approvalId) {
+  const p = D.pending.find((x) => x.approvalId === approvalId);
+  if (!p || busy) return;
+  sheetOpen = true;
+  const approve = decision === "approve";
+  const what = `${p.action === "close" ? "إغلاق" : "شراء"} ${p.symbol} ${p.action === "close" ? "(المركز كاملًا)" : `بمبلغ $${Number(p.amountUsd).toFixed(2)}`}`;
+  document.getElementById("sheetHost").innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="تأكيد"><div class="in">
+    <div style="font-weight:700;font-size:17px">${approve ? "اعتماد" : "رفض"} ${esc(what)}؟</div>
+    <div class="txt">${approve ? "حساب تجريبي. سيُعاد فحص السعر الحي وكل الحدود قبل إرسال الأمر، وإن فشل أي فحص لا يُرسل شيء." : "لن يُرسل أي أمر. يمكن اقتراحه من جديد لاحقًا."}</div>
+    <div class="row"><button class="btn ${approve ? "approve" : "reject"} grow" id="yes">${approve ? "نعم، اعتمد" : "نعم، ارفض"}</button><button class="btn grow" id="no">تراجع</button></div>
+  </div></div>`;
+  const close = () => { document.getElementById("sheetHost").innerHTML = ""; sheetOpen = false; render(); };
+  document.getElementById("no").onclick = close;
+  document.getElementById("yes").onclick = async () => {
+    busy = true; document.getElementById("yes").disabled = true; document.getElementById("yes").textContent = "جارٍ…";
+    try {
+      const r = await fetch("/api/trading/desk/decide", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Trading-Desk": "1" }, body: JSON.stringify({ approvalId, decision }) });
+      const j = await r.json().catch(() => ({}));
+      toast(j.message || (r.ok ? "تم" : `تعذّر: ${j.error || r.status}`));
+    } catch (e) { toast(`تعذّر الإرسال: ${e.message}`); }
+    busy = false; close(); load();
+  };
+}
+
+load();
+setInterval(() => { if (!document.hidden && !sheetOpen && !busy) load(); }, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !sheetOpen) load(); });
+</script>
+</body>
+</html>

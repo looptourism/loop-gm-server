@@ -199,10 +199,13 @@ test("demo-account route returns the summary; errors become 502 without data", a
   assert.strictEqual(e.body.etoroStatus, 401);
 });
 
-test("every mounted route is a read-only GET under /api/trading/", () => {
+test("every mounted route is a read-only GET under /api/trading/ — plus the desk page and its one decision POST (Stage 7)", () => {
   const app = fakeApp();
-  for (const m of ["post", "put", "patch", "delete", "use"]) app[m] = () => { throw new Error(`trading mounted a ${m} route`); };
+  const posts = [];
+  app.post = (p) => { posts.push(p); };
+  for (const m of ["put", "patch", "delete", "use"]) app[m] = () => { throw new Error(`trading mounted a ${m} route`); };
   mount(app, { authOn: true, config, client: createClient({ config, fetchImpl: fakeFetch(200, {}).impl }) });
   assert.ok(Object.keys(app.routes).length >= 1);
-  for (const p of Object.keys(app.routes)) assert.ok(p.startsWith("/api/trading/"), p);
+  for (const p of Object.keys(app.routes)) assert.ok(p.startsWith("/api/trading/") || p === "/trading-desk", p);
+  assert.deepStrictEqual(posts, ["/api/trading/desk/decide"]);
 });
