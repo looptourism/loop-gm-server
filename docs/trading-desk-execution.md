@@ -107,6 +107,11 @@ apply to a close, because closing reduces risk: a limit must never keep a positi
 the same reason, how far the price moved since your approval request does not stop a close —
 refusing would leave you holding a position in a falling market.
 
+**First real close (2026-11-17, `/trade_close BTC`):** close order sent, verified by eToro's
+close-order lookup, position closed at 64,500.41 with proceeds of $49.06 on $49.97 invested.
+The first message reported "about -$0.44" from the prices alone; the result is now eToro's
+proceeds minus the amount invested (-$0.91 there), which includes eToro's closing costs.
+
 **What is sent:** `POST /api/v1/trading/execution/demo/market-close-orders/positions/{positionId}`
 with `{ InstrumentID, UnitsToDeduct: null }` — the whole position. Partial closes are not used.
 The result is fetched with eToro's close-order lookup; the position is then marked closed with

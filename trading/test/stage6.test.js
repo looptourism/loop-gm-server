@@ -110,7 +110,9 @@ test("Telegram texts for closing and for limits", () => {
   const proposal = { action: "close", symbol: "BTC", amountUsd: 49.97, details: { etoroPositionId: 3643444338, openRate: 65069.63, openedAt: "2099-11-16T20:11:25Z", reason: "exit condition reached: price at or below 61740.3" } };
   const req = notify.approvalRequest({ proposal, verdict: assess(closeInput()), price: { bid: 61700, ageSec: 40 }, account: closeInput().account, expiresAt: new Date("2099-11-17T15:25:00Z") });
   for (const piece of ["Approve a CLOSE? — BTC", "(DEMO)", "Position 3643444338: $49.97 invested, opened at 65069.63 on 2099-11-16", "Profit/loss now: -$0.26", "bid 61700 (40 s old)", "exit condition reached", "whole position is closed", "Answer by 15:25 UTC", "Reject keeps it open"]) assert.ok(req.includes(piece), piece);
-  assert.match(notify.executionResult({ status: "closed", proposal, etoroPositionId: 3643444338, closeRate: 61700, pnlUsd: -2.59, proceedsUsd: 47.38 }), /Position closed — BTC[\s\S]*closed at 61700[\s\S]*about -\$2\.59[\s\S]*fees not included[\s\S]*proceeds of \$47\.38/);
+  // the first real close (2026-11-17): proceeds 49.06 on 49.97 invested
+  assert.match(notify.executionResult({ status: "closed", proposal, etoroPositionId: 3643444338, closeRate: 64500.41, pnlUsd: -0.91, resultBasis: "proceeds", proceedsUsd: 49.06, investedUsd: 49.97 }), /Position closed — BTC[\s\S]*closed at 64500\.41[\s\S]*Result: -\$0\.91 — eToro's proceeds \$49\.06 minus \$49\.97 invested/);
+  assert.match(notify.executionResult({ status: "closed", proposal, etoroPositionId: 3643444338, closeRate: 64500.41, pnlUsd: -0.44, resultBasis: "prices" }), /about -\$0\.44 \(from the open and close prices only; eToro reported no proceeds/);
   assert.match(notify.executionResult({ status: "rejected", reason: "eToro did not close the position", proposal }), /Close rejected by eToro — CLOSE BTC[\s\S]*still open and watched/);
   assert.match(notify.approvalClosed({ symbol: "BTC", amountUsd: 49.97, action: "close", outcome: "rejected" }), /Rejected — nothing was sent<\/b> — CLOSE BTC/);
   assert.match(notify.limitAlert({ level: 80, limits: [{ label: "Crypto exposure (MSTR counts)", unit: "$", value: 1250, limit: 1500, pct: 83 }] }), /Limit approached[\s\S]*Crypto exposure \(MSTR counts\): \$1250\.00 of \$1500\.00 \(83%\)[\s\S]*will be refused/);
@@ -147,7 +149,7 @@ async function world(db) {
     redact: (x) => String(x ?? ""),
     getDemoPnl: async () => { if (w.pnlDown) throw new Error("eToro 503"); return { data: { clientPortfolio: { credit: w.credit, positions: w.held, ordersForOpen: [], orders: [], mirrors: [] } }, source: "eToro Public API GET /api/v1/trading/info/demo/pnl", fetchedAt: w.t.toISOString() }; },
     getRates: async ([id]) => ({ status: 200, source: "eToro rates", fetchedAt: w.t.toISOString(), data: { results: [{ instrumentId: id, bid: 61700, ask: 61750, quoteType: "realtime", date: new Date(w.t.getTime() - 30000).toISOString().replace("Z", "") }] } }),
-    getDemoCloseOrder: async (orderId) => { w.lookups.push(orderId); return { data: { orderID: orderId, statusID: w.closeLookup.statusID, errorCode: w.closeLookup.errorCode ?? null, errorMessage: w.closeLookup.errorMessage ?? null, proceeds: 47.38, positions: w.closeLookup.statusID === 3 ? [{ positionID: POS, occurred: "2099-11-17T15:10:02Z", rate: 61700, units: 0.000768, amount: 49.97 }] : [] } }; },
+    getDemoCloseOrder: async (orderId) => { w.lookups.push(orderId); return { data: { orderID: orderId, statusID: w.closeLookup.statusID, errorCode: w.closeLookup.errorCode ?? null, errorMessage: w.closeLookup.errorMessage ?? null, proceeds: 47.10, positions: w.closeLookup.statusID === 3 ? [{ positionID: POS, occurred: "2099-11-17T15:10:02Z", rate: 61700, units: 0.000768, amount: 49.97 }] : [] } }; },
     getDemoOrder: async () => { throw new Error("an open-order lookup must not be used for a close"); },
   };
   w.orders = { redact: (x) => String(x ?? ""), placeDemoOrder: async () => { throw new Error("a buy must not be sent when closing"); },
@@ -185,11 +187,13 @@ dbTest("the whole close: proposal → risk check → Telegram → Approve → li
   assert.deepStrictEqual(w.closeCalls, [{ pid: POS, body: { InstrumentID: 100000, UnitsToDeduct: null }, idempotencyKey: idem }]);
   assert.deepStrictEqual(w.lookups, [13904638]);                                   // verified by eToro's close-order lookup
   const pos = await w.position();
-  assert.deepStrictEqual([pos.status, Number(pos.close_rate), Number(pos.realized_pnl_usd), pos.closed_at.toISOString()], ["closed", 61700, -2.59, "2099-11-17T15:10:02.000Z"]);
+  // the result is eToro's proceeds minus the dollars invested: 47.10 − 49.97 = −2.87 (the price change alone would say −2.59)
+  assert.deepStrictEqual([pos.status, Number(pos.close_rate), Number(pos.realized_pnl_usd), pos.closed_at.toISOString()], ["closed", 61700, -2.87, "2099-11-17T15:10:02.000Z"]);
   const o = (await w.db.query("select id, order_kind, status, etoro_order_id, request from trading.orders")).rows[0];
   assert.deepStrictEqual([o.order_kind, o.status, Number(o.etoro_order_id), o.request.path, pos.closed_by_order_id], ["close", "filled", 13904638, "POST /api/v1/trading/execution/demo/market-close-orders/positions/3643444338", o.id]);
   assert.strictEqual((await w.status(p.id)).status, "executed");
-  assert.deepStrictEqual(w.outcomes.map((x) => [x.status, x.closeRate, x.pnlUsd]), [["closed", 61700, -2.59]]);
+  assert.deepStrictEqual(w.outcomes.map((x) => [x.status, x.closeRate, x.pnlUsd, x.resultBasis, x.proceedsUsd, x.investedUsd]), [["closed", 61700, -2.87, "proceeds", 47.1, 49.97]]);
+  assert.match(notify.executionResult(w.outcomes[0]), /Result: -\$2\.87 — eToro's proceeds \$47\.10 minus \$49\.97 invested \(after eToro's closing costs/);
   assert.match(notify.executionResult(w.outcomes[0]), /Position closed — BTC/);
   const v = (await w.db.query("select phase, passed, engine_version from trading.risk_assessments order by created_at")).rows;
   assert.deepStrictEqual(v.map((x) => [x.phase, x.passed, x.engine_version]), [["pre_approval", true, "risk-engine-2"], ["pre_execution", true, "risk-engine-2"]]);
