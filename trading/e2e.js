@@ -101,7 +101,25 @@ async function buildE2E({ db, since }) {
       const done = Object.values(steps).filter(Boolean).length;
       if (!best || done > best.done) best = { symbol: p.symbol, proposalId: p.id, steps, done };
     }
-    out.flows[cls] = best || { symbol: null, proposalId: null, steps: Object.fromEntries(FLOW_STEPS.map(([k]) => [k, null])), done: 0 };
+    if (!best) {
+      // No proposal yet: the newest analysis still counts for its two steps,
+      // and what the agents decided is shown, so "no trade" is not a mystery.
+      best = { symbol: null, proposalId: null, steps: Object.fromEntries(FLOW_STEPS.map(([k]) => [k, null])), done: 0 };
+      const [a] = await q(`select a.id, a.created_at, a.snapshot_ids, a.recommendation, i.symbol from trading.analyses a join trading.instruments i on i.instrument_id = a.instrument_id
+                            where a.agent = $1 and a.created_at >= $2 order by a.created_at desc limit 1`, [cls, since]);
+      if (a) {
+        best.symbol = a.symbol;
+        best.steps.analysis = { at: iso(a.created_at), ref: `${cls} analysis ${short(a.id)} (${a.recommendation ?? "?"})` };
+        const [snap] = await q("select as_of, bid, source from trading.market_snapshots where id = any($1::uuid[]) and kind = 'rate' order by as_of desc limit 1", [a.snapshot_ids || []]);
+        if (snap) best.steps.monitoring = { at: iso(snap.as_of), ref: `bid ${Number(snap.bid)} from ${snap.source}` };
+        best.done = Object.values(best.steps).filter(Boolean).length;
+        // The Portfolio Manager's word on it, from the run that analysed it.
+        const [pm] = await q("select output from trading.analyses where agent = 'portfolio_manager' and created_at >= $1 order by created_at limit 1", [a.created_at]);
+        const d = (Array.isArray(pm?.output?.decisions) ? pm.output.decisions : []).find((x) => x && x.symbol === a.symbol);
+        best.noTrade = { analyst: a.recommendation ?? null, manager: d ? String(d.decision ?? "") : null };
+      }
+    }
+    out.flows[cls] = best;
   }
 
   const one = async (sql, args, ref) => { const [r] = await q(sql, args); return r ? { at: iso(r.at), ref: ref(r) } : null; };
@@ -122,12 +140,12 @@ async function buildE2E({ db, since }) {
 }
 
 // What to do next, for the first missing step. Plain text, built by code.
-function nextHint(cls, key, symbol) {
+function nextHint(cls, key, symbol, noTrade = null) {
   const sym = symbol || (cls === "stock" ? "a stock" : "a coin");
   return {
     monitoring: `/trade_run ${cls === "stock" ? "NKE" : "BTC"} — the agents analyse it from stored prices`,
     analysis: `/trade_run ${symbol || (cls === "stock" ? "NKE" : "BTC")}`,
-    proposal: "the agents did not propose a buy; try /trade_run with another symbol",
+    proposal: noTrade ? `the agents decided not to buy ${symbol} (analyst: ${noTrade.analyst || "?"}${noTrade.manager ? `, manager: ${noTrade.manager}` : ""}). Try /trade_run with other symbols, or wait for a scheduled run` : "the agents did not propose a buy; try /trade_run with another symbol",
     risk: "wait for the risk engine (within a minute), or read why it was rejected",
     approval: "tap Approve on the Telegram request (not in the console, for this step)",
     order: "the order is being sent or looked up — /trade_status",
@@ -147,7 +165,7 @@ function e2eText(r) {
     let hinted = false;
     for (const [k, label] of FLOW_STEPS) {
       const s = f.steps[k];
-      lines.push(s ? `✅ ${label} — ${notify.esc(s.ref)}, ${notify.esc(s.at.slice(5, 16).replace("T", " "))}` : `⬜ ${label}${!hinted ? `\n    → ${notify.esc(nextHint(cls, k, f.symbol))}` : ""}`);
+      lines.push(s ? `✅ ${label} — ${notify.esc(s.ref)}, ${notify.esc(s.at.slice(5, 16).replace("T", " "))}` : `⬜ ${label}${!hinted ? `\n    → ${notify.esc(nextHint(cls, k, f.symbol, f.noTrade))}` : ""}`);
       if (!s) hinted = true;
     }
   }
