@@ -529,8 +529,9 @@ dbTest("after your approval, live facts are checked again — and each of these 
     const s = await world2.status(id);
     assert.strictEqual(s.status, "failed", what);
     assert.match(s.status_reason, pattern, what);
-    assert.strictEqual(world2.outcomes.length, 0);
-    assert.match(world2.edits[world2.edits.length - 1].html, /Approved/);            // your tap is acknowledged…
+    assert.deepStrictEqual(world2.outcomes.map((o) => [o.status, o.sent]), [["refused", false]], what);   // you are told (Stage 8 fix)…
+    assert.match(world2.outcomes[0].reason, pattern, what);
+    assert.match(world2.edits[world2.edits.length - 1].html, /Approved[\s\S]*but NO order was sent/);  // …and the approved request says so
   }
   assert.strictEqual(await w.count("select count(*) as n from trading.orders"), 0);
   assert.strictEqual(await w.count("select count(*) as n from trading.risk_assessments where phase = 'pre_execution' and not passed"), cases.length);

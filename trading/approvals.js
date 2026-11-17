@@ -183,7 +183,7 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
     await notifier.answer(cq.id, r.outcome === "approved" ? "Approved — checking and sending" : r.outcome === "rejected" ? "Rejected" : r.message.slice(0, 180));
     const messageId = cq.message?.message_id ?? r.messageId;
     if (messageId && r.proposal && r.outcome !== "already_decided") {
-      await notifier.edit(messageId, notify.approvalClosed({ symbol: r.proposal.symbol, amountUsd: r.proposal.amountUsd, action: r.proposal.action, outcome: r.outcome, note: r.outcome === "approved" || r.outcome === "rejected" ? null : r.message, at: now() }));
+      await notifier.edit(messageId, notify.approvalClosed({ symbol: r.proposal.symbol, amountUsd: r.proposal.amountUsd, action: r.proposal.action, outcome: r.outcome, note: r.outcome === "approved" ? notSentNote(r.execution) : r.outcome === "rejected" ? null : r.message, at: now() }));
     }
     return true;
   }
@@ -192,11 +192,14 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
   // A tap on Approve / Reject in the console's Trading Desk tab (Stage 7). The
   // same decide() as Telegram, recorded with channel "dashboard"; the Telegram
   // request for the same approval is then edited so its buttons are gone.
+  // On the approved request itself: whether the order was then sent.
+  const notSentNote = (x) => (x && x.sent === false ? `but NO order was sent: ${x.reason}` : null);
+
   async function decideFromDashboard(approvalId, approve) {
     if (!/^[0-9a-f-]{36}$/.test(String(approvalId || ""))) return { outcome: "unknown", message: "This request is not on record. Nothing was done." };
     const r = await decide(approvalId, approve, { channel: "dashboard", actor: "console" });
     if (r.messageId && r.proposal && r.outcome !== "already_decided") {
-      await notifier.edit(r.messageId, notify.approvalClosed({ symbol: r.proposal.symbol, amountUsd: r.proposal.amountUsd, action: r.proposal.action, outcome: r.outcome, note: r.outcome === "approved" || r.outcome === "rejected" ? "decided in the console" : r.message, at: now() }));
+      await notifier.edit(r.messageId, notify.approvalClosed({ symbol: r.proposal.symbol, amountUsd: r.proposal.amountUsd, action: r.proposal.action, outcome: r.outcome, note: r.outcome === "approved" ? ["decided in the console", notSentNote(r.execution)].filter(Boolean).join(", ") : r.outcome === "rejected" ? "decided in the console" : r.message, at: now() }));
     }
     return r;
   }
