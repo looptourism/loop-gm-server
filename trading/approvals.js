@@ -163,6 +163,18 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
   }
 
   // Every minute: expire, offer what can be offered, settle orders in flight.
+  // A tap on Approve / Reject in the console's Trading Desk tab (Stage 7). The
+  // same decide() as Telegram, recorded with channel "dashboard"; the Telegram
+  // request for the same approval is then edited so its buttons are gone.
+  async function decideFromDashboard(approvalId, approve) {
+    if (!/^[0-9a-f-]{36}$/.test(String(approvalId || ""))) return { outcome: "unknown", message: "This request is not on record. Nothing was done." };
+    const r = await decide(approvalId, approve, { channel: "dashboard", actor: "console" });
+    if (r.messageId && r.proposal && r.outcome !== "already_decided") {
+      await notifier.edit(r.messageId, notify.approvalClosed({ symbol: r.proposal.symbol, amountUsd: r.proposal.amountUsd, action: r.proposal.action, outcome: r.outcome, note: r.outcome === "approved" || r.outcome === "rejected" ? "decided in the console" : r.message, at: now() }));
+    }
+    return r;
+  }
+
   async function tick() {
     if (busy) return { skipped: "busy" };
     busy = true;
@@ -189,7 +201,7 @@ function createApprovals({ config, db, client, gateway, notifier, policy = POLIC
     return { proposals: Object.fromEntries(r.rows.map((x) => [x.status, Number(x.n)])), ordersInFlight: Object.fromEntries(o.rows.map((x) => [x.status, Number(x.n)])), tradingOff: await tradingOff() };
   }
 
-  return { dispatch, decide, expireOld, tick, start, summary, ownsCallback, handleTelegramCallback };
+  return { dispatch, decide, decideFromDashboard, expireOld, tick, start, summary, ownsCallback, handleTelegramCallback };
 }
 
 module.exports = { createApprovals, inQuietHours, CALLBACK };

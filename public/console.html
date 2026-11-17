@@ -134,7 +134,9 @@ line.flow-fast{stroke-dasharray:6 6;animation:flow .8s linear infinite}
 @media (min-width:1024px){ body.office-on .side-chat{display:none} .main.office{flex:1;min-width:0} .office-frame{height:calc(100dvh - 40px);border-radius:26px;border:1px solid var(--line)} }
 
 /* ---------- bottom nav ---------- */
-.tabbar{position:fixed;z-index:20;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 12px);transform:translateX(-50%);width:calc(100% - 32px);max-width:428px;border-radius:24px;border:1px solid rgba(255,255,255,.1);background:rgba(18,19,32,.86);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);padding:6px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+.tabbar{position:fixed;z-index:20;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 12px);transform:translateX(-50%);width:calc(100% - 32px);max-width:428px;border-radius:24px;border:1px solid rgba(255,255,255,.1);background:rgba(18,19,32,.86);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);padding:6px;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}
+.tabbar a.desk[aria-current="page"],.sidebar a.desk[aria-current="page"]{background:rgba(91,217,245,.14);color:#5BD9F5}
+.desk-demo{font:700 9px/1 'IBM Plex Mono',monospace;letter-spacing:.05em;padding:2px 5px;border-radius:6px;background:#F5B85B;color:#2A1806}
 .tabbar a{height:56px;border-radius:18px;color:var(--muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:12px;font-weight:500;text-decoration:none}
 .tabbar a[aria-current="page"]{background:rgba(165,148,255,.16);color:var(--accent);font-weight:600}
 
@@ -275,6 +277,7 @@ line.flow-fast{stroke-dasharray:6 6;animation:flow .8s linear infinite}
    1) الأيقونات
    ========================================================= */
 const ICONS={
+  chart:'<path d="M4 19h16"/><path d="M6 15l4-4 3 3 5-6"/><path d="M15 8h3v3"/>',
  office:'<path d="M4 20V6.5a1.5 1.5 0 0 1 1.5-1.5h7A1.5 1.5 0 0 1 14 6.5V20"/><path d="M14 10h4.5A1.5 1.5 0 0 1 20 11.5V20"/><path d="M2.5 20h19"/><path d="M7.5 9h3M7.5 12.5h3M7.5 16h3"/>',
  fin:'<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M16 14.5h2"/>',
  mkt:'<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a4 4 0 0 1 0 6"/><path d="M18 6.5a8 8 0 0 1 0 11"/>',
@@ -749,10 +752,12 @@ const pendingCount=()=>S.approvals.length;
 
 function renderChrome(r){
   const tab=(k,label,h)=>`<a href="#${h}" ${r.name===h||(h==='depts'&&['depts','dept','accounting','new-payment'].includes(r.name))?'aria-current="page"':''}>${ic(k)}<span>${label}</span></a>`;
-  document.getElementById('tabbar').innerHTML=tab('home','الرئيسية','home')+tab('gm','المدير العام','gm')+tab('depts','الأقسام','depts')+tab('office','المكتب','office');
+  // Trading Desk: its own tab, kept apart from the company's departments (Stage 7).
+  const deskTab=`<a href="#trading" class="desk" ${r.name==='trading'?'aria-current="page"':''}>${ic('chart')}<span>التداول</span></a>`;
+  document.getElementById('tabbar').innerHTML=tab('home','الرئيسية','home')+tab('gm','المدير العام','gm')+tab('depts','الأقسام','depts')+tab('office','المكتب','office')+deskTab;
   const sl=(k,label,h,cls='',badge='')=>`<a href="#${h}" class="${cls}" ${r.name===h?'aria-current="page"':''}>${ic(k)}<span>${label}</span>${badge}</a>`;
   document.getElementById('sidebar').innerHTML=`<img class="brand-logo" src="${LOGO}" alt="Loop Travel & Tourism">
-   <nav aria-label="القائمة الرئيسية" class="col" style="gap:4px">${sl('home','الرئيسية','home')}${sl('gm','المدير العام','gm')}${sl('depts','الأقسام','depts')}${sl('office','المكتب','office')}<hr>${sl('sec','السكرتير','secretary','amber')}${sl('bell','بانتظار قرارك','approvals','',pendingCount()?`<span class="badge">${pendingCount()}</span>`:'')}${sl('gear','الإعدادات','settings')}</nav>
+   <nav aria-label="القائمة الرئيسية" class="col" style="gap:4px">${sl('home','الرئيسية','home')}${sl('gm','المدير العام','gm')}${sl('depts','الأقسام','depts')}${sl('office','المكتب','office')}<hr><a href="#trading" class="desk" ${r.name==='trading'?'aria-current="page"':''}>${ic('chart')}<span>مكتب التداول</span><span class="desk-demo">DEMO</span></a><hr>${sl('sec','السكرتير','secretary','amber')}${sl('bell','بانتظار قرارك','approvals','',pendingCount()?`<span class="badge">${pendingCount()}</span>`:'')}${sl('gear','الإعدادات','settings')}</nav>
    <div class="sys">${offline()?`<span class="dot" style="background:var(--coral)"></span>النظام غير متصل`:`<span class="dot live" style="background:var(--mint)"></span>كل الأنظمة تعمل`}</div>`;
   const sideOn=wide()&&r.name==='home';
   document.body.classList.toggle('with-side',sideOn);
@@ -1268,14 +1273,17 @@ function render(keepScroll){
 }
 /* المكتب: صفحة /office نفسها داخل اللوحة. الإطار يُنشأ مرة واحدة ولا يُعاد
    رسمه مع تحديثات اللوحة، حتى لا ينقطع المشهد أو بثّ الأحداث الحي. */
-const viewOffice=()=>`<h1 class="sr">المكتب</h1><iframe class="office-frame" src="/office?embed=1" title="المكتب — نشاط الوكلاء المباشر" allow="autoplay"></iframe>`;
+const viewOffice=()=>`<h1 class="sr">المكتب</h1><iframe class="office-frame" data-frame="office" src="/office?embed=1" title="المكتب — نشاط الوكلاء المباشر" allow="autoplay"></iframe>`;
+/* مكتب التداول (تجريبي): صفحة مستقلة يقدّمها موديول التداول، تُعرض هنا في إطار مثل المكتب. */
+const viewTrading=()=>`<h1 class="sr">مكتب التداول — تجريبي</h1><iframe class="office-frame" data-frame="trading" src="/trading-desk" title="مكتب التداول — حساب تجريبي"></iframe>`;
 function _render(keepScroll){
   if(!S){document.getElementById('view').innerHTML='<div class="empty"><span class="spin" style="display:inline-block"></span></div>';return}
   const r=route(), v=document.getElementById('view'), y=scrollY;
   renderChrome(r);
-  v.classList.toggle('office',r.name==='office'); document.body.classList.toggle('office-on',r.name==='office');
-  if(r.name==='office'&&v.querySelector('.office-frame')){ v.classList.remove('has-composer'); document.getElementById('tabbar').hidden=false; return; }
-  const views={home:viewHome,gm:viewChat,depts:viewDepts,dept:()=>viewDept(r.arg),secretary:viewSecretary,approvals:viewApprovals,settings:viewSettings,accounting:viewAccounting,'new-payment':viewNewPayment,bookings:viewBookings,'new-booking':viewNewBooking,office:viewOffice};
+  const framed=['office','trading'].includes(r.name);
+  v.classList.toggle('office',framed); document.body.classList.toggle('office-on',framed);
+  if(framed&&v.querySelector(`.office-frame[data-frame="${r.name}"]`)){ v.classList.remove('has-composer'); document.getElementById('tabbar').hidden=false; return; }
+  const views={home:viewHome,gm:viewChat,depts:viewDepts,dept:()=>viewDept(r.arg),secretary:viewSecretary,approvals:viewApprovals,settings:viewSettings,accounting:viewAccounting,'new-payment':viewNewPayment,bookings:viewBookings,'new-booking':viewNewBooking,office:viewOffice,trading:viewTrading};
   if(r.name==='gm'&&wide()){/* على الآيباد المحادثة في الشاشة الرئيسية */}
   v.innerHTML=(views[r.name]||viewHome)();
   v.classList.toggle('has-composer',['gm','accounting'].includes(r.name));

@@ -34,6 +34,9 @@ const { POLICY } = require("./policy");
 const { AGENTS } = require("./config");
 const notify = require("./notify");
 const { createPositionMonitor } = require("./positions");
+const { buildDesk } = require("./desk/data");
+const path = require("path");
+const DESK_PAGE = path.join(__dirname, "desk", "desk.html");
 const { createOrderClient } = require("./execution/etoro-orders");
 const { createGateway } = require("./execution/gateway");
 const { createApprovals } = require("./approvals");
@@ -471,6 +474,49 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
         proposals: proposals.map(({ details, ...p }) => p), approvals: approvalRows.rows, orders: orderRows.rows,
         riskVerdicts: verdicts.rows.map((v) => ({ at: v.created_at, symbol: v.symbol, phase: v.phase, passed: v.passed, engine: v.engine_version, failed: v.checks.filter((c) => !c.passed).map((c) => `${c.name}: ${c.message}`), checks: req.query.all === "yes" ? v.checks : undefined })),
       });
+    } catch (e) { fail(res, e); }
+  });
+
+  // --- Stage 7: the Trading Desk page in the console ------------------------
+  // The page itself. The console shows it in a frame (its "التداول" tab), the
+  // same way it shows the Office page; it can also be opened on its own.
+  app.get("/trading-desk", (req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.set("Content-Security-Policy", "frame-ancestors 'self'");
+    if (!authOn) return res.status(503).type("text/plain; charset=utf-8").send("Trading Desk is closed: CONSOLE_PASSWORD is not set on the server");
+    res.sendFile(DESK_PAGE);
+  });
+
+  // Everything the page shows, read-only. No call to eToro or Claude.
+  app.get("/api/trading/desk", dbGuard, async (req, res) => {
+    try { res.json(await buildDesk({ db, config, agents, positions, approvals })); } catch (e) { fail(res, e); }
+  });
+
+  // Approve / Reject from the page. Only for a request that is already waiting;
+  // it goes through the same decision and the same gateway as Telegram.
+  // Requests from other sites are refused: the browser sends the custom header
+  // only from this origin (the server's CORS rules do not allow it from
+  // elsewhere), and the Origin header, when present, must be this server.
+  const post = typeof app.post === "function" ? app.post.bind(app) : () => {};
+  post("/api/trading/desk/decide", dbGuard, async (req, res) => {
+    const origin = req.get ? req.get("Origin") : null;
+    const host = req.get ? req.get("Host") : null;
+    if ((req.get && req.get("X-Trading-Desk")) !== "1" || (origin && host && new URL(origin).host !== host)) return res.status(403).json({ ok: false, error: "refused: not sent from the Trading Desk page" });
+    const decision = req.body?.decision;
+    if (!["approve", "reject"].includes(decision)) return res.status(400).json({ ok: false, error: "decision must be approve or reject" });
+    try {
+      const r = await approvals.decideFromDashboard(String(req.body?.approvalId || ""), decision === "approve");
+      const x = r.execution;
+      const message = r.outcome === "rejected" ? "رُفض. لم يُرسل أي أمر."
+        : r.outcome === "approved" ? (!x ? "اعتُمد." : x.status === "filled" ? "اعتُمد ونُفّذ الأمر على الحساب التجريبي." : x.status === "closed" ? "اعتُمد وأُغلق المركز." : x.status === "submitted" ? "اعتُمد وقبله eToro، ولم يُنفَّذ بعد." : x.status === "unknown" ? "اعتُمد، لكن نتيجة الأمر غير معروفة بعد. سيُتحقق منها ولن يُرسل مرة ثانية." : x.status === "rejected" ? `اعتُمد، لكن eToro رفضه: ${x.reason}` : `اعتُمد، لكن لم يُرسل أي أمر: ${x.reason}`)
+        : r.outcome === "expired" ? "انتهت صلاحية الطلب. لم يُرسل أي أمر."
+        : r.outcome === "already_decided" ? "سبق البتّ في هذا الطلب. لم يتغيّر شيء."
+        : r.outcome === "mismatch" ? "الطلب لا يطابق معطيات المقترح، فلم يُنفَّذ شيء. يلزم مقترح جديد."
+        : r.outcome === "not_pending" ? "المقترح لم يعد بانتظار قرار. لم يُنفَّذ شيء."
+        : r.outcome === "unknown" ? "هذا الطلب غير موجود في السجل. لم يُنفَّذ شيء."
+        : r.outcome === "error" ? "تعذّر تسجيل القرار، فلم يُنفَّذ شيء."
+        : r.message;
+      res.json({ ok: r.outcome === "approved" || r.outcome === "rejected", outcome: r.outcome, execution: x ? { status: x.status, reason: x.reason ?? null } : null, message });
     } catch (e) { fail(res, e); }
   });
 
