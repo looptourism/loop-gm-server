@@ -85,6 +85,7 @@ const hhmm = (d) => `${new Date(d).toISOString().slice(11, 16)} UTC`;
 // The message with the Approve / Reject buttons. Everything in it comes from
 // the stored proposal, the risk engine's verdict and the price it used.
 function approvalRequest({ proposal, verdict, price, account, expiresAt }) {
+  if (proposal.action === "close") return closeRequest({ proposal, verdict, price, account, expiresAt });
   const d = proposal.details || {};
   const exits = Array.isArray(d.exit_conditions) ? d.exit_conditions : [];
   const stop = exits.filter((c) => c.type === "price_below").map((c) => c.value);
@@ -106,20 +107,43 @@ function approvalRequest({ proposal, verdict, price, account, expiresAt }) {
   return clip(lines.join("\n"), 3900);
 }
 
+// The request to CLOSE a position (Stage 6).
+function closeRequest({ proposal, verdict, price, account, expiresAt }) {
+  const d = proposal.details || {};
+  const live = account?.ok ? account.positions.find((p) => p.positionId === d.etoroPositionId) : null;
+  const lines = [
+    `🔴 <b>Approve a CLOSE? — ${esc(proposal.symbol)}</b> (DEMO)`,
+    `Position ${esc(d.etoroPositionId)}: ${usd(live ? live.amountUsd : proposal.amountUsd)} invested${d.openRate ? `, opened at ${d.openRate}` : ""}${d.openedAt ? ` on ${String(d.openedAt).slice(0, 10)}` : ""}`,
+  ];
+  if (live && typeof live.unrealizedPnlUsd === "number") lines.push(`Profit/loss now: ${live.unrealizedPnlUsd < 0 ? "-" : "+"}${usd(Math.abs(live.unrealizedPnlUsd))} (eToro)`);
+  lines.push(`Price now: bid ${price.bid} (${price.ageSec} s old)`);
+  if (d.reason) lines.push(`Why: ${esc(clip(d.reason, 300))}`);
+  lines.push("The whole position is closed at the market price. The position is checked again at eToro before anything is sent.");
+  lines.push(`⏳ Answer by ${hhmm(expiresAt)}. Reject keeps it open; it stays watched.`);
+  return clip(lines.join("\n"), 3900);
+}
+
 // What the request message becomes once it is decided, expired or withdrawn.
-function approvalClosed({ symbol, amountUsd, outcome, note = null, at = null }) {
+function approvalClosed({ symbol, amountUsd, outcome, action = "open", note = null, at = null }) {
   const head = { approved: "✅ Approved", rejected: "❌ Rejected — nothing was sent", expired: "⌛ Expired — nothing was sent", withdrawn: "↩️ Withdrawn — nothing was sent", mismatch: "⛔ Refused — nothing was sent", not_pending: "ℹ️ No longer open", unknown: "ℹ️ Not on record", error: "⚠️ Not recorded — nothing was sent" }[outcome] || "ℹ️ Closed";
-  return [`<b>${head}</b> — BUY ${esc(symbol)} ${usd(amountUsd)} (DEMO)`, at ? `at ${hhmm(at)}` : null, note ? esc(clip(note, 300)) : null].filter(Boolean).join("\n");
+  return [`<b>${head}</b> — ${action === "close" ? "CLOSE" : "BUY"} ${esc(symbol)} ${usd(amountUsd)} (DEMO)`, at ? `at ${hhmm(at)}` : null, note ? esc(clip(note, 300)) : null].filter(Boolean).join("\n");
 }
 
 function riskRejected({ proposal, reasons }) {
-  return clip([`🛑 <b>Proposal stopped by the risk engine — ${esc(proposal.symbol)}</b> (DEMO)`, `BUY ${usd(proposal.amountUsd)} was not offered for approval.`, ...reasons.slice(0, 6).map((r) => `• ${esc(clip(r, 220))}`), reasons.length > 6 ? `… and ${reasons.length - 6} more` : null].filter(Boolean).join("\n"), 3900);
+  return clip([`🛑 <b>Proposal stopped by the risk engine — ${esc(proposal.symbol)}</b> (DEMO)`, `${proposal.action === "close" ? "CLOSE" : "BUY"} ${usd(proposal.amountUsd)} was not offered for approval.${proposal.action === "close" ? " The position stays open and watched." : ""}`, ...reasons.slice(0, 6).map((r) => `• ${esc(clip(r, 220))}`), reasons.length > 6 ? `… and ${reasons.length - 6} more` : null].filter(Boolean).join("\n"), 3900);
 }
 
 // What happened after an approval: built from the gateway's outcome.
 function executionResult(o) {
   const p = o.proposal || {};
-  const what = `BUY ${esc(p.symbol)} ${usd(p.amountUsd)} (DEMO)`;
+  const what = `${p.action === "close" ? "CLOSE" : "BUY"} ${esc(p.symbol)} ${usd(p.amountUsd)} (DEMO)`;
+  if (o.status === "closed") {
+    const lines = [`✅ <b>Position closed — ${esc(p.symbol)}</b> (DEMO)`, `Position ${esc(o.etoroPositionId)}${o.closeRate ? ` closed at ${o.closeRate}` : ""}`];
+    if (typeof o.pnlUsd === "number") lines.push(`Result: about ${o.pnlUsd < 0 ? "-" : "+"}${usd(Math.abs(o.pnlUsd))} (from the open and close prices; fees not included)`);
+    if (typeof o.proceedsUsd === "number") lines.push(`eToro reports proceeds of ${usd(o.proceedsUsd)}`);
+    if (o.note) lines.push(esc(o.note));
+    return lines.join("\n");
+  }
   if (o.status === "filled") {
     const pos = (o.positions || [])[0];
     const lines = [`✅ <b>Order filled — ${what}</b>`];
@@ -129,10 +153,18 @@ function executionResult(o) {
     lines.push("Open positions are checked every 15 minutes; nothing is closed without you.");
     return lines.join("\n");
   }
-  if (o.status === "submitted") return `⏳ <b>Order accepted, not executed yet — ${what}</b>\n${esc(clip(o.reason, 300))}\nI will tell you when it fills or is rejected.`;
+  if (o.status === "submitted") return `⏳ <b>${p.action === "close" ? "Close" : "Order"} accepted, not executed yet — ${what}</b>\n${esc(clip(o.reason, 300))}\nI will tell you when it fills or is rejected.`;
   if (o.status === "unknown") return `⚠️ <b>Order result unknown — ${what}</b>\n${esc(clip(o.reason, 400))}`;
-  if (o.status === "rejected") return `❌ <b>Order rejected by eToro — ${what}</b>\n${esc(clip(o.reason, 400))}\nNo position was opened.`;
+  if (o.status === "rejected") return `❌ <b>${p.action === "close" ? "Close" : "Order"} rejected by eToro — ${what}</b>\n${esc(clip(o.reason, 400))}\n${p.action === "close" ? "The position is still open and watched." : "No position was opened."}`;
   return `🛑 <b>No order was sent — ${what}</b>\n${esc(clip(o.reason, 600))}\nA new proposal and a new approval are needed to try again.`;
+}
+
+// A warning about the account as a whole: a limit approached or reached.
+function limitAlert({ limits, level }) {
+  const head = level === 100 ? "⛔ <b>Limit reached</b> (DEMO)" : "⚠️ <b>Limit approached</b> (DEMO)";
+  const lines = [head, ...limits.map((l) => `• ${esc(l.label)}: ${l.unit === "$" ? usd(l.value) : l.value} of ${l.unit === "$" ? usd(l.limit) : l.limit} (${l.pct}%)`)];
+  lines.push(level === 100 ? "The risk engine refuses every new buy that would go past it. Closing is not affected." : "New buys that would go past it will be refused by the risk engine.");
+  return lines.join("\n");
 }
 
 // The answer to /trade_status.
@@ -154,11 +186,14 @@ function statusText({ agents, budget, lastRun, dbState, positions = null, tradin
   } else lines.push("🕘 Last run: none yet");
   if (positions) {
     const c = positions.lastCheck;
+    const lim = positions.lastCheck?.limits;
+    if (Array.isArray(lim) && lim.length) lines.push(`📏 Limits: ${lim.map((l) => `${esc(l.short)} ${l.unit === "$" ? usd(l.value) : l.value}/${l.unit === "$" ? usd(l.limit) : l.limit}`).join(" · ")}`);
     lines.push(!positions.scheduled ? "👁 Position checks: off" : !c ? "👁 Position checks: on, first check pending" : c.error ? `⚠️ Position checks: last one failed at ${when(c.startedAt)}` : `👁 Positions: ${c.account?.openPositions ?? 0} open, checked ${when(c.startedAt)}${c.account?.openPositions ? `, profit/loss ${c.account.unrealizedPnlUsd < 0 ? "-" : "+"}${usd(Math.abs(c.account.unrealizedPnlUsd))}` : ""}`);
   }
   lines.push("/trade_run — start a screened run · /trade_run crypto — coins only");
   lines.push("/trade_stop — stop all trading now · /trade_resume — allow it again");
   lines.push("/trade_test BTC 50 — a small test trade through the same checks and your approval");
+  lines.push("/trade_close BTC — propose closing a position (your approval needed)");
   return lines.join("\n");
 }
 
@@ -193,8 +228,9 @@ const COMMANDS = [
   { command: "trade_run", description: "مكتب التداول (تجريبي): تشغيل فحص وتحليل الآن" },
   { command: "trade_status", description: "مكتب التداول (تجريبي): الحالة والميزانية وآخر تشغيل" },
   { command: "trade_test", description: "مكتب التداول (تجريبي): صفقة اختبار صغيرة، مثال: /trade_test BTC 50" },
+  { command: "trade_close", description: "مكتب التداول (تجريبي): اقتراح إغلاق مركز، مثال: /trade_close BTC" },
   { command: "trade_stop", description: "مكتب التداول (تجريبي): إيقاف التداول فورًا" },
   { command: "trade_resume", description: "مكتب التداول (تجريبي): السماح بالتداول من جديد" },
 ];
 
-module.exports = { createNotifier, runSummary, statusText, positionAlert, approvalRequest, approvalClosed, riskRejected, executionResult, budgetLine, COMMANDS, esc };
+module.exports = { createNotifier, runSummary, statusText, positionAlert, limitAlert, closeRequest, approvalRequest, approvalClosed, riskRejected, executionResult, budgetLine, COMMANDS, esc };

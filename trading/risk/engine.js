@@ -15,12 +15,49 @@
 //   pre_execution  — after approval, immediately before the order is sent
 //                    (live price, plus how far it moved since the request)
 // ---------------------------------------------------------------------------
-const ENGINE_VERSION = "risk-engine-1";
+const ENGINE_VERSION = "risk-engine-2";
 const DAY = 86400000;
 const r2 = (n) => Math.round(n * 100) / 100;
 const num = (v) => typeof v === "number" && Number.isFinite(v);
 
+// A CLOSE reduces risk, so the opening limits (cash, exposure, positions,
+// daily loss, the swing plan) do not apply to it: a limit must never keep a
+// position open. What is checked is that this is exactly the position the
+// owner approved closing, that it is still open, and that the switches and
+// the price allow an order now. The price may have moved since the request:
+// for a close that is not a reason to refuse, because refusing would leave
+// the position open in a falling market.
+function assessClose(input) {
+  const { phase, now, policy, proposal, account, position, closeInFlight, price } = input;
+  const checks = [], warnings = [];
+  const check = (name, passed, message, extra = {}) => { checks.push({ name, passed: passed === true, message, ...extra }); return passed === true; };
+  check("kill_switch", input.tradingEnabled === true && input.halted === false,
+    input.tradingEnabled !== true ? "trading is switched off (TRADING_ENABLED is not \"true\")" : input.halted === false ? "trading is switched on" : "trading was stopped (/trade_stop), or the stop state could not be read");
+  check("demo_only", policy.environment === "demo", "the desk trades the DEMO account only");
+  check("not_expired", now.getTime() < new Date(proposal.expiresAt).getTime(), `the proposal expires at ${new Date(proposal.expiresAt).toISOString()}`);
+  check("closes_a_position", proposal.action === "close" && proposal.direction === "buy" && proposal.leverage === 1 && proposal.orderType === "market",
+    proposal.action === "close" ? "closes a long, unleveraged position with a market order" : "not a close proposal");
+  check("position_on_record", !!position && position.status === "open" && position.instrumentId === proposal.instrumentId,
+    !position ? "the position is not in the desk's records" : position.status !== "open" ? `the desk's record says the position is ${position.status}` : position.instrumentId !== proposal.instrumentId ? "the position belongs to another instrument" : `position ${position.etoroPositionId} is on record as open`);
+  const acct = account && account.ok === true ? account : null;
+  check("account_readable", !!acct, acct ? `demo account read at ${acct.fetchedAt}` : `the demo account could not be read${account?.reason ? `: ${account.reason}` : ""}`);
+  const live = acct && position ? acct.positions.find((p) => p.positionId === position.etoroPositionId) : null;
+  check("position_open_at_etoro", !!live, !acct ? "unknown: the account could not be read" : !position ? "unknown: no position on record" : live ? `eToro lists position ${position.etoroPositionId} as open` : `eToro no longer lists position ${position?.etoroPositionId}: it is already closed`);
+  check("position_matches", !!live && live.instrumentId === proposal.instrumentId && live.direction === "buy" && live.leverage === 1,
+    !live ? "unknown: the position is not listed" : live.instrumentId !== proposal.instrumentId ? "eToro lists the position under another instrument" : live.direction !== "buy" ? "eToro lists it as a short position" : live.leverage !== 1 ? `eToro lists it with leverage ${live.leverage}` : "a long, unleveraged position in this instrument");
+  check("no_close_in_flight", !!closeInFlight && closeInFlight.ok === true && closeInFlight.count === 0,
+    !closeInFlight || closeInFlight.ok !== true ? `unknown whether another close is in flight${closeInFlight?.reason ? `: ${closeInFlight.reason}` : ""}` : closeInFlight.count ? "another close order for this position is already at eToro" : "no other close order for this position is in flight");
+  const px = price && price.ok === true && typeof price.bid === "number" && price.bid > 0 ? price : null;
+  const maxAge = phase === "pre_execution" ? policy.execution.priceMaxAgeSec : input.storedPriceMaxAgeSec;
+  check("fresh_price", !!px && px.quoteType === "realtime" && px.ageSec <= maxAge && px.ageSec >= -60,
+    !px ? `no usable price${price?.reason ? `: ${price.reason}` : ""} (a stock can be closed while its market is open)` : px.quoteType !== "realtime" ? `the price is ${px.quoteType || "of unknown type"}, not realtime` : `the price is ${px.ageSec} s old by eToro's own timestamp (limit ${maxAge} s)`, { limit: maxAge, actual: px?.ageSec ?? null });
+  if (live && typeof live.unrealizedPnlUsd === "number") warnings.push(`eToro shows ${live.unrealizedPnlUsd < 0 ? "a loss" : "a profit"} of $${Math.abs(Math.round(live.unrealizedPnlUsd * 100) / 100)} on this position now`);
+  const failed = checks.filter((c) => !c.passed);
+  return { engineVersion: ENGINE_VERSION, phase, passed: failed.length === 0, failed: failed.map((c) => c.name), checks, warnings };
+}
+
 function assess(input) {
+  if (input?.proposal?.action === "close") return assessClose(input);
   const { phase, now, policy, proposal, allowlist, account, commitments = [], price, dailyLoss, referenceAsk = null, earnings = null } = input;
   const checks = [], warnings = [];
   const check = (name, passed, message, extra = {}) => { checks.push({ name, passed: passed === true, message, ...extra }); return passed === true; };

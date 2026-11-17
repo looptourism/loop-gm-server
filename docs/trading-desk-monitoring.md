@@ -90,8 +90,9 @@ under the same switch as price monitoring (`TRADING_MONITOR_ENABLED`).
   nothing is judged on it; coins are checked around the clock.
 - **Each alert is sent once** per position and condition. If Telegram does not accept it, it is
   not recorded as sent and the next check tries again.
-- **Nothing is ever closed.** An alert is information; the position stays open until you act.
-  Closing through the desk (a proposal you approve) comes with Stage 6.
+- **Nothing is ever closed by the monitor.** When the stop, a target, the planned date or the
+  14-day limit is reached it creates a close proposal, which needs your Approve (Stage 6, see
+  `docs/trading-desk-execution.md`). It also warns when a limit is approached or reached.
 - **If the watch itself fails** twice in a row you get a Telegram warning that positions are not
   being checked, and a note when it works again. A failed read never marks a position closed.
 - Details: `/api/trading/positions/status` (add `?check=yes` to run one check now). `/trade_status`

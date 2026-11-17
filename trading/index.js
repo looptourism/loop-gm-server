@@ -547,6 +547,24 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
       if (typeof approvals.tick === "function") await approvals.tick();
       return true;
     }
+    // trade_close SYMBOL — propose closing the desk's open position in SYMBOL.
+    // Creates a DRAFT close proposal only; the risk engine and the owner's
+    // Approve decide whether it is sent.
+    if (command === "trade_close") {
+      const say = async (t) => { await notifier.send(t); return true; };
+      if (offBecause) return say(`⛔ Not created: ${notify.esc(offBecause)}`);
+      const m = /^\/\w+(?:@\w+)?\s+([A-Za-z0-9.]{1,12})\s*$/.exec(text.trim());
+      if (!m) return say("Usage: /trade_close SYMBOL — for example <code>/trade_close BTC</code>. The whole position is proposed for closing.");
+      const symbol = m[1].toUpperCase();
+      const open = (await db.query("select p.id from trading.positions p join trading.instruments i on i.instrument_id = p.instrument_id where i.symbol = $1 and p.status = 'open' order by p.opened_at", [symbol])).rows;
+      if (!open.length) return say(`⛔ Not created: the desk has no open position in ${notify.esc(symbol)} on record. (A position opened by hand on eToro outside the desk's rules cannot be closed from here.)`);
+      const made = await db.withTransaction((tx) => analysesStore.saveCloseProposal(tx, { positionRowId: open[0].id, expiresAt: new Date(Date.now() + POLICY.proposalValidHours * 3600000), details: { source: "owner (/trade_close)", reason: "you asked to close it with /trade_close" }, actor: "owner:telegram" }));
+      if (!made) return say(`ℹ️ A close for ${notify.esc(symbol)} is already proposed or in progress.`);
+      const trading = await approvals.summary();
+      await say(`🔴 <b>Close proposed — ${notify.esc(symbol)}</b> (DEMO)\nPosition ${made.etoroPositionId}, $${made.amountUsd.toFixed(2)} invested.\n${trading.tradingOff ? `Trading is off (${notify.esc(trading.tradingOff)}): it will be offered to you when trading is back on.` : "It now goes to the risk engine; if it passes you get the Approve / Reject request."}`);
+      if (!trading.tradingOff && typeof approvals.tick === "function") await approvals.tick();
+      return true;
+    }
     // trade_run: a SCREENED run only. "crypto" after the command = coins only.
     const st = agents.state();
     if (offBecause || !st.ready) { await notifier.send(`⛔ Not started: ${notify.esc(offBecause || st.notReadyBecause)}`); return true; }

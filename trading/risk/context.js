@@ -58,7 +58,7 @@ async function loadAccount(db, client) {
       creditUsd: summary.creditUsd, pendingOrdersUsd: summary.pendingOrdersUsd, copyPortfolios: summary.copyPortfolios,
       // eToro's formula: equity = available cash + total invested (positions + pending orders) + unrealized P/L
       equityUsd: r2(summary.availableCashUsd + summary.investedUsd + summary.pendingOrdersUsd + summary.unrealizedPnlUsd),
-      positions: summary.positions.map((p) => { const k = by.get(p.instrumentId); return { instrumentId: p.instrumentId, amountUsd: p.amountUsd, assetClass: k ? k.asset_class : "unknown", cryptoCorrelated: k ? k.crypto_correlated === true : false }; }),
+      positions: summary.positions.map((p) => { const k = by.get(p.instrumentId); return { positionId: p.positionId, instrumentId: p.instrumentId, amountUsd: p.amountUsd, units: p.units, direction: p.direction, leverage: p.leverage, unrealizedPnlUsd: p.unrealizedPnlUsd, assetClass: k ? k.asset_class : "unknown", cryptoCorrelated: k ? k.crypto_correlated === true : false }; }),
     };
   } catch (e) { return { ok: false, reason: db.redact(client.redact(e?.message || String(e))) }; }
 }
@@ -80,7 +80,7 @@ async function loadDailyLoss(db, account, now) {
   if (!account.ok) return { ok: false, reason: "the account could not be read" };
   try {
     const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const r = await db.query("select taken_at, equity_usd from trading.account_snapshots where taken_at >= $1 and taken_at <= $2 order by taken_at asc limit 1", [dayStart.toISOString(), now.toISOString()]);
+    const r = await db.query("select taken_at, equity_usd from trading.account_snapshots where taken_at >= $1 and taken_at <= $2 order by taken_at asc, created_at asc limit 1", [dayStart.toISOString(), now.toISOString()]);
     if (!r.rows.length) return { ok: false, reason: "no account snapshot has been recorded today (position monitoring must be running)" };
     const baseline = Number(r.rows[0].equity_usd);
     return { ok: true, baselineEquityUsd: baseline, baselineAt: iso(r.rows[0].taken_at), equityUsd: account.equityUsd, lossUsd: r2(baseline - account.equityUsd) };
@@ -117,9 +117,41 @@ async function loadEarnings(db, instrumentId) {
   } catch { return { nextDate: null }; }
 }
 
+// The desk's record of the position a close proposal is about.
+async function loadPosition(db, positionRowId) {
+  if (!positionRowId) return null;
+  try {
+    const r = (await db.query("select id, etoro_position_id, instrument_id, status, amount_usd, units, open_rate, opened_at, exit_conditions from trading.positions where id = $1", [positionRowId])).rows[0];
+    return r ? { id: r.id, etoroPositionId: Number(r.etoro_position_id), instrumentId: Number(r.instrument_id), status: r.status, amountUsd: Number(r.amount_usd), units: r.units === null ? null : Number(r.units), openRate: r.open_rate === null ? null : Number(r.open_rate), openedAt: iso(r.opened_at), exitConditions: r.exit_conditions } : null;
+  } catch { return null; }
+}
+
+// Is a close order for this position already waiting at eToro?
+async function loadCloseInFlight(db, proposal) {
+  try {
+    const r = await db.query(
+      `select count(*) as n from trading.proposals p join trading.orders o on o.proposal_id = p.id
+        where p.action = 'close' and p.position_id = $1 and p.id <> $2 and o.status in ('submitting', 'submitted', 'unknown')`, [proposal.positionId, proposal.id]
+    );
+    return { ok: true, count: Number(r.rows[0].n) };
+  } catch (e) { return { ok: false, reason: db.redact(e?.message || String(e)) }; }
+}
+
 // Everything the engine needs for one proposal, in one object.
 async function buildContext({ db, client, config, policy, proposal, phase, now, referenceAsk = null }) {
   const account = await loadAccount(db, client);
+  if (proposal.action === "close") {
+    return {
+      phase, now, policy, proposal,
+      tradingEnabled: config.tradingEnabled === true,
+      halted: await readHalted(db),
+      storedPriceMaxAgeSec: MONITORING.rateFreshSec,
+      account,
+      position: await loadPosition(db, proposal.positionId),
+      closeInFlight: await loadCloseInFlight(db, proposal),
+      price: phase === "pre_execution" ? await loadLivePrice(db, client, proposal.instrumentId, now) : await loadStoredPrice(db, proposal.instrumentId, now),
+    };
+  }
   return {
     phase, now, policy, proposal, referenceAsk,
     tradingEnabled: config.tradingEnabled === true,
@@ -144,4 +176,4 @@ async function saveAssessment(q, proposalId, ctx, verdict) {
   return r.rows[0].id;
 }
 
-module.exports = { buildContext, saveAssessment, loadProposal, loadAccount, readHalted };
+module.exports = { buildContext, saveAssessment, loadProposal, loadAccount, loadPosition, readHalted };

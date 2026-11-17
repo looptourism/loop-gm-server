@@ -8,9 +8,16 @@
 //      stored price — and only if that price is fresh;
 //   4. sends a Telegram alert when a condition is reached.
 //
-// It never closes, changes or opens anything: there is no such code here. An
-// alert is information for the owner. Closing a position will be a proposal
-// that needs approval, like opening one (Stage 6).
+// It never closes, changes or opens anything: there is no such code here.
+// When an exit condition or the holding limit is reached it CREATES A CLOSE
+// PROPOSAL (Stage 6) — a database row — which then goes through the same
+// risk engine and the same Telegram approval as a buy. Nothing closes until
+// the owner taps Approve. One proposal per condition: if the owner rejects
+// it, it is not proposed again for that condition (/trade_close can).
+//
+// It also warns when the account approaches (80%) or reaches a limit: total
+// exposure, crypto exposure, open positions, today's loss. Once per limit,
+// level and UTC day.
 //
 // "During market hours" needs no calendar: a price counts only when eToro's
 // own timestamp for it is recent. A stock outside market hours has an old
@@ -30,6 +37,8 @@ const { POLICY } = require("./policy");
 const { summarizeDemoAccount } = require("./account");
 const { parseUtc, rateFreshness } = require("./market-data");
 const { recordRun } = require("./db/snapshots");
+const { saveCloseProposal } = require("./db/analyses");
+const { readHalted } = require("./risk/context");
 const notify = require("./notify");
 
 const DAY = 86400000;
@@ -76,6 +85,47 @@ function evaluatePosition({ position, rate, now, policy = POLICY }) {
 function createPositionMonitor({ config, client, db, notifier, settings = POSITIONS, policy = POLICY, freshSec = MONITORING.rateFreshSec, now = () => new Date(), cron = null, log = (...a) => console.log("[trading/positions]", ...a) } = {}) {
   let running = false, scheduled = false, failures = 0, lastCheck = null;
   const clean = (e) => db.redact(client.redact(e?.message || String(e)));
+
+  const alreadySent = async (etoroPositionId, key) => (await db.query("select 1 from trading.position_alerts where etoro_position_id = $1 and condition_key = $2", [etoroPositionId, key])).rows.length > 0;
+
+  // A close proposal for a position whose exit condition or holding limit was
+  // reached. Returns a sentence for the alert.
+  async function proposeClose(positionRowId, reason) {
+    try {
+      const made = await db.withTransaction((tx) => saveCloseProposal(tx, { positionRowId, expiresAt: new Date(now().getTime() + policy.proposalValidHours * 3600000), details: { source: "position monitor", reason }, actor: "system:positions" }));
+      if (!made) return "A close for this position is already proposed or in progress.";
+      const off = config.tradingEnabled !== true ? "TRADING_ENABLED is off" : (await readHalted(db)) ? "trading is stopped (/trade_stop)" : null;
+      return off ? `A close proposal was created, but ${off}: it will be offered to you when trading is back on (it expires in ${policy.proposalValidHours} hours).` : "A close proposal was created: it goes to the risk engine and then to you for Approve / Reject.";
+    } catch (e) { return `A close proposal could not be created: ${clean(e)}. Use /trade_close.`; }
+  }
+
+  // Limits approached (80%) or reached (100%): one warning per limit, level and UTC day.
+  async function checkLimits(run, account, t, known) {
+    const flagged = new Set((await db.query("select instrument_id from trading.stock_allowlist where crypto_correlated")).rows.map((r) => Number(r.instrument_id)));
+    const crypto = account.positions.filter((p) => { const k = known.get(p.instrumentId); return !k || k.asset_class === "crypto" || flagged.has(p.instrumentId); }).reduce((a, p) => a + p.amountUsd, 0);
+    const dayStart = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()));
+    const base = (await db.query("select equity_usd from trading.account_snapshots where taken_at >= $1 order by taken_at asc, created_at asc limit 1", [dayStart.toISOString()])).rows[0];
+    const equity = account.availableCashUsd + account.investedUsd + account.pendingOrdersUsd + account.unrealizedPnlUsd;
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const limits = [
+      { name: "total_exposure", short: "exposure", label: "Total exposure", unit: "$", value: r2(account.investedUsd + account.pendingOrdersUsd), limit: policy.maxTotalExposureUsd },
+      { name: "crypto_exposure", short: "crypto", label: "Crypto exposure (MSTR counts)", unit: "$", value: r2(crypto), limit: policy.maxCryptoExposureUsd },
+      { name: "open_positions", short: "positions", label: "Open positions", unit: "", value: account.openPositions, limit: policy.maxOpenPositions },
+      ...(base ? [{ name: "daily_loss", short: "loss today", label: "Loss today", unit: "$", value: r2(Math.max(0, Number(base.equity_usd) - equity)), limit: policy.maxDailyLossUsd }] : []),
+    ].map((l) => ({ ...l, pct: l.limit > 0 ? Math.round((l.value / l.limit) * 100) : 0 }));
+    const day = t.toISOString().slice(0, 10);
+    for (const level of [100, 80]) {
+      const due = [];
+      for (const l of limits.filter((x) => x.pct >= level && (level === 100 || x.pct < 100))) {
+        const key = `${l.name}:${level}:${day}`;
+        if ((await db.query("select 1 from trading.account_alerts where alert_key = $1", [key])).rows.length === 0) due.push({ ...l, key });
+      }
+      if (!due.length) continue;
+      if (!(await notifier.send(notify.limitAlert({ limits: due, level })))) { run.problems.push({ symbol: null, instrumentId: null, problem: "a limit warning could not be delivered to Telegram; it will be tried again" }); continue; }
+      for (const l of due) await db.query("insert into trading.account_alerts (alert_key, kind, message, facts) values ($1, $2, $3, $4) on conflict do nothing", [l.key, level === 100 ? "limit_reached" : "limit_warning", `${l.label}: ${l.value} of ${l.limit}`, JSON.stringify(l)]);
+    }
+    return limits.map(({ key, ...l }) => l);
+  }
 
   // Sends an alert unless the same one was already sent. Recorded only if delivered.
   async function alert(run, { etoroPositionId, key, kind, symbol, html, facts }) {
@@ -146,14 +196,15 @@ function createPositionMonitor({ config, client, db, notifier, settings = POSITI
           const what = h.condition.type === "price_below" ? `price at or below ${h.condition.value}` : h.condition.type === "price_above" ? `price at or above ${h.condition.value}` : h.condition.type === "date_after" && h.condition.date ? `after ${h.condition.date}` : null;
           const lines = [what ? `Condition: ${what} — ${h.condition.description}` : `${h.condition.description}`];
           if (rate) lines.push(`Price now: bid ${rate.bid} at ${rate.asOf.slice(0, 16).replace("T", " ")} UTC (${rate.fresh ? "fresh" : "NOT fresh"})`);
-          lines.push("Nothing was closed. The position stays open until you act.");
+          if ((h.kind === "exit_condition" || h.kind === "time_limit") && !(await alreadySent(p.positionId, h.key))) lines.push(await proposeClose(row.id, `${title.toLowerCase()}: ${what ? `${what} — ` : ""}${h.condition.description}`));
+          lines.push("Nothing was closed. The position stays open until you approve a close.");
           await alert(run, { etoroPositionId: p.positionId, key: h.key, kind: h.kind, symbol, facts: { ...figures, condition: h.condition, rate, source: pnl.source, fetchedAt: pnl.fetchedAt },
             html: notify.positionAlert({ title, symbol, lines, figures }) });
         }
       }
 
       // A position we have on record as open that eToro no longer lists was closed somewhere else.
-      const gone = (await db.query("update trading.positions set status = 'closed', closed_at = $2, last_synced_at = $2 where status = 'open' and not (etoro_position_id = any($1::bigint[])) returning etoro_position_id, instrument_id, amount_usd, closed_by_order_id", [seenIds, t.toISOString()])).rows;
+      const gone = (await db.query("update trading.positions set status = 'closed', closed_at = $2, last_synced_at = $2 where status = 'open' and not (etoro_position_id = any($1::bigint[])) and not exists (select 1 from trading.proposals pr where pr.position_id = trading.positions.id and pr.action = 'close' and pr.status = 'executing') returning etoro_position_id, instrument_id, amount_usd, closed_by_order_id", [seenIds, t.toISOString()])).rows;
       for (const g of gone) {
         const symbol = known.get(Number(g.instrument_id))?.symbol ?? `instrument ${g.instrument_id}`;
         run.revised++;
@@ -161,6 +212,7 @@ function createPositionMonitor({ config, client, db, notifier, settings = POSITI
         await alert(run, { etoroPositionId: Number(g.etoro_position_id), key: "closed_elsewhere", kind: "closed_elsewhere", symbol, facts: { amountUsd: Number(g.amount_usd), noticedAt: t.toISOString() },
           html: notify.positionAlert({ title: "A position is no longer open on eToro", symbol, lines: ["It was closed outside the Trading Desk (by you on eToro, or by eToro). The desk has marked it closed."], figures: { amountUsd: Number(g.amount_usd) } }) });
       }
+      try { out.limits = await checkLimits(run, account, t, known); } catch (e) { run.problems.push({ symbol: null, instrumentId: null, problem: `limits could not be checked: ${clean(e)}` }); }
       out.alertsSent = run.inserted;
       out.account = { openPositions: account.openPositions, investedUsd: account.investedUsd, unrealizedPnlUsd: account.unrealizedPnlUsd, readAt: account.fetchedAt };
       out.ok = run.problems.length === 0;

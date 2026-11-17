@@ -42,6 +42,30 @@ async function saveDraftProposal(tx, { instrument, amountUsd, expiresAt, analysi
   return { id, paramsHash: hash, superseded: old.rows.length };
 }
 
+// Saves one DRAFT proposal to CLOSE a whole position the desk has on record.
+// Refused (returns null) if the position is not open on record, or if a
+// close for it is already a draft, awaiting approval or being executed.
+async function saveCloseProposal(tx, { positionRowId, expiresAt, details, actor }) {
+  const pos = (await tx.query(
+    `select p.id, p.etoro_position_id, p.instrument_id, p.amount_usd, p.status, p.open_rate, p.opened_at, i.symbol, i.asset_class
+       from trading.positions p join trading.instruments i on i.instrument_id = p.instrument_id where p.id = $1 for update of p`, [positionRowId]
+  )).rows[0];
+  if (!pos || pos.status !== "open") return null;
+  const live = await tx.query("select 1 from trading.proposals where action = 'close' and position_id = $1 and status in ('draft', 'pending_approval', 'approved', 'executing')", [positionRowId]);
+  if (live.rows.length) return null;
+  const amountUsd = Math.round(Number(pos.amount_usd) * 100) / 100;
+  const params = { action: "close", instrumentId: Number(pos.instrument_id), direction: "buy", leverage: 1, orderType: "market", limitRate: null, amountUsd, positionId: pos.id, expiresAt };
+  const hash = paramsHash(params);
+  const r = await tx.query(
+    `insert into trading.proposals (action, instrument_id, asset_class, direction, leverage, order_type, amount_usd, position_id, expires_at, params_hash, status, details)
+     values ('close', $1, $2, 'buy', 1, 'market', $3, $4, $5, $6, 'draft', $7) returning id`,
+    [Number(pos.instrument_id), pos.asset_class, amountUsd, pos.id, new Date(expiresAt).toISOString(), hash, JSON.stringify({ ...details, etoroPositionId: Number(pos.etoro_position_id), openRate: pos.open_rate === null ? null : Number(pos.open_rate), openedAt: pos.opened_at ? new Date(pos.opened_at).toISOString() : null })]
+  );
+  const id = r.rows[0].id;
+  await appendAudit(tx, { eventType: "proposal.created", entityType: "proposal", entityId: id, proposalId: id, actor, data: { action: "close", symbol: pos.symbol, etoroPositionId: Number(pos.etoro_position_id), amountUsd, paramsHash: hash, reason: details?.reason ?? null } });
+  return { id, paramsHash: hash, symbol: pos.symbol, etoroPositionId: Number(pos.etoro_position_id), amountUsd };
+}
+
 // The newest analysis and risk review for one symbol, and the newest
 // Portfolio Manager output.
 async function latestForSymbol(db, symbol) {
@@ -67,4 +91,4 @@ async function listProposals(db, limit = 20) {
   return r.rows.map((p) => ({ ...p, amount_usd: Number(p.amount_usd), expires_at: iso(p.expires_at), created_at: iso(p.created_at) }));
 }
 
-module.exports = { saveAnalysis, saveDraftProposal, latestForSymbol, listProposals };
+module.exports = { saveAnalysis, saveDraftProposal, saveCloseProposal, latestForSymbol, listProposals };

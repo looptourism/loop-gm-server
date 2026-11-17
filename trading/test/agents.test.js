@@ -320,7 +320,7 @@ if (TEST_URL) {
     await admin.close();
     const u = new URL(TEST_URL); u.pathname = "/trading_agents_test";
     db = createDb({ config: { databaseUrl: u.toString() } });
-    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage", "005_positions_monitor", "006_risk_and_execution"]) await db.migrate(m);
+    for (const m of ["001_initial", "002_monitoring", "003_research", "004_api_usage", "005_positions_monitor", "006_risk_and_execution", "007_close_orders"]) await db.migrate(m);
     for (const [id, symbol, cls] of [[2001, "MSTR", "stock"], [100000, "BTC", "crypto"], [2009, "NKE", "stock"]]) {
       await db.query("insert into trading.instruments (instrument_id, symbol, display_name, asset_class, exchange, raw, source, fetched_at) values ($1, $2, $3, $4, 'NASDAQ', '{}', 'test', now())", [id, symbol, `${symbol} name`, cls]);
       if (symbol !== "NKE") await db.query(`insert into trading.${cls}_allowlist (symbol, instrument_id, verified_at) values ($1, $2, now())`, [symbol, id]);

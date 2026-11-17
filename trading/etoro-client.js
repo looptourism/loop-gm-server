@@ -34,6 +34,7 @@ const ALLOWED_PATHS = [
   /^\/api\/v1\/trading\/info\/demo\/pnl$/,
   /^\/api\/v1\/trading\/info\/demo\/portfolio$/,
   /^\/api\/v2\/trading\/info\/demo\/orders:lookup$/,
+  /^\/api\/v1\/trading\/info\/demo\/close-orders\/\d+$/,
   /^\/api\/v1\/market-data\/search$/,
   /^\/api\/v2\/market-data\/instruments$/,
   /^\/api\/v2\/market-data\/rates$/,
@@ -157,6 +158,12 @@ function createClient({ config = readConfig(), fetchImpl = globalThis.fetch } = 
       }
       const query = orderId != null ? { orderId: toInt(orderId, "orderId") } : { referenceId: String(referenceId) };
       return get("/api/v2/trading/info/demo/orders:lookup", query);
+    },
+
+    // Status of one demo CLOSE order and the positions it closed (Stage 6).
+    // eToro offers this lookup by its own close order ID only.
+    getDemoCloseOrder(orderId) {
+      return get(`/api/v1/trading/info/demo/close-orders/${toInt(orderId, "orderId")}`);
     },
 
     // Resolves a ticker (e.g. AAPL, BTC) to instrument records. The caller

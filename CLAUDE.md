@@ -20,6 +20,7 @@ The owner works only from a phone. Keep their manual steps to a minimum.
 - **Telegram** is the owner's interface for the Trading Desk: a summary after every agent run,
   `/trade_run` and `/trade_status`, and position alerts. Messages are built by plain code,
   never by a Claude call. Keep the status pages for details.
-- **Stage 5 code** (`trading/risk/`, `trading/approvals.js`, `trading/execution/`) is the
+- **Stage 5–6 code** (`trading/risk/`, `trading/approvals.js`, `trading/execution/`, and the
+  close proposals in `trading/positions.js`) is the
   order-execution, approval and kill-switch code the exception above is about.
 - **Trading style (2026-11-16):** short-term swing trades, held 1 to 14 days (`trading/policy.js`).

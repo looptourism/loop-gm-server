@@ -139,8 +139,14 @@ dbTest("when the price reaches the stop an alert is sent once — and an undeliv
   const a = (await db.query("select kind, condition_key, facts from trading.position_alerts where condition_key = 'price_below:95'")).rows[0];
   assert.deepStrictEqual([a.kind, a.facts.rate.bid, a.facts.rate.source], ["exit_condition", 94.8, "eToro Public API GET /api/v2/market-data/rates"]);
   await assert.rejects(db.query("delete from trading.position_alerts"), /append-only/);
-  assert.strictEqual(await count("select count(*) as n from trading.orders"), 0);  // an alert never becomes an order
-  assert.strictEqual(await count("select count(*) as n from trading.proposals"), 0);
+  assert.strictEqual(await count("select count(*) as n from trading.orders"), 0);  // an alert never becomes an order…
+  // …it becomes ONE draft close proposal, which needs the risk engine and your approval (Stage 6)
+  const close = (await db.query("select action, status, amount_usd, details from trading.proposals")).rows;
+  assert.deepStrictEqual(close.map((c) => [c.action, c.status, Number(c.amount_usd), c.details.etoroPositionId, c.details.source]), [["close", "draft", 300, 501, "position monitor"]]);
+  assert.match(close[0].details.reason, /exit condition reached: price at or below 95/);
+  // the proposal was created on the first (undelivered) attempt; the alert that got through says so
+  assert.match(w.sent[0], /A close for this position is already proposed or in progress/);
+  assert.match(w.sent[0], /Nothing was closed\. The position stays open until you approve a close/);
 });
 
 dbTest("a stale price triggers nothing, however far below the stop it is", async () => {

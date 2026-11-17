@@ -51,7 +51,7 @@ test("risk engine: each limit and rule rejects on its own", () => {
     ["kill_switch", (i) => { i.halted = undefined; }],                               // an unknown stop state is a stop
     ["demo_only", (i) => { i.policy = { ...POLICY, environment: "real" }; }],
     ["not_expired", (i) => { i.proposal.expiresAt = "2099-11-16T15:10:00.000Z"; }],
-    ["opens_a_position", (i) => { i.proposal.action = "close"; }],
+    ["position_on_record", (i) => { i.proposal.action = "close"; }],               // a close is judged by the close checks (Stage 6)
     ["asset_class", (i) => { i.proposal.assetClass = "etf"; }],
     ["allowlisted", (i) => { i.allowlist = { listed: false }; }],
     ["allowlisted", (i) => { i.allowlist.active = false; }],
@@ -149,7 +149,7 @@ test("order client: one fixed demo path, a body that can only be a long unlevera
   assert.deepStrictEqual([opts.method, opts.headers["x-request-id"], JSON.parse(opts.body)], ["POST", KEY, BODY()]);
   // the source itself: exactly one path, and it is the demo one
   const src = fs.readFileSync(path.join(__dirname, "..", "execution", "etoro-orders.js"), "utf8").replace(/\/\/.*$/gm, "");
-  assert.deepStrictEqual(src.match(/["'`]\/api\/[^"'`]+["'`]/g), ['"/api/v2/trading/execution/demo/orders"']);
+  assert.deepStrictEqual(src.match(/["'`]\/api\/[^"'`]+["'`]/g), ['"/api/v2/trading/execution/demo/orders"', '"/api/v1/trading/execution/demo/market-close-orders/positions/"']);
   assert.ok(!/\/real\//.test(src));
 });
 
