@@ -158,6 +158,10 @@ const AGENTS = {
   // when TRADING_AGENTS_SCHEDULE_ENABLED is exactly "true".
   schedule: [
     { cron: "0 12 * * 1-5", scope: "all", label: "Mon–Fri 12:00 UTC — all instruments, screened" },
+    // owner (2026-11-17): a second weekday screen during the US session
+    // (22:00 Dubai), so the day's moves are seen while prices are live and
+    // the owner is still awake to approve.
+    { cron: "0 18 * * 1-5", scope: "all", label: "Mon–Fri 18:00 UTC — all instruments, screened (US session)" },
     { cron: "0 12 * * 6", scope: "crypto", label: "Sat 12:00 UTC — coins only, screened" },
   ],
 
