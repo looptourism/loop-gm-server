@@ -397,6 +397,20 @@ function fileToBase64(file){
     fr.onerror=reject; fr.readAsDataURL(file);
   });
 }
+// Phone photos are often several MB; scale to ≤1600px JPEG before sending to the GM.
+function shrinkImage(dataUrl,max=1600){
+  return new Promise(res=>{
+    const im=new Image();
+    im.onload=()=>{
+      const k=Math.min(1,max/Math.max(im.width,im.height));
+      if(k===1&&dataUrl.length<3e6){ res(dataUrl); return; }
+      const c=document.createElement('canvas'); c.width=Math.round(im.width*k); c.height=Math.round(im.height*k);
+      c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+      try{ res(c.toDataURL('image/jpeg',0.85)); }catch{ res(dataUrl); }
+    };
+    im.onerror=()=>res(dataUrl); im.src=dataUrl;
+  });
+}
 async function dataUrlToBase64(dataUrl){
   const m=String(dataUrl).match(/^data:(.+);base64,(.+)$/);
   if(!m) throw new Error('bad data url');
@@ -461,6 +475,12 @@ const API={
   },
   // رسالة عادية → GET /api/chat (طابور مهام)، صورة مرفقة بالمحادثة → تُعامَل كفاتورة عبر المحاسبة
   async sendMessage(text,imageDataUrl){
+    if(imageDataUrl&&text){
+      const img=await dataUrlToBase64(await shrinkImage(imageDataUrl));
+      const jobId=await startJobReq('/api/chat-image',{method:'POST',body:JSON.stringify({message:text,image:img})});
+      const result=await pollJobReq(jobId);
+      return {delegations:(result.depts||[]).map(d=>({dept:d,task:'استشارة '+deptMeta(d).name,status:'done'})),reply:result.reply};
+    }
     if(imageDataUrl){
       const img=await dataUrlToBase64(imageDataUrl);
       const jobId=await startJobReq('/api/invoices/scan',{method:'POST',body:JSON.stringify({image:img})});
@@ -1017,14 +1037,15 @@ function chatInner(side=false){
   const working=S.departments.filter(d=>['out','in'].includes(d.state)).length;
   const head=`<div class="chat-head">${side?'':`<a class="icon-btn" href="#home" aria-label="رجوع" style="border:none">${ic('back')}</a>`}${orb(32)}<div class="grow col" style="gap:1px"><h1 class="h1" style="font-size:16px">المدير العام</h1><span class="sub">${UI.voiceMode?'مكالمة صوتية':offline()?'غير متصل':working?`يعمل الآن مع ${working===1?'قسم واحد':working+' أقسام'}`:'متصل · بانتظار طلبك'}</span></div>${SpeechSupported?`<button class="icon-btn" data-voice-mode="${side?'S':''}" aria-label="${UI.voiceMode?'إيقاف المحادثة الصوتية':'بدء محادثة صوتية كاملة'}" style="border:none;${UI.voiceMode?'color:var(--mint)':''}">${ic('speaker')}</button>`:''}</div>`;
   const comp=`<div class="composer-dock ${side?'in-side':''}">${S.chat.length?'':`<div class="chips" style="margin:0;padding:0">${['إحاطة اليوم','أداء المبيعات','تحليل المنافسين'].map(t=>`<button class="chip" data-suggest="${t}">${t}</button>`).join('')}</div>`}
-   <form class="composer" data-chat-form><button type="button" class="ghost" data-attach aria-label="إرفاق صورة فاتورة">${ic('cam')}</button>${SpeechSupported?`<button type="button" class="ghost ${UI.listening||UI.transcribing?'mic-on':(UI.voiceMode&&!UI.speaking&&!UI.sending)?'mic-ready':''}" data-mic="${side?'S':''}" aria-label="${UI.listening?'إيقاف التسجيل الصوتي':'إدخال صوتي'}">${ic('mic')}</button>`:''}<label class="sr" for="msg${side?'S':''}">رسالة للمدير العام</label><input id="msg${side?'S':''}" type="text" placeholder="اكتب طلبك للمدير العام…" autocomplete="off"><button class="send" type="submit" aria-label="إرسال" ${UI.sending?'disabled':''}>${ic('up')}</button></form></div>`;
+   ${UI.chatImage?`<div class="row" style="gap:10px;align-items:center;padding:8px;margin-bottom:6px;border-radius:16px;border:1px solid var(--accent-line);background:rgba(18,19,32,.94)"><img src="${UI.chatImage}" alt="الصورة المرفقة" style="width:52px;height:52px;object-fit:cover;border-radius:10px;flex-shrink:0"><span class="sub grow">اكتب للمدير وش المطلوب من الصورة، أو أرسلها بدون نص لو كانت فاتورة.</span><button type="button" data-clear-img aria-label="إزالة الصورة" style="background:none;border:none;color:var(--coral);display:flex;padding:6px">${ic('x')}</button></div>`:''}
+   <form class="composer" data-chat-form><button type="button" class="ghost" data-attach aria-label="إرفاق صورة فاتورة">${ic('cam')}</button>${SpeechSupported?`<button type="button" class="ghost ${UI.listening||UI.transcribing?'mic-on':(UI.voiceMode&&!UI.speaking&&!UI.sending)?'mic-ready':''}" data-mic="${side?'S':''}" aria-label="${UI.listening?'إيقاف التسجيل الصوتي':'إدخال صوتي'}">${ic('mic')}</button>`:''}<label class="sr" for="msg${side?'S':''}">رسالة للمدير العام</label><input id="msg${side?'S':''}" type="text" placeholder="${UI.chatImage?'وش تبي المدير يسوي بالصورة؟':'اكتب طلبك للمدير العام…'}" autocomplete="off"><button class="send" type="submit" aria-label="إرسال" ${UI.sending?'disabled':''}>${ic('up')}</button></form></div>`;
   return `${head}<div class="msgs" aria-live="polite">${msgs}${typing}</div>${comp}`;
 }
 function viewChat(){ return chatInner(false); }
 async function sendChat(text,image){
   if(!text&&!image) return;
   S.chat.push({me:true,text,image}); UI.sending=true;
-  UI.typing=image?'المحاسبة تقرأ الفاتورة…':'المدير يراجع طلبك…'; render(true);
+  UI.typing=image&&!text?'المحاسبة تقرأ الفاتورة…':'المدير يراجع طلبك…'; render(true);
   let replyText=null;
   try{ const res=await API.sendMessage(text,image); S.chat.push({me:false,...res}); replyText=res.reply; }
   catch(e){ const msg='تعذّر الوصول للمدير العام. تحقق من اتصال السيرفر ثم أعد الإرسال.'; S.chat.push({me:false,reply:msg}); replyText=msg; }
@@ -1034,7 +1055,8 @@ async function sendChat(text,image){
   }
 }
 function bindChat(root){
-  root.querySelectorAll('[data-chat-form]').forEach(f=>f.onsubmit=e=>{e.preventDefault();if(UI.sending){toast('انتظر رد المدير، وكلامك باقي بالخانة');return}const inp=f.querySelector('input');const t=inp.value.trim();if(!t)return;inp.value='';sendChat(t)});
+  root.querySelectorAll('[data-chat-form]').forEach(f=>f.onsubmit=e=>{e.preventDefault();if(UI.sending){toast('انتظر رد المدير، وكلامك باقي بالخانة');return}const inp=f.querySelector('input');const t=inp.value.trim();const img=UI.chatImage;if(!t&&!img)return;inp.value='';UI.chatImage=null;sendChat(t,img)});
+  root.querySelectorAll('[data-clear-img]').forEach(b=>b.onclick=()=>{UI.chatImage=null;render(true)});
   root.querySelectorAll('[data-suggest]').forEach(b=>b.onclick=()=>sendChat(b.dataset.suggest));
   root.querySelectorAll('[data-attach]').forEach(b=>b.onclick=()=>{UI.attachTarget='chat';document.getElementById('invoiceInput').click()});
   root.querySelectorAll('[data-mic]').forEach(b=>b.onclick=()=>{ if(UI.listening){ stopVoiceInput(); } else { if(UI.voiceMode){ unlockAudio(); unlockSpeech(); } UI.voiceAwaitTap=false; startVoiceInput('msg'+b.dataset.mic); } });
@@ -1380,7 +1402,12 @@ function collect(v){v.querySelectorAll('[data-f]').forEach(i=>{UI.draft[i.datase
 document.getElementById('invoiceInput').onchange=async e=>{
   const file=e.target.files[0]; e.target.value=''; if(!file) return;
   const url=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(file)});
-  if(UI.attachTarget==='chat'){ if(route().name!=='gm'&&!wide()) go('gm'); sendChat('',url); return; }
+  if(UI.attachTarget==='chat'){
+    // attach only: the photo waits above the message box so a note can go with it
+    UI.chatImage=url; if(route().name!=='gm'&&!wide()) go('gm'); render(true);
+    const box=document.getElementById('msg')||document.getElementById('msgS'); if(box) box.focus();
+    return;
+  }
   const v=document.getElementById('view'); if(UI.draft) collect(v);
   UI.scanImg=url; UI.scanning=true; render(true);
   try{ const res=await API.scanInvoice(file); UI.draft={...UI.draft,...Object.fromEntries(Object.entries(res).filter(([,val])=>val!==''&&val!==0)),flags:res.flags||[]}; }
