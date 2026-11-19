@@ -478,7 +478,7 @@ const API={
     if(imageDataUrl&&text){
       const img=await dataUrlToBase64(await shrinkImage(imageDataUrl));
       const jobId=await startJobReq('/api/chat-image',{method:'POST',body:JSON.stringify({message:text,image:img})});
-      const result=await pollJobReq(jobId);
+      const result=await pollJobReq(jobId,300);
       return {delegations:(result.depts||[]).map(d=>({dept:d,task:'استشارة '+deptMeta(d).name,status:'done'})),reply:result.reply};
     }
     if(imageDataUrl){
@@ -490,7 +490,7 @@ const API={
         paymentDraft:{...result,date:result.date||new Date().toISOString().slice(0,10)}};
     }
     const jobId=await startJobReq('/api/chat?message='+encodeURIComponent(text||'')+(UI.voiceMode?'&voice=1':''));
-    const result=await pollJobReq(jobId);
+    const result=await pollJobReq(jobId,300);
     return {delegations:(result.depts||[]).map(d=>({dept:d,task:'استشارة '+deptMeta(d).name,status:'done'})),reply:result.reply};
   },
   // مسح فاتورة من شاشة "دفعة جديدة" → نفس أداة القراءة البصرية بالسيرفر
