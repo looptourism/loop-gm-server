@@ -1619,7 +1619,21 @@ async function generateDailyBriefing() {
   // The GM writes the briefing itself (so it lands in the GM conversation and
   // stays in its memory), grounded in the competitor report the strategy
   // department produced earlier in the same morning run.
-  let prompt = "اكتب لنواف إحاطته الصباحية التنفيذية عن وضع الشركة اليوم. نسّق مع الأقسام حسب الحاجة، وأبرز ما يستحق انتباهه الآن. إن كان بريده الإلكتروني مربوطًا، تحقق منه بأداة check_email وأبرز أي عرض أو إعلان مهم وصل من شركات نتعامل معها. تحقق أيضًا من مجلد مستندات الموردين بأداة check_supplier_offers إن كان متاحًا، وأبرز أي عرض جديد يستحق الانتباه.";
+  let prompt = `اكتب لنواف إحاطته الصباحية الكاملة عن وضع الشركة اليوم (تُرسل له على تيليجرام الساعة ٩ صباحًا).
+قبل الكتابة استشر فعليًا هذه الأقسام بأداة الاستشارة (تعمل معًا بالتوازي):
+- قسم الاستراتيجية: أسعار المنافسين الحالية من حساباتهم على انستغرام مقابل أسعارنا، والاستراتيجيات التي يتبعونها.
+- قسم التسويق: أفكار محتوى وحملات لهذا الأسبوع.
+- قسم المبيعات وتطوير الأعمال: فرص واقتراحات لزيادة الحجوزات.
+- القسم المالي: الوضع المالي وما يحتاج انتباهًا.
+رتّب الإحاطة بهذه العناوين بالترتيب:
+١. أهم ما يجب التركيز عليه اليوم (الأحداث والمواعيد والمخاطر)
+٢. أسعار المنافسين (السعر المرصود لكل منافس مقابل سعرنا)
+٣. الاستراتيجيات المتبعة (عند المنافسين، وما نتبعه نحن)
+٤. أفكار
+٥. اقتراحات
+٦. توجيهات الأقسام (توجيه عملي واحد على الأقل من كل قسم استشرته، باسم القسم)
+اكتب الأرقام كما وصلتك فقط. إن تعذّر الحصول على معلومة فاذكر ذلك بوضوح تحت عنوانها بدل التخمين أو حذف العنوان.
+إن كان بريده الإلكتروني مربوطًا، تحقق منه بأداة check_email وأبرز أي عرض أو إعلان مهم وصل من شركات نتعامل معها. تحقق أيضًا من مجلد مستندات الموردين بأداة check_supplier_offers إن كان متاحًا، وأبرز أي عرض جديد يستحق الانتباه.`;
   if (store.competitorReport?.day === todayKey()) {
     prompt += `\n\nهذا تقرير المنافسين الذي أعدّه قسم الاستراتيجية صباح اليوم — ادمج أهم ما فيه في إحاطتك بصفتك مطّلعًا عليه، ولا تكرره حرفيًا:\n${store.competitorReport.text}`;
   }
@@ -1996,6 +2010,7 @@ const TG_COMMANDS = [
   { command: "cost", description: "تكلفة اليوم وهذا الشهر" },
   { command: "pending", description: "القرارات المعلّقة مع أزرار الموافقة" },
   { command: "brief", description: "تشغيل إحاطة السكرتيرة" },
+  { command: "report", description: "تقرير الصباح: السكرتير + المدير العام" },
   { command: "help", description: "طريقة الاستخدام" },
 ];
 const TG_HELP = `<b>Loop — المدير العام على تيليجرام</b>
@@ -2008,6 +2023,7 @@ const TG_HELP = `<b>Loop — المدير العام على تيليجرام</b>
 /cost — تكلفة اليوم وهذا الشهر
 /pending — القرارات المعلّقة مع أزرار الموافقة
 /brief — تشغيل إحاطة السكرتيرة
+/report — تقرير الصباح كاملًا (يصلك تلقائيًا ٩ صباحًا)
 /help — هذه الرسالة
 
 <b>مكتب التداول (تجريبي)</b>
@@ -2151,6 +2167,13 @@ async function tgHandleMessage(msg) {
     } catch (e) {
       await telegram.sendMessage(`⚠️ تعذّر تجهيز الإحاطة: ${telegram.escapeHtml(telegram.redact(e.message).slice(0, 200))}`);
     } finally { stop(); }
+    return;
+  }
+  if (command === "report") {
+    const stop = tgTyping();
+    try { await sendTelegramMorningReport({ force: true }); }
+    catch (e) { await telegram.sendMessage(`⚠️ تعذّر تجهيز التقرير: ${telegram.escapeHtml(telegram.redact(e.message).slice(0, 200))}`); }
+    finally { stop(); }
     return;
   }
   if (command) return telegram.sendMessage("أمر غير معروف. اكتب /help لعرض الأوامر.");
@@ -3238,7 +3261,15 @@ app.get("/api/reset", (req, res) => {
 // department's competitor report is produced first, then the GM writes the
 // morning briefing on top of it (which also puts the briefing into the GM's
 // own conversation history, so it can discuss it later in the day).
-cron.schedule("0 4 * * *", async () => {
+// The 8 AM run, kept as a promise so the 9 AM Telegram report waits for it
+// instead of generating a second briefing if it's still going.
+let morningRun = null;
+cron.schedule("0 4 * * *", () => {
+  morningRun = runMorningJobs().finally(() => { morningRun = null; });
+  return morningRun;
+});
+
+async function runMorningJobs() {
   console.log("[cron] generating competitor report…");
   try { await generateCompetitorReport(); } catch (e) { cronFail("competitor report", e); }
   console.log("[cron] generating daily briefing…");
@@ -3260,10 +3291,37 @@ cron.schedule("0 4 * * *", async () => {
     console.log("[cron] generating weekly marketing content…");
     try { await generateMarketingContent(); } catch (e) { cronFail("marketing content", e); }
   }
-});
+}
 
-// 05:00 UTC = 9:00 AM Gulf time — device alerts for trips in the coming week.
+// Nawaf's 9 AM Telegram report: the Secretary's briefing, then the GM's full
+// briefing. Both are written at 8 AM; anything missing (server was asleep,
+// a step failed) is written now. Sent once a day unless forced (/report).
+async function sendTelegramMorningReport({ force = false } = {}) {
+  if (!telegram.enabled) return "telegram disabled";
+  await storeReady;
+  if (morningRun) await morningRun.catch(() => {});
+  const day = todayKey();
+  if (!force && store.telegramReportDay === day) return "already sent";
+  let sec = store.secretaryBriefing?.day === day ? store.secretaryBriefing : null;
+  if (!sec) sec = await generateSecretaryBriefing().catch((e) => { cronFail("secretary briefing (9am)", e); return null; });
+  if (store.competitorReport?.day !== day) await generateCompetitorReport().catch((e) => cronFail("competitor report (9am)", e));
+  let gm = store.dailyBriefing?.day === day ? store.dailyBriefing : null;
+  if (!gm) gm = await generateDailyBriefing().catch((e) => { cronFail("daily briefing (9am)", e); return null; });
+
+  const date = new Date().toLocaleDateString("ar-AE", { timeZone: "Asia/Dubai", weekday: "long", day: "numeric", month: "long" });
+  await telegram.sendMessage(`☀️ <b>تقرير الصباح</b> — ${telegram.escapeHtml(date)}`);
+  await tgSendReply(`## 📋 إحاطة السكرتير\n\n${sec?.text || "تعذّر تجهيز إحاطة السكرتير اليوم."}`);
+  await tgSendReply(`## 🎯 إحاطة المدير العام${gm?.depts?.length ? `\n(استشار: ${gm.depts.map((d) => DEPTS[d]?.name || d).join("، ")})` : ""}\n\n${gm?.text || "تعذّر تجهيز إحاطة المدير العام اليوم."}`);
+  store.telegramReportDay = day;
+  saveStore(store);
+  return "sent";
+}
+
+// 05:00 UTC = 9:00 AM Gulf time — the Telegram morning report, then device
+// alerts for trips in the coming week.
 cron.schedule("0 5 * * *", async () => {
+  try { console.log("[cron] telegram morning report:", await sendTelegramMorningReport()); }
+  catch (e) { cronFail("telegram morning report", e); }
   try { const n = await sendTripAlerts(); console.log(`[cron] trip alerts sent: ${n}`); }
   catch (e) { cronFail("trip alerts", e); }
 });
