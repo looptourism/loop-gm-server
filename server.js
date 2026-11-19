@@ -580,12 +580,25 @@ async function fetchOwnRecentMedia() {
 // Tech Providers managing other businesses' accounts, which doesn't apply to
 // us. Apify reads the same publicly visible profile pages.
 const APIFY_TOKEN = process.env.APIFY_API_TOKEN;
+// An Instagram scrape takes 30-60s. It used to share fetchWithTimeout's 20s
+// default, which cut every call off, so Strategy never saw any competitor data.
+const APIFY_TIMEOUT_MS = 90000;
+// Competitor posts change slowly; reuse a scrape for 3h so a follow-up
+// question doesn't wait another minute (and doesn't spend Apify credit again).
+const COMPETITOR_CACHE_MS = 3 * 60 * 60 * 1000;
+const competitorCache = new Map(); // username -> { at, profile }
+const competitorErrors = {}; // username -> why the last scrape failed (shown to Strategy)
+const competitorFailedAt = {}; // username -> when; a dead account isn't retried for 20 min
+const COMPETITOR_RETRY_MS = 20 * 60 * 1000;
 
-async function fetchCompetitorProfile(username) {
+async function fetchCompetitorProfile(username, { fresh = false } = {}) {
   if (!APIFY_TOKEN) return null;
+  const hit = competitorCache.get(username);
+  if (!fresh && hit && Date.now() - hit.at < COMPETITOR_CACHE_MS) return hit.profile;
+  if (!fresh && !hit && Date.now() - (competitorFailedAt[username] || 0) < COMPETITOR_RETRY_MS) return null;
   try {
     const res = await fetchWithTimeout(
-      `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
+      `https://api.apify.com/v2/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${APIFY_TOKEN}&timeout=${APIFY_TIMEOUT_MS / 1000 - 10}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -595,15 +608,21 @@ async function fetchCompetitorProfile(username) {
           resultsLimit: 12,
           addParentData: true,
         }),
-      }
+      },
+      APIFY_TIMEOUT_MS
     );
     if (!res.ok) throw new Error(`Apify ${res.status}`);
-    const items = await res.json();
-    if (!Array.isArray(items) || items.length === 0) return null;
+    const all = await res.json();
+    // a private, renamed or missing account comes back as an item carrying "error"
+    const items = Array.isArray(all) ? all.filter((p) => p && !p.error) : [];
+    if (!items.length) {
+      const why = Array.isArray(all) && all[0]?.error ? `${all[0].error}${all[0].errorDescription ? ": " + all[0].errorDescription : ""}` : "ما رجعت Apify أي منشورات";
+      throw new Error(why);
+    }
 
     // Apify returns one item per post, each carrying the owner's profile info.
     const first = items[0];
-    return {
+    const profile = {
       username,
       followers_count: first.ownerFollowersCount ?? first.followersCount ?? null,
       media_count: first.ownerPostsCount ?? first.postsCount ?? null,
@@ -617,8 +636,15 @@ async function fetchCompetitorProfile(username) {
         })),
       },
     };
-  } catch {
-    return null;
+    competitorCache.set(username, { at: Date.now(), profile });
+    delete competitorErrors[username];
+    delete competitorFailedAt[username];
+    return profile;
+  } catch (e) {
+    competitorErrors[username] = String(e?.message || e).slice(0, 160);
+    competitorFailedAt[username] = Date.now();
+    console.error(`[apify] @${username} failed:`, competitorErrors[username]);
+    return hit ? hit.profile : null; // an older scrape beats nothing
   }
 }
 
@@ -1064,10 +1090,11 @@ async function callDepartmentCore(deptId, instruction, images) {
     // Fetch all competitors in parallel, and analyse each one's candidate
     // images in parallel too — sequential runs pushed this past the browser's
     // patience since every Apify call takes ~30-60s on its own.
+    const failedAccounts = [];
     const profiles = (await Promise.all(
       getCompetitorUsernames().map(async (username) => {
         const p = await fetchCompetitorProfile(username);
-        if (!p) return null;
+        if (!p) { failedAccounts.push(username); return null; }
 
         const allMedia = p.media?.data || [];
         const posts = allMedia.slice(0, 5).map((m) => `  · ${m.timestamp}: "${(m.caption || "").slice(0, 90)}"`).join("\n");
@@ -1092,6 +1119,9 @@ async function callDepartmentCore(deptId, instruction, images) {
 
     if (profiles.length) {
       systemText += `\n\nبيانات حية الآن من حسابات المنافسين على انستغرام، بما فيها قراءة بصرية فعلية لمنشورات العمرة تحديدًا حين توفرت:\n${profiles.join("\n\n")}\n\nهذه بيانات لحظية حقيقية — استخدمها بدل اللقطة الثابتة القديمة إن وُجد تعارض بينهما.`;
+    }
+    if (failedAccounts.length && APIFY_TOKEN) {
+      systemText += `\n\n(لديك وصول فعلي لحسابات المنافسين على انستغرام عبر Apify، لكن جلب هذه الحسابات فشل هذه المرة: ${failedAccounts.map((u) => `@${u} (${competitorErrors[u] || "سبب غير معروف"})`).join("، ")}. قل ذلك بوضوح ولا تقل إنه لا يوجد وصول لانستغرام، ولا تطلب من نواف تصوير المنشورات إلا إذا فشلت كل الحسابات.)`;
     }
   }
 
@@ -2540,7 +2570,8 @@ app.get("/api/meta/status", async (req, res) => {
 
   if (APIFY_TOKEN) {
     try {
-      const sample = await fetchCompetitorProfile(getCompetitorUsernames()[0]);
+      const first = getCompetitorUsernames()[0];
+      const sample = await fetchCompetitorProfile(first, { fresh: true });
       result.sampleCompetitor = sample
         ? {
             username: sample.username,
@@ -2549,7 +2580,7 @@ app.get("/api/meta/status", async (req, res) => {
             latestCaption: (sample.media?.data?.[0]?.caption || "").slice(0, 120),
           }
         : null;
-      if (!sample) result.sampleCompetitorError = "لم تُرجع Apify أي نتائج";
+      if (!sample) result.sampleCompetitorError = competitorErrors[first] || "لم تُرجع Apify أي نتائج";
     } catch (e) {
       result.sampleCompetitorError = e.message;
     }
