@@ -523,9 +523,25 @@ function finalTextOf(content) {
   return idx >= 0 ? full.slice(idx).trim() : full;
 }
 
+// .slice() counts UTF-16 units, so cutting a caption at a fixed length can
+// keep half of an emoji. JSON then carries a lone "\ud83d", and Claude's API
+// rejects the whole request ("unexpected end of hex escape"). Cut by whole
+// characters, and repair anything that still slips through before each call.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+function cutText(text, n) {
+  const chars = Array.from(String(text || ""));
+  return chars.length > n ? chars.slice(0, n).join("") : chars.join("");
+}
+function wellFormed(v) {
+  if (typeof v === "string") return v.replace(LONE_SURROGATE, "\uFFFD");
+  if (Array.isArray(v)) return v.map(wellFormed);
+  if (v && typeof v === "object") { const o = {}; for (const k in v) o[k] = wellFormed(v[k]); return o; }
+  return v;
+}
+
 async function callClaude({ system, messages, tools }) {
   const res = await anthropic.messages.create(
-    { model: MODEL, max_tokens: 1000, system, messages, ...(tools ? { tools } : {}) },
+    wellFormed({ model: MODEL, max_tokens: 1000, system, messages, ...(tools ? { tools } : {}) }),
     { timeout: 60000 }
   );
   const u = res.usage || {};
@@ -664,7 +680,7 @@ async function analyzeImageForPricing(imageUrl, caption) {
     const mediaType = imgRes.headers.get("content-type") || "image/jpeg";
     const buffer = Buffer.from(await imgRes.arrayBuffer());
     const base64 = buffer.toString("base64");
-    const res = await anthropic.messages.create({
+    const res = await anthropic.messages.create(wellFormed({
       model: MODEL,
       max_tokens: 300,
       system: "أنت محلل بيانات تسويقية لوكالة سفريات. مهمتك: تلخيص أي عرض عمرة أو سعر ظاهر داخل الصورة المرفقة (الفنادق، عدد الليالي، السعر، تاريخ السفر) بجملة أو جملتين بالعربية فقط، بدون أي تعليق إضافي. إذا لم يكن هناك عرض أو سعر واضح بالصورة، قل حرفيًا: لا يوجد عرض واضح.",
@@ -675,7 +691,7 @@ async function analyzeImageForPricing(imageUrl, caption) {
           { type: "text", text: `نص المنشور: ${caption || "بدون نص"}\nلخّص العرض/السعر الظاهر بالصورة.` },
         ],
       }],
-    });
+    }));
     return textOf(res.content) || "تعذر تحليل الصورة.";
   } catch {
     return null;
@@ -1079,7 +1095,7 @@ async function callDepartmentCore(deptId, instruction, images) {
   if (deptId === "marketing") {
     const media = await fetchOwnRecentMedia();
     if (media && media.length) {
-      const summary = media.map((m) => `- ${m.timestamp}: "${(m.caption || "").slice(0, 100)}" — ${m.like_count ?? "?"} إعجاب، ${m.comments_count ?? "?"} تعليق (${m.permalink})`).join("\n");
+      const summary = media.map((m) => `- ${m.timestamp}: "${cutText(m.caption, 100)}" — ${m.like_count ?? "?"} إعجاب، ${m.comments_count ?? "?"} تعليق (${m.permalink})`).join("\n");
       systemText += `\n\nآخر منشورات حساب Loop الفعلية على انستغرام (بيانات حية من Meta API):\n${summary}\n\nاستخدم هذه الأرقام الفعلية عند تقييم الأداء، ولا تخترع أرقامًا أخرى.`;
     } else if (META_TOKEN) {
       systemText += `\n\n(تعذر جلب بيانات انستغرام الحية هذه المرة — وضّح ذلك إن احتاجها السؤال.)`;
@@ -1097,7 +1113,7 @@ async function callDepartmentCore(deptId, instruction, images) {
         if (!p) { failedAccounts.push(username); return null; }
 
         const allMedia = p.media?.data || [];
-        const posts = allMedia.slice(0, 5).map((m) => `  · ${m.timestamp}: "${(m.caption || "").slice(0, 90)}"`).join("\n");
+        const posts = allMedia.slice(0, 5).map((m) => `  · ${m.timestamp}: "${cutText(m.caption, 90)}"`).join("\n");
 
         // Prefer posts that actually mention Umrah (these accounts also post other
         // travel types); fall back to the most recent images if none match.
@@ -2577,7 +2593,7 @@ app.get("/api/meta/status", async (req, res) => {
             username: sample.username,
             followers_count: sample.followers_count,
             postsFetched: sample.media?.data?.length || 0,
-            latestCaption: (sample.media?.data?.[0]?.caption || "").slice(0, 120),
+            latestCaption: cutText(sample.media?.data?.[0]?.caption, 120),
           }
         : null;
       if (!sample) result.sampleCompetitorError = competitorErrors[first] || "لم تُرجع Apify أي نتائج";
