@@ -44,7 +44,7 @@ svg.i{width:20px;height:20px;flex-shrink:0;fill:none;stroke:currentColor;stroke-
 svg.i.s16{width:16px;height:16px} svg.i.s14{width:14px;height:14px} svg.i.s18{width:18px;height:18px}
 
 /* ---------- layout ---------- */
-.app{min-height:100vh;display:flex;justify-content:center;position:relative;overflow-x:hidden}
+.app{min-height:100vh;display:flex;justify-content:center;position:relative;overflow-x:hidden;overflow-x:clip}
 .app::before{content:"";position:fixed;top:-180px;left:50%;width:620px;height:460px;margin-left:-310px;border-radius:50%;background:radial-gradient(closest-side,rgba(124,108,255,.18),rgba(124,108,255,0));pointer-events:none;z-index:0}
 .sidebar{display:none}
 .main{position:relative;z-index:1;width:100%;max-width:460px;padding:calc(env(safe-area-inset-top,0px) + 16px) 16px calc(env(safe-area-inset-bottom,0px) + 104px);display:flex;flex-direction:column;gap:16px}
@@ -145,6 +145,8 @@ line.flow-fast{stroke-dasharray:6 6;animation:flow .8s linear infinite}
 .msgs{display:flex;flex-direction:column;gap:14px}
 .msg-me{align-self:flex-end;max-width:80%;padding:12px 14px;border-radius:18px 18px 18px 6px;background:rgba(165,148,255,.16);border:1px solid rgba(165,148,255,.3);font-size:14px;line-height:1.7;color:#fff;white-space:pre-wrap;word-break:break-word}
 .msg-me img{display:block;max-width:180px;border-radius:12px}
+.msg-me .imgs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:6px}
+.msg-me .imgs img{width:100%;max-width:120px;aspect-ratio:1;object-fit:cover}
 .msg-gm{align-self:flex-start;width:92%;display:flex;flex-direction:column;gap:8px}
 .gm-label{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#D9DCE8}
 .bubble{padding:14px;border-radius:6px 18px 18px 18px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);font-size:14px;line-height:1.75;color:var(--text);white-space:pre-wrap}
@@ -239,6 +241,13 @@ line.flow-fast{stroke-dasharray:6 6;animation:flow .8s linear infinite}
 @keyframes scan{0%{top:8%}50%{top:88%}100%{top:8%}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 
+/* ---------- محادثة المدير: الشاشة ثابتة، والرسائل وحدها تتحرك ---------- */
+body.chat-on{overflow:hidden}
+body.chat-on .main{height:100vh;height:100dvh;overflow:hidden;padding-bottom:calc(env(safe-area-inset-bottom,0px) + 92px)}
+body.chat-on .main .chat-head{flex-shrink:0}
+body.chat-on .main .msgs{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:2px 2px 8px}
+body.chat-on .main .composer-dock{position:static;transform:none;width:100%;max-width:none;flex-shrink:0}
+
 /* ---------- iPad / desktop ---------- */
 @media (min-width:1024px){
   .app{padding:20px;gap:16px;align-items:flex-start}
@@ -252,7 +261,9 @@ line.flow-fast{stroke-dasharray:6 6;animation:flow .8s linear infinite}
   .sidebar .sys{margin-top:auto;display:flex;align-items:center;gap:8px;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.03);font-size:12px;color:var(--muted)}
   .main{max-width:640px;padding:0 0 40px}
   .main.has-composer{padding-bottom:120px}
+  body.chat-on .main{height:calc(100vh - 40px);height:calc(100dvh - 40px);padding:0}
   .tabbar,.mobile-only{display:none!important}
+  body:not(.with-side) .side-chat{display:none!important}
   .side-chat{display:flex;position:sticky;top:20px;width:380px;flex-shrink:0;height:calc(100vh - 40px);flex-direction:column;gap:12px;padding:14px;border-radius:26px;border:1px solid var(--line);background:var(--surface);z-index:1}
   .side-chat .msgs{flex:1;overflow-y:auto}
   .side-chat .composer-dock{position:static;transform:none;width:100%}
@@ -270,7 +281,7 @@ line.flow-fast{stroke-dasharray:6 6;animation:flow .8s linear infinite}
 <nav class="tabbar" id="tabbar" aria-label="التنقل الرئيسي"></nav>
 <div id="dock"></div>
 <div id="toastHost" aria-live="polite"></div>
-<input type="file" id="invoiceInput" accept="image/*" class="sr" tabindex="-1" aria-hidden="true">
+<input type="file" id="invoiceInput" accept="image/*" multiple class="sr" style="top:0;left:0" tabindex="-1" aria-hidden="true">
 
 <script>
 /* =========================================================
@@ -474,15 +485,19 @@ const API={
     return deriveState(raw,status);
   },
   // رسالة عادية → GET /api/chat (طابور مهام)، صورة مرفقة بالمحادثة → تُعامَل كفاتورة عبر المحاسبة
-  async sendMessage(text,imageDataUrl){
-    if(imageDataUrl&&text){
-      const img=await dataUrlToBase64(await shrinkImage(imageDataUrl));
-      const jobId=await startJobReq('/api/chat-image',{method:'POST',body:JSON.stringify({message:text,image:img})});
+  async sendMessage(text,images){
+    images=images?(Array.isArray(images)?images:[images]):[];
+    // a photo with a note, or several photos → the GM sees them all together;
+    // one photo on its own → invoice reading, as before
+    if(images.length&&(text||images.length>1)){
+      const imgs=[];
+      for(const u of images) imgs.push(await dataUrlToBase64(await shrinkImage(u)));
+      const jobId=await startJobReq('/api/chat-image',{method:'POST',body:JSON.stringify({message:text||'',images:imgs})});
       const result=await pollJobReq(jobId,300);
       return {delegations:(result.depts||[]).map(d=>({dept:d,task:'استشارة '+deptMeta(d).name,status:'done'})),reply:result.reply};
     }
-    if(imageDataUrl){
-      const img=await dataUrlToBase64(imageDataUrl);
+    if(images.length){
+      const img=await dataUrlToBase64(images[0]);
       const jobId=await startJobReq('/api/invoices/scan',{method:'POST',body:JSON.stringify({image:img})});
       const result=await pollJobReq(jobId);
       return {delegations:[{dept:'accounting',task:'قراءة الفاتورة',status:'done'}],
@@ -1031,23 +1046,26 @@ function draftCard(p,idx){
 function chatInner(side=false){
   const typing=UI.typing?`<div class="typing"><span aria-hidden="true"><i></i> <i></i> <i></i></span>${esc(UI.typing)}</div>`:'';
   const msgs=S.chat.length?S.chat.map((m,i)=>m.me
-    ?`<div class="msg-me">${m.image?`<img src="${m.image}" alt="صورة فاتورة مرفقة">`:''}${esc(m.text||'')}</div>`
+    ?`<div class="msg-me">${(()=>{const im=m.images||(m.image?[m.image]:[]);return im.length>1?`<div class="imgs">${im.map((u,i)=>`<img src="${u}" alt="صورة مرفقة ${i+1}">`).join('')}</div>`:im.length?`<img src="${im[0]}" alt="صورة مرفقة">`:''})()}${esc(m.text||'')}</div>`
     :`<div class="msg-gm"><div class="gm-label"><span class="orb" style="width:20px;height:20px;box-shadow:none"></span>المدير العام</div>${m.delegations?.length?delegCard(m.delegations):''}${m.reply?`<div class="bubble">${esc(m.reply)}</div>`:''}${m.paymentDraft?draftCard(m.paymentDraft,i):''}</div>`).join('')
     :`<div class="empty">اكتب طلبك للمدير العام، وهو يوزّعه على الأقسام ويرجع لك بالخلاصة.<br>تقدر كمان ترسل صورة فاتورة وتسجلها المحاسبة.</div>`;
   const working=S.departments.filter(d=>['out','in'].includes(d.state)).length;
   const head=`<div class="chat-head">${side?'':`<a class="icon-btn" href="#home" aria-label="رجوع" style="border:none">${ic('back')}</a>`}${orb(32)}<div class="grow col" style="gap:1px"><h1 class="h1" style="font-size:16px">المدير العام</h1><span class="sub">${UI.voiceMode?'مكالمة صوتية':offline()?'غير متصل':working?`يعمل الآن مع ${working===1?'قسم واحد':working+' أقسام'}`:'متصل · بانتظار طلبك'}</span></div>${SpeechSupported?`<button class="icon-btn" data-voice-mode="${side?'S':''}" aria-label="${UI.voiceMode?'إيقاف المحادثة الصوتية':'بدء محادثة صوتية كاملة'}" style="border:none;${UI.voiceMode?'color:var(--mint)':''}">${ic('speaker')}</button>`:''}</div>`;
   const comp=`<div class="composer-dock ${side?'in-side':''}">${S.chat.length?'':`<div class="chips" style="margin:0;padding:0">${['إحاطة اليوم','أداء المبيعات','تحليل المنافسين'].map(t=>`<button class="chip" data-suggest="${t}">${t}</button>`).join('')}</div>`}
-   ${UI.chatImage?`<div class="row" style="gap:10px;align-items:center;padding:8px;margin-bottom:6px;border-radius:16px;border:1px solid var(--accent-line);background:rgba(18,19,32,.94)"><img src="${UI.chatImage}" alt="الصورة المرفقة" style="width:52px;height:52px;object-fit:cover;border-radius:10px;flex-shrink:0"><span class="sub grow">اكتب للمدير وش المطلوب من الصورة، أو أرسلها بدون نص لو كانت فاتورة.</span><button type="button" data-clear-img aria-label="إزالة الصورة" style="background:none;border:none;color:var(--coral);display:flex;padding:6px">${ic('x')}</button></div>`:''}
-   <form class="composer" data-chat-form><button type="button" class="ghost" data-attach aria-label="إرفاق صورة فاتورة">${ic('cam')}</button>${SpeechSupported?`<button type="button" class="ghost ${UI.listening||UI.transcribing?'mic-on':(UI.voiceMode&&!UI.speaking&&!UI.sending)?'mic-ready':''}" data-mic="${side?'S':''}" aria-label="${UI.listening?'إيقاف التسجيل الصوتي':'إدخال صوتي'}">${ic('mic')}</button>`:''}<label class="sr" for="msg${side?'S':''}">رسالة للمدير العام</label><input id="msg${side?'S':''}" type="text" placeholder="${UI.chatImage?'وش تبي المدير يسوي بالصورة؟':'اكتب طلبك للمدير العام…'}" autocomplete="off"><button class="send" type="submit" aria-label="إرسال" ${UI.sending?'disabled':''}>${ic('up')}</button></form></div>`;
+   ${(UI.chatImages||[]).length?`<div class="col" style="gap:8px;padding:8px;margin-bottom:6px;border-radius:16px;border:1px solid var(--accent-line);background:rgba(18,19,32,.94)">
+    <div class="row" style="gap:8px;overflow-x:auto;padding-bottom:2px">${UI.chatImages.map((u,i)=>`<div style="position:relative;flex-shrink:0"><img src="${u}" alt="الصورة ${i+1}" style="width:56px;height:56px;object-fit:cover;border-radius:10px;display:block"><button type="button" data-rm-img="${i}" aria-label="إزالة الصورة ${i+1}" style="position:absolute;top:-6px;left:-6px;width:24px;height:24px;border-radius:12px;border:none;background:var(--coral);color:#fff;display:flex;align-items:center;justify-content:center;padding:0">${ic('x','s14')}</button></div>`).join('')}${UI.chatImages.length<6?`<button type="button" data-attach aria-label="إضافة صورة" style="width:56px;height:56px;flex-shrink:0;border-radius:10px;border:1px dashed var(--line-2);background:none;color:var(--muted);font-size:22px">+</button>`:''}</div>
+    <span class="sub">${UI.chatImages.length>1?`${UI.chatImages.length} صور — اكتب للمدير وش المطلوب منها.`:'اكتب للمدير وش المطلوب من الصورة، أو أرسلها بدون نص لو كانت فاتورة.'}</span></div>`:''}
+   <form class="composer" data-chat-form><button type="button" class="ghost" data-attach aria-label="إرفاق صورة فاتورة">${ic('cam')}</button>${SpeechSupported?`<button type="button" class="ghost ${UI.listening||UI.transcribing?'mic-on':(UI.voiceMode&&!UI.speaking&&!UI.sending)?'mic-ready':''}" data-mic="${side?'S':''}" aria-label="${UI.listening?'إيقاف التسجيل الصوتي':'إدخال صوتي'}">${ic('mic')}</button>`:''}<label class="sr" for="msg${side?'S':''}">رسالة للمدير العام</label><input id="msg${side?'S':''}" type="text" placeholder="${(UI.chatImages||[]).length?((UI.chatImages.length>1)?'وش تبي المدير يسوي بالصور؟':'وش تبي المدير يسوي بالصورة؟'):'اكتب طلبك للمدير العام…'}" autocomplete="off"><button class="send" type="submit" aria-label="إرسال" ${UI.sending?'disabled':''}>${ic('up')}</button></form></div>`;
   return `${head}<div class="msgs" aria-live="polite">${msgs}${typing}</div>${comp}`;
 }
 function viewChat(){ return chatInner(false); }
-async function sendChat(text,image){
-  if(!text&&!image) return;
-  S.chat.push({me:true,text,image}); UI.sending=true;
-  UI.typing=image&&!text?'المحاسبة تقرأ الفاتورة…':'المدير يراجع طلبك…'; render(true);
+async function sendChat(text,images){
+  images=images?(Array.isArray(images)?images:[images]):[];
+  if(!text&&!images.length) return;
+  S.chat.push({me:true,text,images}); UI.sending=true; UI.chatToBottom=true;
+  UI.typing=images.length===1&&!text?'المحاسبة تقرأ الفاتورة…':'المدير يراجع طلبك…'; render(true);
   let replyText=null;
-  try{ const res=await API.sendMessage(text,image); S.chat.push({me:false,...res}); replyText=res.reply; }
+  try{ const res=await API.sendMessage(text,images); S.chat.push({me:false,...res}); replyText=res.reply; UI.chatToBottom=true; }
   catch(e){ const msg='تعذّر الوصول للمدير العام. تحقق من اتصال السيرفر ثم أعد الإرسال.'; S.chat.push({me:false,reply:msg}); replyText=msg; }
   UI.typing=null; UI.sending=false; render(true);
   if(UI.voiceMode&&replyText){
@@ -1055,8 +1073,8 @@ async function sendChat(text,image){
   }
 }
 function bindChat(root){
-  root.querySelectorAll('[data-chat-form]').forEach(f=>f.onsubmit=e=>{e.preventDefault();if(UI.sending){toast('انتظر رد المدير، وكلامك باقي بالخانة');return}const inp=f.querySelector('input');const t=inp.value.trim();const img=UI.chatImage;if(!t&&!img)return;inp.value='';UI.chatImage=null;sendChat(t,img)});
-  root.querySelectorAll('[data-clear-img]').forEach(b=>b.onclick=()=>{UI.chatImage=null;render(true)});
+  root.querySelectorAll('[data-chat-form]').forEach(f=>f.onsubmit=e=>{e.preventDefault();if(UI.sending){toast('انتظر رد المدير، وكلامك باقي بالخانة');return}const inp=f.querySelector('input');const t=inp.value.trim();const imgs=UI.chatImages||[];if(!t&&!imgs.length)return;inp.value='';UI.chatImages=[];sendChat(t,imgs)});
+  root.querySelectorAll('[data-rm-img]').forEach(b=>b.onclick=()=>{UI.chatImages.splice(+b.dataset.rmImg,1);render(true)});
   root.querySelectorAll('[data-suggest]').forEach(b=>b.onclick=()=>sendChat(b.dataset.suggest));
   root.querySelectorAll('[data-attach]').forEach(b=>b.onclick=()=>{UI.attachTarget='chat';document.getElementById('invoiceInput').click()});
   root.querySelectorAll('[data-mic]').forEach(b=>b.onclick=()=>{ if(UI.listening){ stopVoiceInput(); } else { if(UI.voiceMode){ unlockAudio(); unlockSpeech(); } UI.voiceAwaitTap=false; startVoiceInput('msg'+b.dataset.mic); } });
@@ -1298,20 +1316,36 @@ function render(keepScroll){
 const viewOffice=()=>`<h1 class="sr">المكتب</h1><iframe class="office-frame" data-frame="office" src="/office?embed=1" title="المكتب — نشاط الوكلاء المباشر" allow="autoplay"></iframe>`;
 /* مكتب التداول (تجريبي): صفحة مستقلة يقدّمها موديول التداول، تُعرض هنا في إطار مثل المكتب. */
 const viewTrading=()=>`<h1 class="sr">مكتب التداول — تجريبي</h1><iframe class="office-frame" data-frame="trading" src="/trading-desk" title="مكتب التداول — حساب تجريبي"></iframe>`;
+// Redrawing replaces the message list, which would jump it back to the top.
+// Stay at the newest message if the user was there (or just sent something);
+// otherwise keep their place while they read back.
+function keepChatScroll(container,build,toBottom){
+  const old=container&&container.querySelector('.msgs');
+  const top=old?old.scrollTop:0;
+  const near=!old||old.scrollHeight-old.scrollTop-old.clientHeight<80;
+  build();
+  const m=container&&container.querySelector('.msgs'); if(!m) return;
+  const stick=toBottom||near;
+  const place=()=>{ m.scrollTop=stick?m.scrollHeight:top; };
+  place();
+  m.querySelectorAll('img').forEach(i=>{ if(!i.complete) i.addEventListener('load',place,{once:true}); });
+}
 function _render(keepScroll){
   if(!S){document.getElementById('view').innerHTML='<div class="empty"><span class="spin" style="display:inline-block"></span></div>';return}
   const r=route(), v=document.getElementById('view'), y=scrollY;
-  renderChrome(r);
+  const toBottom=UI.chatToBottom||!keepScroll; UI.chatToBottom=false;
+  keepChatScroll(document.getElementById('sideChat'),()=>renderChrome(r),toBottom);
+  document.body.classList.toggle('chat-on',r.name==='gm');
   const framed=['office','trading'].includes(r.name);
   v.classList.toggle('office',framed); document.body.classList.toggle('office-on',framed);
   if(framed&&v.querySelector(`.office-frame[data-frame="${r.name}"]`)){ v.classList.remove('has-composer'); document.getElementById('tabbar').hidden=false; return; }
   const views={home:viewHome,gm:viewChat,depts:viewDepts,dept:()=>viewDept(r.arg),secretary:viewSecretary,approvals:viewApprovals,settings:viewSettings,accounting:viewAccounting,'new-payment':viewNewPayment,bookings:viewBookings,'new-booking':viewNewBooking,office:viewOffice,trading:viewTrading};
   if(r.name==='gm'&&wide()){/* على الآيباد المحادثة في الشاشة الرئيسية */}
-  v.innerHTML=(views[r.name]||viewHome)();
+  keepChatScroll(r.name==='gm'?v:null,()=>{ v.innerHTML=(views[r.name]||viewHome)(); },toBottom);
   v.classList.toggle('has-composer',['gm','accounting'].includes(r.name));
   document.getElementById('tabbar').hidden=['new-payment','new-booking'].includes(r.name);
   bind(v,r);
-  if(r.name==='gm'){bindChat(v); if(keepScroll) scrollTo(0,document.body.scrollHeight);}
+  if(r.name==='gm') bindChat(v);
   else if(keepScroll) scrollTo(0,y);
 }
 function bind(v,r){
@@ -1400,14 +1434,20 @@ function bind(v,r){
 }
 function collect(v){v.querySelectorAll('[data-f]').forEach(i=>{UI.draft[i.dataset.f]=i.value;UI.draft.flags=(UI.draft.flags||[]).filter(f=>f!==i.dataset.f||!i.value)})}
 document.getElementById('invoiceInput').onchange=async e=>{
-  const file=e.target.files[0]; e.target.value=''; if(!file) return;
-  const url=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(file)});
+  const files=[...e.target.files]; e.target.value=''; if(!files.length) return;
+  const readUrl=f=>new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(f)});
   if(UI.attachTarget==='chat'){
-    // attach only: the photo waits above the message box so a note can go with it
-    UI.chatImage=url; if(route().name!=='gm'&&!wide()) go('gm'); render(true);
+    // attach only: the photos wait above the message box so a note can go with them
+    UI.chatImages=UI.chatImages||[];
+    const room=6-UI.chatImages.length;
+    if(files.length>room) toast(`الحد 6 صور في الرسالة — أُضيفت أول ${Math.max(room,0)}`);
+    for(const f of files.slice(0,Math.max(room,0))) UI.chatImages.push(await readUrl(f));
+    if(route().name!=='gm'&&!wide()) go('gm'); render(true);
     const box=document.getElementById('msg')||document.getElementById('msgS'); if(box) box.focus();
     return;
   }
+  const file=files[0];
+  const url=await readUrl(file);
   const v=document.getElementById('view'); if(UI.draft) collect(v);
   UI.scanImg=url; UI.scanning=true; render(true);
   try{ const res=await API.scanInvoice(file); UI.draft={...UI.draft,...Object.fromEntries(Object.entries(res).filter(([,val])=>val!==''&&val!==0)),flags:res.flags||[]}; }
