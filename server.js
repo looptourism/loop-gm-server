@@ -64,6 +64,18 @@ async function fetchWithTimeout(url, opts = {}, ms = 20000) {
   }
 }
 
+// Google Sheets (the shared "بيانات الباقات" sheet) and the partner-documents
+// folder in Drive, for the GM and the departments. See google-workspace.js.
+const { createWorkspace, workspaceTools, WORKSPACE_TOOL_NAMES } = require("./google-workspace");
+const gws = createWorkspace({ timeoutFetch: (url, opts) => fetchWithTimeout(url, opts, 60000) });
+const WORKSPACE_TOOLS = workspaceTools(gws.status);
+function workspaceNote() {
+  const parts = [];
+  if (gws.status.sheet) parts.push("شيت «بيانات الباقات» المشترك (أدوات sheet_read وsheet_append_rows وsheet_update_cells): اقرأ منه بيانات الباقات حين تحتاجها، واكتب فيه ما يُطلب منك تسجيله. اقرأ التبويب قبل الكتابة والتزم بأعمدته، ولا تكتب رقمًا لم يصلك. هذا ليس شيت الأسعار الذي ترد منه أتمتة انستغرام على العملاء.");
+  if (gws.status.partners) parts.push("مستندات الشركاء في Google Drive للقراءة فقط (partner_docs_list ثم partner_doc_read): عقود، أسعار، شروط فنادق وطيران وموردين. ارجع لها حين يتعلق السؤال بشريك.");
+  return parts.length ? `\n\nأدوات مشتركة متاحة لك:\n- ${parts.join("\n- ")}` : "";
+}
+
 // ---------------------------------------------------------------------------
 // Storage — persisted to Upstash Redis (a free, permanent, external key-value
 // store) instead of the local disk. Render's free tier wipes local files
@@ -537,6 +549,43 @@ function wellFormed(v) {
   if (Array.isArray(v)) return v.map(wellFormed);
   if (v && typeof v === "object") { const o = {}; for (const k in v) o[k] = wellFormed(v[k]); return o; }
   return v;
+}
+
+// Runs one shared Google tool for the GM or a department and returns text
+// for the tool_result. Writes are logged to the office feed.
+async function runWorkspaceTool(name, input = {}, who = "gm") {
+  const whoName = who === "gm" ? "المدير العام" : DEPTS[who]?.name || who;
+  try {
+    if (name === "sheet_read") return await gws.sheetRead(input);
+    if (name === "sheet_append_rows") {
+      const r = await gws.sheetAppend(input);
+      officeLog(who, `أضاف ${r.count} ${r.count === 1 ? "صف" : "صفوف"} في «${input.tab}»${r.created ? " (تبويب جديد)" : ""}`);
+      return `تمت إضافة ${r.count} ${r.count === 1 ? "صف" : "صفوف"} في «${input.tab}»${r.where ? ` (${r.where})` : ""}${r.created ? "، وأُنشئ التبويب لأنه لم يكن موجودًا" : ""}.`;
+    }
+    if (name === "sheet_update_cells") {
+      const r = await gws.sheetUpdate(input);
+      officeLog(who, `عدّل ${r.cells} خلية في «${input.tab}» (${r.where})`);
+      return `تم تعديل ${r.cells} خلية في «${input.tab}» (${r.where}).`;
+    }
+    if (name === "partner_docs_list") return await gws.partnerDocsList(input);
+    if (name === "partner_doc_read") {
+      const doc = await gws.partnerDocContent(input.file_id);
+      const q = input.question || "لخّص أهم ما في هذا المستند.";
+      const content = doc.text != null
+        ? `المستند «${doc.name}»:\n${cutText(doc.text, 60000)}\n\nالمطلوب: ${q}`
+        : [doc.block, { type: "text", text: `المستند «${doc.name}». المطلوب: ${q}` }];
+      const res = await callClaude({
+        system: "أنت تقرأ مستندًا من مستندات شركاء Loop Travel & Tourism وتجيب عن المطلوب منه فقط، بالعربية، بدقة ومن نص المستند. إن لم يذكر المستند المعلومة فقل ذلك صراحة.",
+        messages: [{ role: "user", content }],
+      });
+      officeLog(who, `قرأ مستند الشريك «${doc.name}»`);
+      return `من «${doc.name}»:\n${textOf(res.content) || "لا يوجد رد."}`;
+    }
+    return `أداة غير معروفة: ${name}`;
+  } catch (e) {
+    console.error(`[google] ${whoName} ${name} failed:`, e.message);
+    return `تعذّر تنفيذ ${name}: ${e.message}`;
+  }
 }
 
 async function callClaude({ system, messages, tools }) {
@@ -1149,8 +1198,25 @@ async function callDepartmentCore(deptId, instruction, images) {
           { type: "text", text: instruction || "افحص هذه الصور (فاتورة أو مستند) واستخرج ما تحتاجه لعملك منها." },
         ]
       : instruction;
-    const res = await callClaude({ system: systemText, messages: [{ role: "user", content }] });
-    return textOf(res.content) || "لا يوجد رد.";
+    if (!WORKSPACE_TOOLS.length) {
+      const res = await callClaude({ system: systemText, messages: [{ role: "user", content }] });
+      return textOf(res.content) || "لا يوجد رد.";
+    }
+    // With the shared sheet / partner docs connected, a department can look
+    // things up or record them before it answers (a few steps at most).
+    let messages = [{ role: "user", content }];
+    const sys = systemText + workspaceNote();
+    for (let step = 0; step < 6; step++) {
+      const res = await callClaude({ system: sys, messages, tools: WORKSPACE_TOOLS });
+      const uses = (res.content || []).filter((b) => b.type === "tool_use");
+      if (!uses.length) return textOf(res.content) || "لا يوجد رد.";
+      messages = [...messages, { role: "assistant", content: res.content }];
+      const results = [];
+      for (const tu of uses) results.push({ type: "tool_result", tool_use_id: tu.id, content: await runWorkspaceTool(tu.name, tu.input, deptId) });
+      messages = [...messages, { role: "user", content: results }];
+    }
+    const last = await callClaude({ system: sys + "\n\nاكتب ردك النهائي الآن بدون أدوات.", messages });
+    return textOf(last.content) || "لا يوجد رد.";
   } catch (e) {
     notifyAgentError(dept.name, e);
     const ctx = agentCtx.getStore();
@@ -1203,7 +1269,7 @@ async function runGMCore(userText, displayText, images, opts = {}) {
   // Today's already-prepared material, so asking "what's the briefing?" from a
   // second device returns what was actually sent this morning instead of
   // silently regenerating a different one.
-  let system = GM_SYSTEM + APPROVAL_RULE;
+  let system = GM_SYSTEM + APPROVAL_RULE + workspaceNote();
   system += `\n\nتاريخ اليوم بصيغة YYYY-M-D هو: ${todayKey()}. إذا سألك نواف عن يوم سابق (أمس، الأسبوع اللي فات، أو تاريخ محدد)، احسب التاريخ المطلوب بصيغة YYYY-M-D واستخدم أداة get_archived_day لجلبه — لا تعتمد على ذاكرتك من المحادثة الحالية وحدها لأيام سابقة.`;
   const ready = [];
   if (store.dailyBriefing?.day === todayKey()) {
@@ -1222,9 +1288,10 @@ async function runGMCore(userText, displayText, images, opts = {}) {
   const activeTools = TOOLS.filter((t) => {
     const deptId = t.name.startsWith("consult_") ? t.name.replace("consult_", "") : null;
     return !deptId || enabled[deptId] !== false;
-  });
+  }).concat(WORKSPACE_TOOLS);
 
-  for (let round = 0; round < 3 && finalText === null; round++) {
+  // a sheet task can take several steps (read the tab, then write), so allow more rounds
+  for (let round = 0; round < 6 && finalText === null; round++) {
     const res = await callClaude({ system, messages, tools: activeTools });
     const content = res.content || [];
     const toolUses = content.filter((b) => b.type === "tool_use");
@@ -1253,7 +1320,9 @@ async function runGMCore(userText, displayText, images, opts = {}) {
     const toolResults = [];
     for (const tu of toolUses) {
       let responseText;
-      if (tu.name === "get_archived_day") {
+      if (WORKSPACE_TOOL_NAMES.has(tu.name)) {
+        responseText = await runWorkspaceTool(tu.name, tu.input, "gm");
+      } else if (tu.name === "get_archived_day") {
         const date = (tu.input?.date || "").trim();
         const day = store.archive?.[date];
         if (!day) {
@@ -2413,6 +2482,18 @@ app.get("/api/health", (req, res) => res.json({ ok: true, time: new Date().toISO
 const tradingDesk = require("./trading").mount(app, { authOn: AUTH_ON, telegram });
 
 // Consolidated connectivity flags for the "system status" panel.
+// Open in the browser after setting the Google variables on Render: shows
+// whether the key works and what the GM can see in the sheet and the folder.
+app.get("/api/google/check", async (req, res) => {
+  const out = { ...gws.status };
+  try { await gws.accessToken(); out.key = "ok"; } catch (e) { out.key = e.message; return res.json(out); }
+  if (gws.status.sheet) { try { out.sheet = await gws.sheetRead({}); } catch (e) { out.sheet = "❌ " + e.message; } }
+  else out.sheet = "GOOGLE_WORKSPACE_SHEET_ID غير مضاف";
+  if (gws.status.partners) { try { out.partners = await gws.partnerDocsList({}); } catch (e) { out.partners = "❌ " + e.message; } }
+  else out.partners = "GOOGLE_PARTNERS_FOLDER_ID غير مضاف";
+  res.json(out);
+});
+
 app.get("/api/status", (req, res) => {
   res.json({
     server: true,
@@ -2421,6 +2502,8 @@ app.get("/api/status", (req, res) => {
     sheets: true,
     outlook: !!store.outlookRefreshToken,
     drive: !!(DRIVE_API_KEY && DRIVE_FOLDER_ID),
+    googleSheet: gws.status.sheet,
+    googlePartners: gws.status.partners,
     meta: !!(META_TOKEN && META_IG_USER_ID),
     push: !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
     echonova: !!ECHONOVA_API_KEY,
