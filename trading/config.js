@@ -20,6 +20,9 @@ function readConfig(env = process.env) {
     // orders, so here it is only reported — read-only calls stay available
     // so the positions remain visible while trading is stopped.
     tradingEnabled: env.TRADING_ENABLED === "true",
+    // Opens a 15-minute admin session on the Trading Desk page, needed to
+    // change the allowlists. Not set → the lists can't be changed (fail closed).
+    adminPassword: env.TRADING_ADMIN_PASSWORD || "",
     // The Trading Desk's own Postgres (a Supabase project used by nothing
     // else). Deliberately not called DATABASE_URL, so no other part of the
     // server can pick it up by accident.

@@ -33,3 +33,8 @@ The owner works only from a phone. Keep their manual steps to a minimum.
   `trading/watches.js` (plain code, no trading imports) checks it and starts a re-analysis within the
   schedule switch, budget and 3/day cap. See docs/trading-desk-agents.md.
 - **Trading style (2026-11-16):** short-term swing trades, held 1 to 14 days (`trading/policy.js`).
+- **Allowlist editing (2026-11-25):** the desk's Settings can add/remove allowlist symbols in an admin session
+  (`TRADING_ADMIN_PASSWORD`, `trading/admin.js`); each add is verified on eToro first; every change is audited.
+  The database is the allowlists' source of truth — `trading/allowlist.js` only seeds an empty database. The
+  lists feed the risk engine's `allowlisted` check, so ask the owner before merging changes to this code.
+  See docs/trading-desk-console.md.

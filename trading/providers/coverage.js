@@ -74,9 +74,12 @@ function createCoverage({ providers, symbols, assetClass = "stock", now = () => 
 
   async function run() {
     if (job?.running) return job;
-    job = { running: true, startedAt: now().toISOString(), finishedAt: null, total: symbols.length, done: 0, stopped: {}, results: [] };
+    job = { running: true, startedAt: now().toISOString(), finishedAt: null, total: Array.isArray(symbols) ? symbols.length : null, done: 0, stopped: {}, results: [] };
     (async () => {
-      for (const symbol of symbols) {
+      // `symbols` is a list, or a function that reads the current one
+      const list = typeof symbols === "function" ? await symbols() : symbols;
+      job.total = list.length;
+      for (const symbol of list) {
         const row = { symbol };
         for (const capability of capabilities()) {
           const provider = providers.providerOf(assetClass, capability);

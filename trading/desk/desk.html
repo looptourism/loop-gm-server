@@ -75,6 +75,12 @@ h2{margin:6px 0 0;font-size:15px;color:var(--text-strong)}
 .syms{display:flex;flex-wrap:wrap;gap:6px}
 .syms span{font:500 12px/1 var(--mono);padding:6px 8px;border-radius:8px;border:1px solid var(--line);direction:ltr}
 .syms span.off{opacity:.45;text-decoration:line-through}
+.syms span .rm{margin-inline-start:6px;border:0;background:none;color:var(--coral);font:600 13px/1 var(--mono);padding:0 2px}
+.addform{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.addform input[type=text],.sheet input[type=password]{font:500 15px/1 var(--mono);height:42px;padding:0 12px;border-radius:12px;border:1px solid var(--line-2);background:var(--surface-2);color:#fff;direction:ltr;min-width:0;flex:1 1 120px}
+.addform label{font-size:12px;color:#C7CBDD;display:inline-flex;gap:6px;align-items:center}
+.addform .btn,.adminbar .btn{height:42px;font-size:14px}
+.adminbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
 .sheet{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center}
 .sheet .in{width:100%;max-width:520px;margin:0 8px calc(env(safe-area-inset-bottom,0px) + 8px);border-radius:24px;background:#12131F;border:1px solid var(--line-2);padding:18px;display:flex;flex-direction:column;gap:12px}
 .toast{position:fixed;z-index:40;left:50%;top:calc(env(safe-area-inset-top,0px) + 64px);transform:translateX(-50%);max-width:92vw;padding:10px 16px;border-radius:14px;background:#1B1D2C;border:1px solid var(--line-2);color:#fff;font-size:13px;line-height:1.6}
@@ -133,6 +139,10 @@ function render() {
   document.getElementById("view").innerHTML = (views[tab] || overview)();
   document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { tab = b.dataset.tab; try { sessionStorage.setItem("desk-tab", tab); } catch {} render(); scrollTo(0, 0); }));
   document.querySelectorAll("[data-decide]").forEach((b) => (b.onclick = () => confirmDecision(b.dataset.decide, b.dataset.approval)));
+  document.querySelectorAll("[data-admin-open]").forEach((b) => (b.onclick = openAdmin));
+  document.querySelectorAll("[data-admin-lock]").forEach((b) => (b.onclick = lockAdmin));
+  document.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => confirmListChange("remove", b.dataset.remove, b.dataset.sym)));
+  document.querySelectorAll("[data-add]").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); const sym = f.sym.value.trim().toUpperCase(); if (!sym) return; confirmListChange("add", f.dataset.add, sym, !!(f.cc && f.cc.checked)); }));
 }
 
 // ---- sections ------------------------------------------------------------------
@@ -270,10 +280,82 @@ function settings() {
     <div>${line("القائمة المختصرة", `حتى ${num(s.agents.shortlistMax)} · درجة ${num(s.agents.shortlistMinScore)} فأكثر`)}</div>
     <div class="sub ltr" style="text-align:left">${s.agents.schedule.map(esc).join("<br>")}</div>
   </div>
-  <h2>قائمة الأسهم المسموحة (${num(s.allowlists.stocks.length)})</h2>
-  <div class="card"><div class="syms">${s.allowlists.stocks.map((x) => `<span class="${x.tradable ? "" : "off"}" title="${x.tradable ? "" : "غير قابل للتداول"}">${esc(x.symbol)}${x.cryptoCorrelated ? " ₿" : ""}</span>`).join("")}</div><div class="sub" style="margin-top:8px">المشطوب: غير مُتحقَّق منه على eToro أو متوقف. ₿ = يتبع العملات المشفّرة.</div></div>
-  <h2>قائمة العملات المسموحة (${num(s.allowlists.crypto.length)})</h2>
-  <div class="card"><div class="syms">${s.allowlists.crypto.map((x) => `<span class="${x.tradable ? "" : "off"}">${esc(x.symbol)}</span>`).join("")}</div></div>`;
+  ${allowlistSection("stock", "قائمة الأسهم المسموحة", s.allowlists.stocks)}
+  ${allowlistSection("crypto", "قائمة العملات المسموحة", s.allowlists.crypto)}`;
+}
+
+// ---- the allowlists (editing needs an admin session) ------------------------------
+function adminBar() {
+  const a = D.admin || {};
+  if (!a.configured) return `<div class="sub">تعديل القوائم مقفل: أضف المتغيّر <span class="ltr mono">TRADING_ADMIN_PASSWORD</span> في Render.</div>`;
+  if (!a.active) return `<div class="adminbar"><span class="sub">الإضافة والحذف تحتاج جلسة مدير.</span><button type="button" class="btn" data-admin-open>تعديل القوائم (المدير)</button></div>`;
+  const until = new Date(a.expiresAt).toLocaleTimeString("ar", { hour: "numeric", minute: "2-digit" });
+  return `<div class="adminbar"><span class="pill wait">وضع المدير حتى ${esc(until)}</span><button type="button" class="btn" data-admin-lock>قفل</button></div>`;
+}
+function allowlistSection(cls, title, rows) {
+  const admin = !!(D.admin && D.admin.active);
+  const active = rows.filter((x) => x.active !== false), removed = rows.filter((x) => x.active === false);
+  const chip = (x) => `<span class="${x.tradable ? "" : "off"}" title="${x.tradable ? "" : "غير قابل للتداول"}">${esc(x.symbol)}${x.cryptoCorrelated ? " ₿" : ""}${admin ? `<button type="button" class="rm" data-remove="${cls}" data-sym="${esc(x.symbol)}" aria-label="حذف ${esc(x.symbol)}">✕</button>` : ""}</span>`;
+  return `<h2>${title} (${num(active.length)})</h2>
+  <div class="card">${cls === "stock" ? `<div style="margin-bottom:10px">${adminBar()}</div>` : ""}<div class="syms">${active.map(chip).join("") || '<span class="sub">فاضية</span>'}</div>
+  ${removed.length ? `<div class="sub" style="margin-top:8px">انشالت: <span class="ltr mono">${removed.map((x) => esc(x.symbol)).join(" · ")}</span></div>` : ""}
+  ${admin ? `<form class="addform" data-add="${cls}" autocomplete="off"><input type="text" name="sym" placeholder="${cls === "stock" ? "مثل AAPL" : "مثل BTC"}" autocapitalize="characters" spellcheck="false" maxlength="20" aria-label="رمز جديد">${cls === "stock" ? `<label><input type="checkbox" name="cc"> يتبع الكريبتو</label>` : ""}<button class="btn" type="submit">إضافة</button></form>` : ""}
+  ${cls === "stock" ? `<div class="sub" style="margin-top:8px">المشطوب غير قابل للتداول (لم يُتحقق منه على eToro).</div>` : ""}</div>`;
+}
+
+// ---- admin session + list changes ------------------------------------------------
+function sheet(html) { sheetOpen = true; document.getElementById("sheetHost").innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="in">${html}</div></div>`; }
+function closeSheet() { document.getElementById("sheetHost").innerHTML = ""; sheetOpen = false; render(); }
+function openAdmin() {
+  sheet(`<div style="font-weight:700;font-size:17px">جلسة المدير</div>
+    <div class="txt">كلمة مرور المدير (TRADING_ADMIN_PASSWORD). الجلسة تنتهي بعد ١٥ دقيقة.</div>
+    <input type="password" id="adminPw" autocomplete="current-password" aria-label="كلمة مرور المدير">
+    <div class="txt" id="adminErr" style="color:var(--coral)"></div>
+    <div class="row"><button class="btn approve grow" id="yes">فتح</button><button class="btn grow" id="no">تراجع</button></div>`);
+  const pw = document.getElementById("adminPw"); pw.focus();
+  document.getElementById("no").onclick = closeSheet;
+  const go = async () => {
+    if (busy || !pw.value) return;
+    busy = true; document.getElementById("yes").disabled = true;
+    try {
+      const r = await fetch("/api/trading/desk/admin/unlock", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Trading-Desk": "1" }, body: JSON.stringify({ password: pw.value }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) { busy = false; closeSheet(); toast("وضع المدير مفعّل لمدة ١٥ دقيقة"); load(); return; }
+      document.getElementById("adminErr").textContent = j.error || `تعذّر (${r.status})`; pw.value = ""; pw.focus();
+    } catch (e) { document.getElementById("adminErr").textContent = `تعذّر الإرسال: ${e.message}`; }
+    busy = false; document.getElementById("yes").disabled = false;
+  };
+  document.getElementById("yes").onclick = go;
+  pw.onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+async function lockAdmin() {
+  try { await fetch("/api/trading/desk/admin/lock", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Trading-Desk": "1" }, body: "{}" }); } catch { /* the session also ends by itself */ }
+  toast("انقفل وضع المدير"); load();
+}
+function confirmListChange(action, cls, sym, cryptoCorrelated = false) {
+  if (busy) return;
+  const list = cls === "stock" ? "قائمة الأسهم" : "قائمة العملات";
+  const add = action === "add";
+  sheet(`<div style="font-weight:700;font-size:17px">${add ? `إضافة <span class="ltr mono">${esc(sym)}</span> إلى ${list}؟` : `حذف <span class="ltr mono">${esc(sym)}</span> من ${list}؟`}</div>
+    <div class="txt">${add ? `بيتم البحث عنه في eToro أول، وما ينضاف إلا إذا طلعت أداة واحدة بنفس الرمز بالضبط ومن نفس النوع.${cls === "stock" ? " الخادم ما يحكم شرعيًا: تأكد إن السهم مطابق لفحصك قبل الإضافة." : ""}` : "أي شراء جديد له بينرفض، حتى الطلبات اللي تنتظر موافقتك. المراكز المفتوحة فيه تقدر تقفلها عادي."} العملية تنسجل في سجل التدقيق.</div>
+    <div class="txt" id="listErr" style="color:var(--coral)"></div>
+    <div class="row"><button class="btn ${add ? "approve" : "reject"} grow" id="yes">${add ? "تحقق وأضف" : "نعم، احذف"}</button><button class="btn grow" id="no">تراجع</button></div>`);
+  document.getElementById("no").onclick = closeSheet;
+  document.getElementById("yes").onclick = async () => {
+    busy = true; const yes = document.getElementById("yes"); yes.disabled = true; yes.textContent = add ? "يتحقق من eToro…" : "جارٍ…";
+    try {
+      const body = JSON.stringify(add ? { assetClass: cls, symbol: sym, cryptoCorrelated } : { assetClass: cls, symbol: sym });
+      const r = add
+        ? await fetch("/api/trading/desk/allowlist/add", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Trading-Desk": "1" }, body })
+        : await fetch("/api/trading/desk/allowlist/remove", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-Trading-Desk": "1" }, body });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok) { busy = false; closeSheet(); toast(j.message || "تم"); load(); return; }
+      if (j.adminRequired) { busy = false; closeSheet(); toast("انتهت جلسة المدير، افتحها من جديد"); load(); return; }
+      document.getElementById("listErr").textContent = j.error || `تعذّر (${r.status})`;
+      yes.textContent = add ? "تحقق وأضف" : "نعم، احذف";
+    } catch (e) { document.getElementById("listErr").textContent = `تعذّر الإرسال: ${e.message}`; }
+    busy = false; yes.disabled = false;
+  };
 }
 
 // ---- Approve / Reject ------------------------------------------------------------
@@ -302,7 +384,8 @@ function confirmDecision(decision, approvalId) {
 }
 
 load();
-setInterval(() => { if (!document.hidden && !sheetOpen && !busy) load(); }, 30000);
+const typing = () => !!(document.activeElement && document.activeElement.closest && document.activeElement.closest("[data-add]"));
+setInterval(() => { if (!document.hidden && !sheetOpen && !busy && !typing()) load(); }, 30000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && !sheetOpen) load(); });
 </script>
 </body>

@@ -176,4 +176,4 @@ async function saveAssessment(q, proposalId, ctx, verdict) {
   return r.rows[0].id;
 }
 
-module.exports = { buildContext, saveAssessment, loadProposal, loadAccount, loadPosition, readHalted };
+module.exports = { buildContext, saveAssessment, loadProposal, loadAccount, loadPosition, readHalted, loadAllowlist };

@@ -92,4 +92,97 @@ async function readAllowlists(db) {
   return { stocks: stocks.rows.map(shape), crypto: crypto.rows.map(shape) };
 }
 
-module.exports = { appendAudit, syncAllowlist, readAllowlists };
+// --- Editing the allowlists from the Trading Desk page (admin only) ---------
+// The database is the source of truth for both lists once the page edits
+// them; allowlist.js is only the first seed. Every change and every refused
+// add is written to the audit log in the same transaction as the change.
+
+class AllowlistError extends Error {
+  constructor(message, code) { super(message); this.name = "AllowlistError"; this.code = code; }
+}
+
+const IN_FLIGHT = ["pending_approval", "approved", "executing"];
+
+// `found` is a verified result from verify-allowlist's classify(), plus the
+// source and fetchedAt of the eToro search that produced it.
+async function addAllowlistSymbol(db, { assetClass, symbol, cryptoCorrelated = false, found, actor }) {
+  const table = TABLE[assetClass];
+  if (!table) throw new AllowlistError(`unknown asset class: ${assetClass}`, "BadInput");
+  if (!found || found.status !== "verified" || !found.match || !found.source || !found.fetchedAt) throw new AllowlistError("only an eToro-verified symbol can be added", "NotVerified");
+  const isStock = assetClass === "stock";
+  return db.withTransaction(async (tx) => {
+    const prev = (await tx.query(`select active, instrument_id from trading.${table} where symbol = $1 for update`, [symbol])).rows[0] || null;
+    if (prev && prev.active && prev.instrument_id !== null) throw new AllowlistError(`${symbol} is already on the ${assetClass} allowlist`, "AlreadyListed");
+    const other = (await tx.query(`select symbol from trading.${table} where instrument_id = $1 and symbol <> $2`, [found.match.instrumentId, symbol])).rows[0];
+    if (other) throw new AllowlistError(`eToro instrument ${found.match.instrumentId} is already on the list as ${other.symbol}`, "SameInstrument");
+    await tx.query(
+      `insert into trading.instruments (instrument_id, symbol, display_name, asset_class, exchange, raw, source, fetched_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (instrument_id) do update set symbol = excluded.symbol, display_name = excluded.display_name,
+         exchange = excluded.exchange, raw = excluded.raw, source = excluded.source, fetched_at = excluded.fetched_at`,
+      [found.match.instrumentId, symbol, found.match.displayName, assetClass, found.match.exchange, JSON.stringify(found.raw || {}), found.source, found.fetchedAt]
+    );
+    await tx.query(
+      isStock
+        ? `insert into trading.${table} (symbol, instrument_id, verified_at, crypto_correlated, active) values ($1, $2, $3, $4, true)
+           on conflict (symbol) do update set instrument_id = excluded.instrument_id, verified_at = excluded.verified_at, crypto_correlated = excluded.crypto_correlated, active = true`
+        : `insert into trading.${table} (symbol, instrument_id, verified_at, active) values ($1, $2, $3, true)
+           on conflict (symbol) do update set instrument_id = excluded.instrument_id, verified_at = excluded.verified_at, active = true`,
+      isStock ? [symbol, found.match.instrumentId, found.fetchedAt, cryptoCorrelated === true] : [symbol, found.match.instrumentId, found.fetchedAt]
+    );
+    const previously = !prev ? "new" : prev.active ? "listed_unverified" : "removed_earlier";
+    const audit = await appendAudit(tx, {
+      eventType: "allowlist.symbol_added", entityType: table, entityId: symbol, actor,
+      data: { symbol, assetClass, instrumentId: found.match.instrumentId, displayName: found.match.displayName, exchange: found.match.exchange,
+        etoroAssetClass: found.match.etoroAssetClass, ...(isStock ? { cryptoCorrelated: cryptoCorrelated === true } : {}), previously, source: found.source, fetchedAt: found.fetchedAt },
+    });
+    return { symbol, assetClass, instrumentId: found.match.instrumentId, displayName: found.match.displayName, previously, auditSeq: Number(audit.seq) };
+  });
+}
+
+// An add that eToro's search did not confirm. Nothing changes but the log.
+async function recordAllowlistRejection(db, { assetClass, symbol, status, reason, candidates = [], source = null, fetchedAt = null, actor }) {
+  const audit = await appendAudit(db, {
+    eventType: "allowlist.add_rejected", entityType: TABLE[assetClass] || "allowlist", entityId: symbol, actor,
+    data: { symbol, assetClass, status, reason, candidates: candidates.slice(0, 5), source, fetchedAt },
+  });
+  return Number(audit.seq);
+}
+
+// Switches a symbol off (the row and its eToro link stay, for the record).
+// New buys are refused at once by the risk engine's "allowlisted" check,
+// including ones already waiting; closing a held position does not need the
+// allowlist, so nothing is trapped.
+async function removeAllowlistSymbol(db, { assetClass, symbol, actor }) {
+  const table = TABLE[assetClass];
+  if (!table) throw new AllowlistError(`unknown asset class: ${assetClass}`, "BadInput");
+  return db.withTransaction(async (tx) => {
+    const row = (await tx.query(`select active, instrument_id from trading.${table} where symbol = $1 for update`, [symbol])).rows[0];
+    if (!row || !row.active) throw new AllowlistError(`${symbol} is not on the ${assetClass} allowlist`, "NotListed");
+    await tx.query(`update trading.${table} set active = false where symbol = $1`, [symbol]);
+    let openPositions = 0, inFlightProposals = 0;
+    if (row.instrument_id !== null) {
+      openPositions = Number((await tx.query(`select count(*)::int as n from trading.positions where instrument_id = $1 and status = 'open'`, [row.instrument_id])).rows[0].n);
+      inFlightProposals = Number((await tx.query(`select count(*)::int as n from trading.proposals where instrument_id = $1 and action = 'open' and status = any($2::text[])`, [row.instrument_id, IN_FLIGHT])).rows[0].n);
+    }
+    const instrumentId = row.instrument_id === null ? null : Number(row.instrument_id);
+    const audit = await appendAudit(tx, {
+      eventType: "allowlist.symbol_removed", entityType: table, entityId: symbol, actor,
+      data: { symbol, assetClass, instrumentId, openPositions, inFlightProposals },
+    });
+    return { symbol, assetClass, instrumentId, openPositions, inFlightProposals, auditSeq: Number(audit.seq) };
+  });
+}
+
+// The entries to verify/sync: the database's active rows; the seed only
+// while the database has no allowlist rows at all.
+async function currentAllowlistEntries(db, seed) {
+  const lists = await readAllowlists(db);
+  if (!lists.stocks.length && !lists.crypto.length) return seed();
+  return [
+    ...lists.stocks.filter((s) => s.active).map((s) => ({ symbol: s.symbol, assetClass: "stock", cryptoCorrelated: s.crypto_correlated === true })),
+    ...lists.crypto.filter((c) => c.active).map((c) => ({ symbol: c.symbol, assetClass: "crypto", cryptoCorrelated: false })),
+  ];
+}
+
+module.exports = { appendAudit, syncAllowlist, readAllowlists, addAllowlistSymbol, removeAllowlistSymbol, recordAllowlistRejection, currentAllowlistEntries, AllowlistError };
