@@ -539,9 +539,15 @@ function wellFormed(v) {
   return v;
 }
 
+// 1000 was too small: when the GM consults 4 departments in one turn, the
+// Arabic instructions ran past it and the last tool call was cut off empty
+// (Finance got "user messages must have non-empty content"), and the full
+// 6-section briefing could be cut short. Only tokens actually used are billed.
+const MAX_OUTPUT_TOKENS = 4000;
+
 async function callClaude({ system, messages, tools }) {
   const res = await anthropic.messages.create(
-    wellFormed({ model: MODEL, max_tokens: 1000, system, messages, ...(tools ? { tools } : {}) }),
+    wellFormed({ model: MODEL, max_tokens: MAX_OUTPUT_TOKENS, system, messages, ...(tools ? { tools } : {}) }),
     { timeout: 60000 }
   );
   const u = res.usage || {};
@@ -1077,6 +1083,9 @@ function callDepartment(deptId, instruction, images) {
 
 async function callDepartmentCore(deptId, instruction, images) {
   const dept = DEPTS[deptId];
+  if (!String(instruction || "").trim() && !(images && (!Array.isArray(images) || images.length))) {
+    return "لم يصل للقسم أي طلب — أرسل سؤالًا أو أمرًا واضحًا.";
+  }
   let systemText = dept.system;
   if (dept.sheetUrl) {
     try {
@@ -1238,6 +1247,12 @@ async function runGMCore(userText, displayText, images, opts = {}) {
     for (const tu of toolUses) {
       if (!tu.name.startsWith("consult_")) continue;
       const consultedId = tu.name.replace("consult_", "");
+      // a cut-off or empty tool call: don't send the department an empty
+      // request (the API rejects it); tell the GM so it can ask again.
+      if (!String(tu.input?.instruction || "").trim()) {
+        deptCalls.set(tu.id, Promise.resolve(`لم يصل لـ${DEPTS[consultedId]?.name || consultedId} أي طلب (وصلت الاستشارة فارغة). أعد استشارته مع سؤال أو أمر واضح إن كنت تحتاجه.`));
+        continue;
+      }
       officeEmit("delegate", { from: "gm", to: consultedId, text: shortText(tu.input?.instruction, 60) });
       officeLog("gm", `حوّل مهمة لـ${DEPTS[consultedId]?.name || consultedId}`);
       deptCalls.set(tu.id, callDepartment(consultedId, tu.input?.instruction || "")
@@ -1410,8 +1425,10 @@ async function runGMCore(userText, displayText, images, opts = {}) {
         const deptId = tu.name.replace("consult_", "");
         const instruction = tu.input?.instruction || "";
         responseText = await (deptCalls.get(tu.id) || callDepartment(deptId, instruction));
-        appendDeptLog(deptId, instruction, responseText);
-        consultedAll.push(deptId);
+        if (String(instruction).trim()) {
+          appendDeptLog(deptId, instruction, responseText);
+          consultedAll.push(deptId);
+        }
       }
       toolResults.push({ type: "tool_result", tool_use_id: tu.id, content: responseText });
     }
