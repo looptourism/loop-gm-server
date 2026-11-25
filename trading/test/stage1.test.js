@@ -199,7 +199,7 @@ test("demo-account route returns the summary; errors become 502 without data", a
   assert.strictEqual(e.body.etoroStatus, 401);
 });
 
-test("every mounted route is a read-only GET under /api/trading/ — plus the desk page and its one decision POST (Stage 7)", () => {
+test("every mounted route is a read-only GET under /api/trading/ — plus the desk page, its decision POST (Stage 7) and the admin-only allowlist editor", () => {
   const app = fakeApp();
   const posts = [];
   app.post = (p) => { posts.push(p); };
@@ -207,5 +207,6 @@ test("every mounted route is a read-only GET under /api/trading/ — plus the de
   mount(app, { authOn: true, config, client: createClient({ config, fetchImpl: fakeFetch(200, {}).impl }) });
   assert.ok(Object.keys(app.routes).length >= 1);
   for (const p of Object.keys(app.routes)) assert.ok(p.startsWith("/api/trading/") || p === "/trading-desk", p);
-  assert.deepStrictEqual(posts, ["/api/trading/desk/decide"]);
+  assert.deepStrictEqual(posts, ["/api/trading/desk/decide", "/api/trading/desk/admin/unlock", "/api/trading/desk/admin/lock",
+    "/api/trading/desk/allowlist/add", "/api/trading/desk/allowlist/remove"]);
 });

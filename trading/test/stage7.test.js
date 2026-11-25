@@ -34,7 +34,8 @@ test("the page: a permanent DEMO band, its own colour, escaped text, and only tw
   assert.match(page, /\.demo\{position:sticky;top:0/);                            // stays on screen while scrolling
   assert.match(page, /--desk:#5BD9F5/);                                           // not the console's department violet
   const urls = [...page.matchAll(/fetch\("([^"]+)"/g)].map((m) => m[1]);
-  assert.deepStrictEqual(urls, ["/api/trading/desk", "/api/trading/desk/decide"]);
+  assert.deepStrictEqual(urls, ["/api/trading/desk", "/api/trading/desk/admin/unlock", "/api/trading/desk/admin/lock",
+    "/api/trading/desk/allowlist/add", "/api/trading/desk/allowlist/remove", "/api/trading/desk/decide"]); // the allowlist editor: admin session + add/remove only
   assert.match(page, /"X-Trading-Desk": "1"/);
   assert.ok(!/<script src=/.test(page));                                          // no outside scripts
   // every piece of data the page writes into HTML goes through esc()/num()/usd()/sym(): no raw ${x.something} of server text

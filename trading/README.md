@@ -16,6 +16,7 @@ Rules: `docs/trading-desk-plan.md`. Limits: `trading/policy.js` (code, not AI).
 | `ETORO_API_KEY`, `ETORO_USER_KEY` | yes | eToro Public API keys for the demo account |
 | `TRADING_DATABASE_URL` | yes | Supabase Postgres. Migrations run by themselves at startup |
 | `CONSOLE_PASSWORD` | yes | Console login. The Trading Desk page and its buttons are closed without it |
+| `TRADING_ADMIN_PASSWORD` | optional | Opens a 15-minute admin session on the desk page to add or remove allowlist symbols. Without it the lists can only be read. Use a different password from `CONSOLE_PASSWORD` |
 | `TRADING_MONITOR_ENABLED` | yes | `true` = prices every minute and positions every 15 minutes |
 | `TRADING_ANTHROPIC_API_KEY` | yes | The desk's own Claude key (falls back to `ANTHROPIC_API_KEY`). Spend is capped at $75/month in code |
 | `TRADING_AGENTS_SCHEDULE_ENABLED` | optional | `true` = agents run weekdays 12:00 and 18:00 UTC (all) and Saturday 12:00 UTC (coins) |

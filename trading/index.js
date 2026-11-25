@@ -20,8 +20,9 @@ const { createClient, EtoroError, CANDLE_INTERVALS } = require("./etoro-client")
 const { summarizeDemoAccount, AccountDataError } = require("./account");
 const { createDb, DbError } = require("./db");
 const { seedAllowlist } = require("./allowlist");
-const { verifyAllowlist } = require("./verify-allowlist");
-const { syncAllowlist, readAllowlists } = require("./db/store");
+const { verifyAllowlist, classify } = require("./verify-allowlist");
+const { syncAllowlist, readAllowlists, addAllowlistSymbol, removeAllowlistSymbol, recordAllowlistRejection, currentAllowlistEntries, AllowlistError } = require("./db/store");
+const { createAdmin } = require("./admin");
 const { createMonitor } = require("./monitor");
 const snapshots = require("./db/snapshots");
 const { createProviders, ProviderError } = require("./providers");
@@ -58,7 +59,8 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   gateway = createGateway({ config, db, client, orders, onOutcome: (outcome) => notifier.send(notify.executionResult(outcome)) }),
   approvals = createApprovals({ config, db, client, gateway, notifier }),
   watches = createWatchKeeper({ config, db, agents, notifier }),
-  reporter = report.createReporter({ config, db, notifier, agents }), retryMs = 5 * 60 * 1000 } = {}) {
+  reporter = report.createReporter({ config, db, notifier, agents }), retryMs = 5 * 60 * 1000,
+  admin = createAdmin({ password: config.adminPassword }) } = {}) {
   // After every agent run: the summary first, then any new draft goes to the
   // risk engine at once (and, if it passes and trading is on, to the owner).
   hooks.afterRun = async (result) => {
@@ -107,9 +109,15 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     }
   }
 
-  // One coverage test per asset class, over the owner's seed lists.
+  // One coverage test per asset class, over the lists as they are now (the
+  // database once it has them, so symbols added on the page are covered too).
+  const liveSymbols = (assetClass) => async () => {
+    const seed = () => seedAllowlist().filter((s) => s.assetClass === assetClass).map((s) => s.symbol);
+    if (!db.configured || dbState.state !== "ok") return seed();
+    try { return (await currentAllowlistEntries(db, seedAllowlist)).filter((s) => s.assetClass === assetClass).map((s) => s.symbol); } catch { return seed(); }
+  };
   const coverage = Object.fromEntries(["stock", "crypto"].map((assetClass) => [assetClass,
-    createCoverage({ providers, assetClass, symbols: seedAllowlist().filter((s) => s.assetClass === assetClass).map((s) => s.symbol) })]));
+    createCoverage({ providers, assetClass, symbols: liveSymbols(assetClass) })]));
   const classOf = (req) => (req.query.class === "crypto" ? "crypto" : "stock");
   // Every Trading Desk route: never cached, and closed when the console
   // login is off.
@@ -222,11 +230,13 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     } catch (e) { fail(res, e); }
   });
 
-  // Searches eToro for every symbol on both allowlists. Read-only: nothing
-  // is saved. One search per symbol, so it takes a few seconds.
+  // Searches eToro for every symbol on both allowlists (as stored in the
+  // database; the seed until the database has any). Read-only: nothing is
+  // saved. One search per symbol, so it takes a few seconds.
   app.get("/api/trading/test/verify-allowlist", guard, async (req, res) => {
     try {
-      const v = await verifyAllowlist(client, seedAllowlist());
+      const entries = db.configured && dbState.state === "ok" ? await currentAllowlistEntries(db, seedAllowlist) : seedAllowlist();
+      const v = await verifyAllowlist(client, entries);
       res.json({ ok: true, ...status(), ...v, results: v.results.map(({ raw, ...rest }) => rest) });
     } catch (e) { fail(res, e); }
   });
@@ -248,12 +258,14 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
     } catch (e) { fail(res, e); }
   });
 
-  // Verifies both allowlists on eToro and writes the result to the database
-  // in one transaction. Needs ?confirm=yes; without it nothing is written.
+  // Re-verifies both allowlists on eToro and writes the result in one
+  // transaction. Needs ?confirm=yes; without it nothing is written. It works
+  // on the lists as stored (the seed only while the database has none), so a
+  // sync never brings back a symbol removed on the page or drops one added there.
   app.get("/api/trading/admin/sync-allowlist", dbGuard, guard, async (req, res) => {
     try {
       if (req.query.confirm !== "yes") throw new EtoroError("nothing was written: add ?confirm=yes", { code: "BadInput" });
-      const v = await verifyAllowlist(client, seedAllowlist());
+      const v = await verifyAllowlist(client, await currentAllowlistEntries(db, seedAllowlist));
       const saved = await syncAllowlist(db, v, { actor: "owner:console" });
       res.json({ ok: true, ...status(), verified: v.verified, total: v.total, problems: v.problems, saved });
     } catch (e) { fail(res, e); }
@@ -496,7 +508,7 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
 
   // Everything the page shows, read-only. No call to eToro or Claude.
   app.get("/api/trading/desk", dbGuard, async (req, res) => {
-    try { res.json(await buildDesk({ db, config, agents, positions, approvals, watches })); } catch (e) { fail(res, e); }
+    try { res.json({ ...(await buildDesk({ db, config, agents, positions, approvals, watches })), admin: admin.status(req) }); } catch (e) { fail(res, e); }
   });
 
   // Approve / Reject from the page. Only for a request that is already waiting;
@@ -505,10 +517,16 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
   // only from this origin (the server's CORS rules do not allow it from
   // elsewhere), and the Origin header, when present, must be this server.
   const post = typeof app.post === "function" ? app.post.bind(app) : () => {};
-  post("/api/trading/desk/decide", dbGuard, async (req, res) => {
+  const fromDeskPage = (req) => {
     const origin = req.get ? req.get("Origin") : null;
     const host = req.get ? req.get("Host") : null;
-    if ((req.get && req.get("X-Trading-Desk")) !== "1" || (origin && host && new URL(origin).host !== host)) return res.status(403).json({ ok: false, error: "refused: not sent from the Trading Desk page" });
+    let sameHost = true;
+    try { sameHost = !(origin && host && new URL(origin).host !== host); } catch { sameHost = false; }
+    return (req.get && req.get("X-Trading-Desk")) === "1" && sameHost;
+  };
+  const refuseForeign = (req, res, next) => (fromDeskPage(req) ? next() : res.status(403).json({ ok: false, error: "refused: not sent from the Trading Desk page" }));
+  post("/api/trading/desk/decide", dbGuard, async (req, res) => {
+    if (!fromDeskPage(req)) return res.status(403).json({ ok: false, error: "refused: not sent from the Trading Desk page" });
     const decision = req.body?.decision;
     if (!["approve", "reject"].includes(decision)) return res.status(400).json({ ok: false, error: "decision must be approve or reject" });
     try {
@@ -525,6 +543,104 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
         : r.message;
       res.json({ ok: r.outcome === "approved" || r.outcome === "rejected", outcome: r.outcome, execution: x ? { status: x.status, reason: x.reason ?? null } : null, message });
     } catch (e) { fail(res, e); }
+  });
+
+  // --- Editing the allowlists (admin only) -----------------------------------
+  // The console login shows the desk; changing a list also needs an admin
+  // session (TRADING_ADMIN_PASSWORD, 15 minutes, see admin.js). Every add,
+  // refused add and removal is written to the audit log.
+  const ADMIN_ACTOR = "owner:console:admin";
+  // for events that are not a list change (unlock attempts, eToro unreachable): logged when the database is up
+  const auditQuietly = async (entry) => {
+    if (!db.configured || dbState.state !== "ok") return;
+    try { await appendAudit(db, entry); } catch (e) { console.error("[trading] audit write failed:", db.redact(e.message)); }
+  };
+  const adminConfigured = (req, res, next) => (admin.configured ? next() : res.status(503).json({ ok: false, error: "editing the allowlists is off: TRADING_ADMIN_PASSWORD is not set on the server", adminConfigured: false }));
+  const adminGuard = (req, res, next) => (admin.verify(admin.tokenFrom(req)).ok ? next() : res.status(403).json({ ok: false, error: "an admin session is needed to change the allowlists", adminRequired: true }));
+  const normSymbol = (x) => String(x || "").trim().toUpperCase();
+  const SYMBOL_RE = /^[A-Z0-9._-]{1,20}$/;
+  const AR_CLASS = { stock: "سهم", crypto: "عملة رقمية" };
+  // db.withTransaction re-wraps errors as DbError but keeps their code, so
+  // the store's refusals are recognised by code, not by class.
+  const LIST_REFUSALS = new Set(["AlreadyListed", "SameInstrument", "NotListed", "NotVerified"]);
+  const refusal = (e) => (e instanceof AllowlistError || LIST_REFUSALS.has(e?.code) ? e.code : null);
+  const whyNot = (r, assetClass, symbol) => {
+    const names = (r.candidates || []).slice(0, 5).map((c) => c.symbol).filter(Boolean);
+    if (r.status === "no_match") return `ما لقيت على eToro أداة رمزها ${symbol} بالضبط${names.length ? ` (أقرب النتائج: ${names.join("، ")})` : ""}.`;
+    if (r.status === "ambiguous") return `eToro رجّع أكثر من أداة بالرمز ${symbol}، فما أضفته عشان ما نختار غلط.`;
+    if (r.status === "wrong_asset_class") return `${symbol} على eToro مصنّف «${r.match?.etoroAssetClass || "غير معروف"}»، مو ${AR_CLASS[assetClass]}، فما ينضاف لهالقائمة.`;
+    return "رد eToro ما كان واضح، فما أضفته.";
+  };
+
+  post("/api/trading/desk/admin/unlock", loginGuard, refuseForeign, adminConfigured, async (req, res) => {
+    const r = admin.checkPassword(req.ip || "?", req.body?.password);
+    if (!r.ok) {
+      await auditQuietly({ eventType: "admin.unlock_failed", entityType: "admin_session", actor: "owner:console", data: { locked: !!r.locked } });
+      return res.status(r.locked ? 429 : 401).json({ ok: false, error: r.locked ? `محاولات كثيرة. جرّب بعد ${Math.ceil(r.retryAfterSec / 60)} دقيقة.` : "كلمة مرور المدير غلط.", attemptsLeft: r.attemptsLeft ?? 0 });
+    }
+    const { token, expiresAt } = admin.issue();
+    res.set("Set-Cookie", admin.cookie(req, token, Math.round(admin.ttlMs / 1000)));
+    await auditQuietly({ eventType: "admin.unlocked", entityType: "admin_session", actor: ADMIN_ACTOR, data: { expiresAt } });
+    res.json({ ok: true, expiresAt });
+  });
+
+  post("/api/trading/desk/admin/lock", loginGuard, refuseForeign, (req, res) => {
+    res.set("Set-Cookie", admin.cookie(req, "", 0));
+    res.json({ ok: true });
+  });
+
+  post("/api/trading/desk/allowlist/add", dbGuard, refuseForeign, adminConfigured, adminGuard, async (req, res) => {
+    const assetClass = req.body?.assetClass, symbol = normSymbol(req.body?.symbol);
+    if (!["stock", "crypto"].includes(assetClass)) return res.status(400).json({ ok: false, error: "assetClass must be stock or crypto" });
+    if (!SYMBOL_RE.test(symbol)) return res.status(400).json({ ok: false, error: "الرمز لازم يكون حروف إنجليزية وأرقام بس، مثل AAPL أو BTC." });
+    if (!config.hasKeys) return res.status(503).json({ ok: false, error: "ETORO_API_KEY / ETORO_USER_KEY are not set on the server, so the symbol cannot be checked on eToro" });
+    const lists = await readAllowlists(db).catch(() => null);
+    const listed = lists && lists[assetClass === "stock" ? "stocks" : "crypto"].find((x) => x.symbol === symbol);
+    if (listed && listed.active && listed.instrument_id !== null) return res.status(409).json({ ok: false, error: `${symbol} موجود في القائمة من قبل.` });
+    let search;
+    try { search = await client.searchInstruments(symbol); }
+    catch (e) {
+      // fail closed: nothing is added when eToro could not answer
+      await auditQuietly({ eventType: "allowlist.add_rejected", entityType: `${assetClass}_allowlist`, entityId: symbol, actor: ADMIN_ACTOR, data: { symbol, assetClass, status: "error", reason: client.redact(e.message) } });
+      return res.status(502).json({ ok: false, error: `تعذّر التحقق من eToro، فما انضاف شي: ${client.redact(e.message)}`, etoroStatus: e?.status ?? null });
+    }
+    const items = Array.isArray(search?.data?.items) ? search.data.items : null;
+    const result = items ? classify({ symbol, assetClass }, items) : { status: "bad_response", candidates: [] };
+    if (result.status !== "verified") {
+      const reason = whyNot(result, assetClass, symbol);
+      const candidates = (result.candidates || (result.match ? [result.match] : [])).map((c) => ({ symbol: c.symbol, displayName: c.displayName, etoroAssetClass: c.etoroAssetClass }));
+      const auditSeq = await recordAllowlistRejection(db, { assetClass, symbol, status: result.status, reason, candidates, source: search?.source ?? null, fetchedAt: search?.fetchedAt ?? null, actor: ADMIN_ACTOR }).catch(() => null);
+      return res.status(422).json({ ok: false, error: reason, status: result.status, candidates, auditSeq });
+    }
+    try {
+      const saved = await addAllowlistSymbol(db, { assetClass, symbol, cryptoCorrelated: assetClass === "stock" && req.body?.cryptoCorrelated === true,
+        found: { ...result, source: search.source, fetchedAt: search.fetchedAt }, actor: ADMIN_ACTOR });
+      res.json({ ok: true, ...saved, message: `انضاف ${symbol}${saved.displayName ? ` (${saved.displayName})` : ""} لقائمة ${assetClass === "stock" ? "الأسهم" : "العملات"} بعد التحقق من eToro.` });
+    } catch (e) {
+      const code = refusal(e);
+      if (code === "AlreadyListed") return res.status(409).json({ ok: false, error: `${symbol} موجود في القائمة من قبل.`, code });
+      if (code === "SameInstrument") return res.status(409).json({ ok: false, error: `نفس أداة eToro موجودة في القائمة برمز ثاني، فما أضفت ${symbol}.`, code });
+      if (code) return res.status(400).json({ ok: false, error: "only an eToro-verified symbol can be added", code });
+      fail(res, e);
+    }
+  });
+
+  post("/api/trading/desk/allowlist/remove", dbGuard, refuseForeign, adminConfigured, adminGuard, async (req, res) => {
+    const assetClass = req.body?.assetClass, symbol = normSymbol(req.body?.symbol);
+    if (!["stock", "crypto"].includes(assetClass)) return res.status(400).json({ ok: false, error: "assetClass must be stock or crypto" });
+    if (!SYMBOL_RE.test(symbol)) return res.status(400).json({ ok: false, error: "invalid symbol" });
+    try {
+      const r = await removeAllowlistSymbol(db, { assetClass, symbol, actor: ADMIN_ACTOR });
+      const notes = [];
+      if (r.openPositions) notes.push(`عندك ${r.openPositions} مركز مفتوح فيه، وإغلاقه يشتغل عادي`);
+      if (r.inFlightProposals) notes.push(`${r.inFlightProposals} طلب شراء قيد الانتظار بيرفضه فحص المخاطر`);
+      res.json({ ok: true, ...r, message: `انشال ${symbol} من القائمة. أي شراء جديد له بينرفض.${notes.length ? " " + notes.join("، ") + "." : ""}` });
+    } catch (e) {
+      const code = refusal(e);
+      if (code === "NotListed") return res.status(404).json({ ok: false, error: `${symbol} مو موجود في القائمة.`, code });
+      if (code) return res.status(400).json({ ok: false, error: "refused", code });
+      fail(res, e);
+    }
   });
 
   // --- Stage 8: the end-to-end checklist -------------------------------------
