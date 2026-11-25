@@ -4,9 +4,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
-const { createWorkspace, parseServiceAccount, workspaceTools, signJwt } = require("../google-workspace");
+const { createWorkspace, parseServiceAccount, diagnoseServiceAccount, workspaceTools, signJwt } = require("../google-workspace");
 
-const { fakeGoogle, KEY_JSON, EMAIL } = require("./helpers/fake-google");
+const { fakeGoogle, KEY_JSON, EMAIL, PEM } = require("./helpers/fake-google");
 
 const env = (extra = {}) => ({ GOOGLE_SERVICE_ACCOUNT_JSON: KEY_JSON, GOOGLE_WORKSPACE_SHEET_ID: "sheet1", GOOGLE_PARTNERS_FOLDER_ID: "root", ...extra });
 
@@ -86,4 +86,35 @@ test("tools are only offered for what is configured", () => {
   assert.deepEqual(names(env({ GOOGLE_PARTNERS_FOLDER_ID: "" })), ["sheet_read", "sheet_append_rows", "sheet_update_cells"]);
   assert.deepEqual(names(env()).slice(3), ["partner_docs_list", "partner_doc_read"]);
   assert.equal(createWorkspace({ env: { GOOGLE_SERVICE_ACCOUNT_JSON: "garbage" } }).status.keyProblem !== null, true);
+});
+
+test("the key is still read after the ways a phone or a web form mangle a paste", () => {
+  const forms = {
+    "line breaks removed (single-line field)": KEY_JSON.replace(/\n/g, ""),
+    "real line breaks turned into spaces": KEY_JSON.replace(/\\n/g, " "),
+    "curly quotes": KEY_JSON.replace(/"/g, (_, i) => (i % 2 ? "\u201D" : "\u201C")),
+    "dashes turned into long dashes": KEY_JSON.replace(/-----/g, "\u2014\u2014-"),
+    "a stray character in front": "x" + KEY_JSON,
+    "pretty-printed with blank lines": JSON.stringify(JSON.parse(KEY_JSON), null, 2).replace(/,/g, ",\n\n"),
+  };
+  for (const [name, raw] of Object.entries(forms)) {
+    const sa = parseServiceAccount(raw);
+    assert.equal(sa?.email, EMAIL, name);
+    assert.doesNotThrow(() => crypto.createPrivateKey(sa.privateKey), name);
+  }
+});
+
+test("a key that can't be read says what's missing, and never shows the key", () => {
+  const half = KEY_JSON.slice(0, Math.floor(KEY_JSON.length / 2));
+  const d = diagnoseServiceAccount(half);
+  assert.equal(d.hasKeyEnd, false);
+  assert.match(d.hint, /قصير|مقطوع/);
+  const body = PEM.split("\n")[1];
+  assert.ok(!JSON.stringify(d).includes(body.slice(0, 20)), "no key material in the diagnosis");
+  assert.match(diagnoseServiceAccount('{"type":"service_account","project_id":"x"}' + "a".repeat(2000)).hint, /client_email/);
+  const ws = createWorkspace({ env: { GOOGLE_SERVICE_ACCOUNT_JSON: half } });
+  assert.equal(ws.status.serviceAccount, false);
+  assert.equal(ws.status.keyDiagnosis.hasClientEmail, true);
+  const ok = createWorkspace({ env: { GOOGLE_SERVICE_ACCOUNT_JSON: KEY_JSON } });
+  assert.equal(ok.status.keyDiagnosis, undefined);
 });

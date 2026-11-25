@@ -15,20 +15,59 @@ const SCOPES = "https://www.googleapis.com/auth/spreadsheets https://www.googlea
 const MAX_READ_ROWS = 200;
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
-// Pasting JSON into a dashboard often mangles it (real line breaks inside the
-// key, escaped quotes…). Pull the two fields we need out of the text instead
-// of trusting JSON.parse.
+// Pasting JSON into a dashboard often mangles it: line breaks lost or
+// doubled, curly quotes, dashes turned into "—", a stray character in front.
+// Pull out the two fields we need instead of trusting JSON.parse, and rebuild
+// the key from its base64 body.
+const KEY_RE = /[-\u2010-\u2015]{2,}\s*BEGIN\s+PRIVATE\s+KEY\s*[-\u2010-\u2015]{2,}([\s\S]*?)[-\u2010-\u2015]{2,}\s*END\s+PRIVATE\s+KEY\s*[-\u2010-\u2015]{2,}/;
+const EMAIL_RE = /client_email\W{1,8}?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.iam\.gserviceaccount\.com)/;
+
+function candidates(raw) {
+  const text = String(raw || "").replace(/^\uFEFF/, "").trim();
+  const out = [text];
+  if (/^[A-Za-z0-9+/=\s]+$/.test(text) && text.length > 100) {
+    try { out.push(Buffer.from(text, "base64").toString("utf8")); } catch { /* not base64 */ }
+  }
+  return out.map((t) => t.replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"').replace(/[\u2018\u2019]/g, "'"));
+}
+
+function keyFrom(text) {
+  const m = text.match(KEY_RE);
+  if (!m) return null;
+  const body = m[1].replace(/\\n/g, "").replace(/[^A-Za-z0-9+/=]/g, "");
+  if (body.length < 100) return null;
+  const pem = `-----BEGIN PRIVATE KEY-----\n${body.match(/.{1,64}/g).join("\n")}\n-----END PRIVATE KEY-----\n`;
+  try { crypto.createPrivateKey(pem); return pem; } catch { return null; }
+}
+
 function parseServiceAccount(raw) {
   if (!raw) return null;
-  let text = String(raw).trim();
-  if (!text.startsWith("{")) {
-    try { text = Buffer.from(text, "base64").toString("utf8"); } catch { /* not base64 */ }
+  for (const text of candidates(raw)) {
+    const email = (text.match(EMAIL_RE) || [])[1];
+    const privateKey = keyFrom(text);
+    if (email && privateKey) return { email, privateKey };
   }
-  const email = (text.match(/"client_email"\s*:\s*"([^"]+)"/) || [])[1];
-  const keyMatch = text.match(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/);
-  if (!email || !keyMatch) return null;
-  const privateKey = keyMatch[0].replace(/\\n/g, "\n").replace(/\r/g, "");
-  return { email, privateKey };
+  return null;
+}
+
+// What's wrong with a pasted key, without revealing any of it.
+function diagnoseServiceAccount(raw) {
+  const text = candidates(raw)[0];
+  const m = text.match(KEY_RE);
+  return {
+    pastedLength: text.length,
+    startsWithBrace: text.startsWith("{"),
+    endsWithBrace: text.endsWith("}"),
+    hasClientEmail: EMAIL_RE.test(text),
+    hasKeyStart: /BEGIN\s+PRIVATE\s+KEY/.test(text),
+    hasKeyEnd: /END\s+PRIVATE\s+KEY/.test(text),
+    keyReadable: !!(m && keyFrom(text)),
+    hint: text.length < 1500 ? "النص قصير — غالبًا انلصق جزء منه بس. الملف الكامل حوالي 2300 حرف، من { إلى }."
+      : !EMAIL_RE.test(text) ? "ما لقيت client_email — تأكد إنه ملف مفتاح حساب الخدمة (JSON) مو ملف ثاني."
+      : !/END\s+PRIVATE\s+KEY/.test(text) ? "المفتاح مقطوع من آخره — انسخ الملف كامل لين آخر }."
+      : !(m && keyFrom(text)) ? "المفتاح موجود بس فيه تلف — انسخه من الملف من جديد."
+      : null,
+  };
 }
 
 const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -53,6 +92,7 @@ function createWorkspace({ env = process.env, fetchFn, timeoutFetch } = {}) {
     sheet: !!(sa && sheetId),
     partners: !!(sa && folderId),
     keyProblem: env.GOOGLE_SERVICE_ACCOUNT_JSON && !sa ? "تعذّرت قراءة مفتاح حساب الخدمة — تأكد إنك لصقت محتوى ملف JSON كاملًا" : null,
+    keyDiagnosis: env.GOOGLE_SERVICE_ACCOUNT_JSON && !sa ? diagnoseServiceAccount(env.GOOGLE_SERVICE_ACCOUNT_JSON) : undefined,
   };
 
   async function accessToken() {
@@ -253,4 +293,4 @@ function workspaceTools(status) {
 
 const WORKSPACE_TOOL_NAMES = new Set(["sheet_read", "sheet_append_rows", "sheet_update_cells", "partner_docs_list", "partner_doc_read"]);
 
-module.exports = { createWorkspace, workspaceTools, parseServiceAccount, signJwt, WORKSPACE_TOOL_NAMES };
+module.exports = { createWorkspace, workspaceTools, parseServiceAccount, diagnoseServiceAccount, signJwt, WORKSPACE_TOOL_NAMES };
