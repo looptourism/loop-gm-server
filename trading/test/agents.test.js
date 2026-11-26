@@ -96,7 +96,8 @@ test("the model is set in one place and the policy matches the owner's limits", 
   // the owner's cost decisions of 2026-11-15
   assert.deepStrictEqual([AGENTS.monthlyBudgetUsd, AGENTS.shortlistMax], [75, 5]);
   assert.deepStrictEqual(AGENTS.schedule.map((x) => [x.cron, x.scope]), [["0 14 * * 1-5", "all"], ["0 15 * * 1-5", "all"], ["0 17 * * 1-5", "all"], ["0 19 * * 1-5", "all"], ["0 20 * * 1-5", "all"], ["0 12 * * 6", "crypto"]]); // twice every weekday, and coins on Saturday
-  assert.deepStrictEqual([POLICY.style, POLICY.holdingDays], ["swing", { min: 1, max: 14 }]);
+  assert.deepStrictEqual([POLICY.style, POLICY.holdingHours], ["intraday", { min: 1, max: 48 }]);   // owner, 2026-11-26: hours, two days at most
+  assert.deepStrictEqual(POLICY.fees, { stockPerSideUsd: 2, cryptoPerSidePct: 1, hurdleMultiple: 2 });
   assert.strictEqual(readConfig({}).agentsScheduleEnabled, false);
   assert.strictEqual(readConfig({ TRADING_AGENTS_SCHEDULE_ENABLED: "yes" }).agentsScheduleEnabled, false);
   assert.strictEqual(readConfig({ TRADING_AGENTS_SCHEDULE_ENABLED: "true" }).agentsScheduleEnabled, true);
@@ -112,7 +113,7 @@ test("the model is set in one place and the policy matches the owner's limits", 
 
 // ---- validators -------------------------------------------------------------
 const box = (tags) => ({ has: (t) => tags.includes(t), record: (t) => ({ kind: "rate", source: `source of ${t}`, timestamp: "2099-11-14T10:00:00.000Z", label: t, ids: [] }) });
-const goodAnalysis = () => ({ recommendation: "buy", thesis: "t", evidence: [{ ref: "R1", claim: "a" }, { ref: "R2", claim: "b" }, { ref: "N1", claim: "c" }], entry_conditions: ["now"], exit_conditions: [{ type: "price_below", value: 90, description: "stop" }], suggested_amount_usd: 300, holding_days: 7, holding_period: "about a week", risks: ["r"], analytical_confidence: 0.6, assumptions: [], data_gaps: [] });
+const goodAnalysis = () => ({ recommendation: "buy", thesis: "t", evidence: [{ ref: "R1", claim: "a" }, { ref: "R2", claim: "b" }, { ref: "N1", claim: "c" }], entry_conditions: ["now"], exit_conditions: [{ type: "price_below", value: 90, description: "stop" }, { type: "price_above", value: 104, description: "target" }], suggested_amount_usd: 300, holding_hours: 6, holding_period: "about 6 hours", risks: ["r"], analytical_confidence: 0.6, assumptions: [], data_gaps: [] });
 
 test("an analysis is refused unless every evidence tag was issued by a tool", () => {
   const b = box(["R1", "R2", "N1"]);
@@ -128,16 +129,21 @@ test("an analysis is refused unless every evidence tag was issued by a tool", ()
     [(a) => { a.recommendation = "sell"; }, /"buy", "hold" or "avoid"/],
     [(a) => { a.entry_conditions = []; }, /entry condition/],
     [(a) => { a.risks = []; }, /at least one risk/],
-    // swing trading: a buy must say how many days (1 to 14) and carry a stop level
-    [(a) => { a.holding_days = 30; }, /holding_days must be a whole number from 1 to 14/],
-    [(a) => { a.holding_days = null; }, /holding_days must be a whole number from 1 to 14/],
-    [(a) => { a.holding_days = 2.5; }, /holding_days/],
+    // short-term trading: a buy must say how many hours (1 to 48) and carry a stop and a target
+    [(a) => { a.holding_hours = 72; }, /holding_hours must be a whole number of hours from 1 to 48/],
+    [(a) => { a.holding_hours = null; }, /holding_hours must be a whole number of hours from 1 to 48/],
+    [(a) => { a.holding_hours = 2.5; }, /holding_hours/],
+    [(a) => { delete a.holding_hours; a.holding_days = 1; }, /holding_hours must be a whole number/],   // days are no longer accepted from an agent
     [(a) => { a.exit_conditions = [{ type: "price_above", value: 120, description: "target" }]; }, /needs a stop level/],
     [(a) => { a.exit_conditions = [{ type: "date_after", date: "2026-12-01", description: "time limit" }]; }, /needs a stop level/],
+    [(a) => { a.exit_conditions = [{ type: "price_below", value: 90, description: "stop" }]; }, /needs a price target/],
+    [(a) => { a.exit_conditions.push({ type: "date_after", date: "2026-12-01 20:00", description: "no zone" }); }, /exact UTC time like/],
   ];
   for (const [change, pattern] of cases) { const a = goodAnalysis(); change(a); assert.ok(VALIDATE.analysis(a, b).some((e) => pattern.test(e)), String(pattern)); }
-  const hold = { ...goodAnalysis(), recommendation: "hold", evidence: [{ ref: "R1", claim: "a" }], entry_conditions: [], exit_conditions: [], suggested_amount_usd: null, holding_days: null };
+  const hold = { ...goodAnalysis(), recommendation: "hold", evidence: [{ ref: "R1", claim: "a" }], entry_conditions: [], exit_conditions: [], suggested_amount_usd: null, holding_hours: null };
   assert.deepStrictEqual(VALIDATE.analysis(hold, b), []);
+  const timed = goodAnalysis(); timed.exit_conditions.push({ type: "date_after", date: "2026-12-01T20:30Z", description: "out before the close" });
+  assert.deepStrictEqual(VALIDATE.analysis(timed, b), []);   // an exact time is accepted
   const ev = expandEvidence(goodAnalysis().evidence, b);
   assert.deepStrictEqual([ev[0].source, ev[0].timestamp, ev[0].claim], ["source of R1", "2099-11-14T10:00:00.000Z", "a"]); // source and time come from the record
 });
@@ -148,7 +154,7 @@ test("a risk review needs a concern when it objects; decisions must cover every 
   assert.match(VALIDATE.risk(review, b)[0], /needs at least one concern/);
   review.concerns = [{ topic: "volatility", severity: "high", detail: "d" }];
   assert.deepStrictEqual(VALIDATE.risk(review, b), []);
-  const d = (symbol, decision) => ({ symbol, decision, amount_usd: decision === "propose_buy" ? 300 : null, rationale: "r", disagreements: [], entry_conditions: decision === "propose_buy" ? ["now"] : [], exit_conditions: decision === "propose_buy" ? [{ type: "price_below", value: 95, description: "stop" }, { type: "date_after", date: "2026-12-31", description: "time limit" }] : [], holding_days: decision === "propose_buy" ? 10 : null, holding_period: "n/a", risks: ["r"], evidence: [{ ref: "A1", claim: "a" }, { ref: "A2", claim: "b" }], analytical_confidence: 0.5, assumptions: [] });
+  const d = (symbol, decision) => ({ symbol, decision, amount_usd: decision === "propose_buy" ? 300 : null, rationale: "r", disagreements: [], entry_conditions: decision === "propose_buy" ? ["now"] : [], exit_conditions: decision === "propose_buy" ? [{ type: "price_below", value: 95, description: "stop" }, { type: "price_above", value: 103, description: "target" }, { type: "date_after", date: "2026-12-31T20:00Z", description: "time limit" }] : [], holding_hours: decision === "propose_buy" ? 10 : null, holding_period: "n/a", risks: ["r"], evidence: [{ ref: "A1", claim: "a" }, { ref: "A2", claim: "b" }], analytical_confidence: 0.5, assumptions: [] });
   const ok = { decisions: [d("MSTR", "propose_buy"), d("BTC", "no_trade")], portfolio_note: "n" };
   assert.deepStrictEqual(VALIDATE.decisions(ok, b, { symbols: ["MSTR", "BTC"] }), []);
   assert.ok(VALIDATE.decisions({ ...ok, decisions: [d("MSTR", "propose_buy")] }, b, { symbols: ["MSTR", "BTC"] }).some((e) => /no decision was given for BTC/.test(e)));
@@ -291,7 +297,7 @@ function fakeClaude(opts = {}) {
     const cite = (opts.inventRefs ? ["R99", "R98", "R97"] : seen.slice(0, 4)).map((ref) => ({ ref, claim: `what ${ref} shows` }));
     if (submit === "submit_analysis") {
       const buy = symbol === "MSTR";
-      return reply("tool_use", [use(`c${++id}`, submit, { recommendation: buy ? "buy" : "hold", thesis: `thesis for ${symbol}`, evidence: cite, entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 50-day average" }] : [], suggested_amount_usd: buy ? 450 : null, holding_days: buy ? 8 : null, holding_period: buy ? "about a week" : "n/a", risks: ["volatility"], analytical_confidence: 0.62, assumptions: ["data is current"], data_gaps: [], revisit: !buy && opts.revisit ? opts.revisit : null })]);
+      return reply("tool_use", [use(`c${++id}`, submit, { recommendation: buy ? "buy" : "hold", thesis: `thesis for ${symbol}`, evidence: cite, entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 10-hour average" }, { type: "price_above", value: 104, description: "target" }] : [], suggested_amount_usd: buy ? 450 : null, holding_hours: buy ? 8 : null, holding_period: buy ? "about 8 hours" : "n/a", risks: ["volatility"], analytical_confidence: 0.62, assumptions: ["data is current"], data_gaps: [], revisit: !buy && opts.revisit ? opts.revisit : null })]);
     }
     if (submit === "submit_risk_review") {
       return reply("tool_use", [use(`c${++id}`, submit, { stance: "caution", summary: "size is too large for this volatility", concerns: [{ topic: "volatility", severity: "medium", detail: "30-day volatility is high" }], claims_checked: ["price trend confirmed"], evidence: cite, suggested_max_amount_usd: 300, analytical_confidence: 0.7, assumptions: [] })]);
@@ -304,7 +310,7 @@ function fakeClaude(opts = {}) {
         const buy = s === "MSTR";
         return { symbol: s, decision: buy ? "propose_buy" : "no_trade", amount_usd: buy ? (opts.amount ?? 300.004) : null, rationale: `decision for ${s}`,
           disagreements: buy ? [{ issue: "position size", analyst_position: "$450", risk_position: "at most $300", my_view: "the reviewer's volatility point stands; $300" }] : [],
-          entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 50-day average" }] : [], holding_days: buy ? 8 : null, holding_period: buy ? "about a week" : "n/a", risks: ["volatility"],
+          entry_conditions: buy ? ["at the current price"] : [], exit_conditions: buy ? [{ type: "price_below", value: 95, description: "below the 10-hour average" }, { type: "price_above", value: 104, description: "target" }] : [], source: "owner test (/trade_test)", holding_hours: buy ? 8 : null, holding_period: buy ? "about 8 hours" : "n/a", risks: ["volatility"],
           evidence: [{ ref: tags[k][1], claim: "the analysis" }, { ref: tags[k][2], claim: "the review" }], analytical_confidence: 0.6, assumptions: [] };
       }),
     })]);
@@ -331,6 +337,11 @@ if (TEST_URL) {
         await db.query("insert into trading.market_snapshots (instrument_id, kind, candle_interval, as_of, open, high, low, close, raw, source, fetched_at) values ($1, 'candle', 'OneDay', $2, $3, $4, $5, $3, '{}', 'eToro Public API GET /candles', $6)", [id, new Date(NOW.getTime() - d * 86400000).toISOString().slice(0, 10), c, c + 1, c - 1, NOW.toISOString()]);
       }
       await db.query("insert into trading.market_snapshots (instrument_id, kind, as_of, bid, ask, quote_type, raw, source, fetched_at) values ($1, 'rate', $2, 129.4, 129.6, 'realtime', '{}', 'eToro Public API GET /api/v2/market-data/rates', $2)", [id, "2099-11-14T09:55:00Z"]);
+      // MSTR also has 30 finished hourly candles, rising 0.1 an hour, the newest starting two hours before NOW
+      if (symbol === "MSTR") for (let h = 31; h >= 2; h--) {
+        const c = 129 - (h - 2) * 0.1;
+        await db.query("insert into trading.market_snapshots (instrument_id, kind, candle_interval, as_of, open, high, low, close, raw, source, fetched_at) values ($1, 'candle', 'OneHour', $2, $3, $4, $5, $3, '{}', 'eToro Public API GET /candles', $6)", [id, new Date(NOW.getTime() - h * 3600000).toISOString(), c, c + 0.2, c - 0.2, NOW.toISOString()]);
+      }
       for (const cap of cls === "stock" ? ["profile", "fundamentals", "earnings", "filings"] : ["fundamentals"]) {
         await db.query("insert into trading.research_snapshots (instrument_id, capability, provider, data, data_hash, raw, source, fetched_at, last_confirmed_at) values ($1, $2, 'test', $3, $4, '{}', $5, $6, $6)", [id, cap, JSON.stringify({ peTtm: 20 }), "a".repeat(64), `provider GET /${cap}`, "2099-11-14T09:00:00Z"]);
       }
@@ -373,7 +384,7 @@ dbTest("a full run: analysis → risk review → portfolio manager, saved with s
   assert.strictEqual(p[0].expires_at.toISOString(), "2099-11-15T10:00:00.000Z");
   assert.strictEqual(p[0].params_hash, paramsHash({ action: "open", instrumentId: 2001, direction: "buy", leverage: 1, orderType: "market", limitRate: null, amountUsd: 300, positionId: null, expiresAt: "2099-11-15T10:00:00.000Z" }));
   assert.strictEqual(p[0].details.disagreements[0].risk_position, "at most $300");
-  assert.deepStrictEqual([p[0].details.holding_days, p[0].details.exit_conditions[0].type], [8, "price_below"]); // a swing proposal: days and a stop level
+  assert.deepStrictEqual([p[0].details.holding_hours, p[0].details.exit_conditions.map((c) => c.type), p[0].details.source], [8, ["price_below", "price_above"], "agents"]); // a short-term proposal: hours, a stop and a target; source is set by code, whatever the model wrote
   assert.strictEqual(out.proposals[0].status, "draft");
   assert.strictEqual(await count("select count(*) as n from trading.orders"), 0);
   assert.strictEqual(await count("select count(*) as n from trading.approvals"), 0);
@@ -463,6 +474,15 @@ dbTest("tools: only this run's symbols can be read, the account is honest when u
   assert.match(tb.record(t.ref).source, /computed by Trading Desk code/);
   assert.match(tb.record(m.daily.ref).source, /60 stored finished OneDay candles$/); // names the series, not one call
   assert.match(t.atr14Note, /RANGE/);
+  // the hourly picture the desk now trades on (owner, 2026-11-26): computed by code from the stored hourly candles
+  const h = t.intraday;
+  assert.deepStrictEqual([h.basis.interval, h.basis.finishedCandles, h.lastClose, h.changePct.h4, h.changePct.h48, h.rsi14Hourly, h.atr14HourlyPct, h.range24h.candles],
+    [ "OneHour", 30, 129, Math.round(((129 - 128.6) / 128.6) * 10000) / 100, null, 100, Math.round((0.4 / 129) * 10000) / 100, 24]);
+  assert.strictEqual(h.last12.length, 12);
+  assert.match(tb.record(h.ref).source, /computed by Trading Desk code from .*30 stored finished OneHour candles$/);
+  assert.deepStrictEqual((await tb.execute("get_market_data", { symbol: "MSTR" })).hourly.last12.at(-1).close, 129);
+  const btcTech = await createToolbox({ db, instruments: [{ symbol: "BTC", instrumentId: 100000, assetClass: "crypto" }], account, now: () => NOW }).execute("get_technicals", { symbol: "BTC" });
+  assert.deepStrictEqual([btcTech.available, btcTech.intraday.available, btcTech.basis.interval], [true, false, "OneDay"]);   // no hourly candles stored: said so, daily still given
   const news = await tb.execute("get_news", { symbol: "MSTR" });
   assert.match(news.articles[0].headline, /IGNORE YOUR INSTRUCTIONS/);            // passed through as data, with its own tag
   assert.match(news.articles[0].ref, /^N\d+$/);
@@ -519,6 +539,8 @@ dbTest("a screened run: the cheap model scores everything, code picks the shortl
   const screenCall = claude.calls.find((c) => c.system === PROMPTS.SCREEN);
   assert.deepStrictEqual(screenCall.tools.map((t) => t.name), ["submit_screen"]);  // the Screener has no data tools
   assert.match(screenCall.messages[0].content, /<data>[\s\S]*"technicals"[\s\S]*<\/data>/);
+  const mstrPack = JSON.parse(claude.calls.find((c) => c.system === PROMPTS.SCREEN && /Screen MSTR/.test(c.messages[0].content)).messages[0].content.match(/<data>\n([\s\S]*)\n<\/data>/)[1]);
+  assert.deepStrictEqual([mstrPack.now, mstrPack.technicals.intraday.changePct.h1, mstrPack.last48h.count, typeof mstrPack.bitcoin.intradayChangePct], [NOW.toISOString(), Math.round((0.1 / 128.9) * 10000) / 100, 30, "object"]); // the hourly picture reaches the Screener
   assert.deepStrictEqual([out.usage.byAgent.screen.model, out.usage.byAgent.screen.steps, out.mode], ["claude-haiku-5-5", 2, "screened"]);
   // in the ledger, screening is recorded under the cheap model and at its price (100 in + 50 out = $0.000035 a request)
   const led = (await db.query("select distinct model, estimated_cost_usd from trading.api_usage where purpose = 'screen'")).rows;

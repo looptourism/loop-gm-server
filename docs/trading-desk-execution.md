@@ -41,7 +41,7 @@ the right field since 2026-11-17. A real proposal from the agents has not reache
 | Limits | $500 per stock trade, $250 per coin · cash available · total exposure $5,000 · crypto exposure $1,500 (MSTR counts as crypto) · 10 open positions · daily loss $100 |
 | Duplicates | no position already open in the instrument · no other proposal for it awaiting approval or execution · the proposal has not expired |
 | Price | realtime and fresh by eToro's own timestamp. Before execution: live, no older than 3 minutes, and no more than 3% away from the price in your approval request |
-| Swing-trade plan (1 to 14 days) | holding days stated, 1 to 14 · a stop level, below the current bid · the loss if the stop is reached is no more than the $100 daily loss limit · any target is above the current price · any exit date is not past and within 14 days |
+| Short-term plan (1 to 48 hours, owner 2026-11-26) | holding hours stated, 1 to 48 (a proposal from before then with whole days is read as days × 24) · a stop level, below the current bid · the loss if the stop is reached is no more than the $100 daily loss limit · any target is above the current price · **the gain at the nearest target is at least 2 × eToro's round-trip fees** ($2 + $2 on a stock; 1% + 1% on crypto — the owner's own `/trade_test` has no target and is exempt) · any exit date or time is not past and within 48 hours |
 
 Limits count trades in flight: a proposal you have approved but that has not become a position
 yet uses up cash, exposure and a position slot. Any fact the engine cannot get — the account,
@@ -86,7 +86,7 @@ Nothing closes automatically. A close is a proposal, and it needs your Approve l
 
 **Where a close proposal comes from**
 - **The position monitor**, when an exit condition you approved is reached (the stop, a target,
-  the planned holding date) or the position has been held longer than 14 days. One proposal per
+  the planned holding time) or the position has been held longer than 48 hours. One proposal per
   condition: if you reject it, that condition does not propose again. The alert says a close
   was proposed.
 - **You**, with `/trade_close BTC` in Telegram.

@@ -15,7 +15,7 @@ const notify = require("../notify");
 const NOW = new Date("2099-11-16T15:07:00Z");
 const fresh = (bid) => ({ bid, ask: bid + 0.1, asOf: "2099-11-16T15:05:00.000Z", fresh: true });
 const stale = (bid) => ({ ...fresh(bid), asOf: "2099-11-13T21:00:00.000Z", fresh: false });
-const pos = (exitConditions, openedAt = "2099-11-12T15:00:00.000Z") => ({ exitConditions, openedAt });
+const pos = (exitConditions, openedAt = "2099-11-16T09:00:00.000Z") => ({ exitConditions, openedAt });
 const stop = { type: "price_below", value: 95, description: "below the 50-day average" };
 const keys = (v) => v.hits.map((h) => h.key);
 
@@ -34,14 +34,20 @@ test("exit conditions: a long position is judged on the BID, and only on a fresh
   assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop, target]), rate: fresh(110), now: NOW })), []);
 });
 
-test("exit conditions: dates, the 14-day holding limit, a missing stop, and conditions code cannot check", () => {
+test("exit conditions: dates and exact times, the 48-hour holding limit, a missing stop, and conditions code cannot check", () => {
   const until = (date) => ({ type: "date_after", date, description: "out before earnings" });
   assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop, until("2099-11-16")]), rate: fresh(100), now: NOW })), []);                    // the day itself is not "after"
   assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop, until("2099-11-15")]), rate: stale(100), now: NOW })), ["date_after:2099-11-15"]); // a date needs no price
+  // an exact time (the planned holding period since 2026-11-26) is reached at that minute, with or without a price
+  assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop, until("2099-11-16T15:07Z")]), rate: fresh(100), now: NOW })), []);             // not after it yet
+  assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop, until("2099-11-16T15:06Z")]), rate: stale(100), now: NOW })), ["date_after:2099-11-16T15:06Z"]);
+  assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop, until("2099-11-16T19:00+04:00")]), rate: fresh(100), now: NOW })), ["date_after:2099-11-16T19:00+04:00"]); // 15:00 UTC
+  assert.match(evaluatePosition({ position: pos([stop, until("2099-11-16 15:00")]), rate: fresh(100), now: NOW }).notChecked[0].why, /no usable date or time/);
   // the desk's own limit applies whatever the proposal said
-  assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop], "2099-11-02T15:06:00.000Z"), rate: fresh(100), now: NOW })), ["time_limit:14d"]);
-  assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop], "2099-11-02T15:08:00.000Z"), rate: fresh(100), now: NOW })), []);              // one minute short of 14 days
-  assert.strictEqual(POLICY.holdingDays.max, 14);
+  assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop], "2099-11-14T15:06:00.000Z"), rate: fresh(100), now: NOW })), ["time_limit:48h"]);
+  assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop], "2099-11-14T15:08:00.000Z"), rate: fresh(100), now: NOW })), []);              // one minute short of 48 hours
+  assert.deepStrictEqual(keys(evaluatePosition({ position: pos([stop], "2099-11-12T15:00:00.000Z"), rate: fresh(100), now: NOW })), ["time_limit:48h"]); // a position from the 14-day days
+  assert.strictEqual(POLICY.holdingHours.max, 48);
   // a position with no stop on record (e.g. opened by hand on eToro) is reported, once
   for (const none of [null, [], [{ type: "price_above", value: 120, description: "target" }]]) assert.deepStrictEqual(keys(evaluatePosition({ position: pos(none), rate: fresh(100), now: NOW })), ["no_stop_level"]);
   const words = evaluatePosition({ position: pos([stop, { type: "other", description: "if the CEO resigns" }]), rate: fresh(100), now: NOW });
@@ -76,7 +82,7 @@ const TEST_URL = process.env.TEST_TRADING_DATABASE_URL;
 const dbTest = (name, fn) => test(name, { skip: TEST_URL ? false : "TEST_TRADING_DATABASE_URL is not set" }, fn);
 let db = null;
 const cfg = { hasKeys: true, monitorEnabled: false };
-const P = (id, instrumentID, extra = {}) => ({ positionID: id, instrumentID, mirrorID: 0, isBuy: true, amount: 300, leverage: 1, units: 3, openRate: 101.5, openDateTime: "2099-11-12T15:00:00", unrealizedPnL: { pnL: -21.4 }, ...extra });
+const P = (id, instrumentID, extra = {}) => ({ positionID: id, instrumentID, mirrorID: 0, isBuy: true, amount: 300, leverage: 1, units: 3, openRate: 101.5, openDateTime: "2099-11-16T09:00:00", unrealizedPnL: { pnL: -21.4 }, ...extra });
 function world(positions) {
   const w = { positions, sent: [], deliver: true, etoroFails: null, calls: 0 };
   w.client = { redact: (t) => String(t ?? ""), getDemoPnl: async () => { w.calls++; if (w.etoroFails) throw new Error(w.etoroFails); return { data: { clientPortfolio: { credit: 99000, positions: w.positions, ordersForOpen: [], orders: [], mirrors: [] } }, source: "eToro Public API GET /api/v1/trading/info/demo/pnl", fetchedAt: NOW.toISOString() }; } };
@@ -113,7 +119,7 @@ dbTest("a new position is recorded; one with no stop on record is reported once,
   assert.strictEqual(w.sent.length, 1);
   assert.match(w.sent[0], /Position has no stop level — MSTR[\s\S]*Nothing was closed/);
   const row = (await db.query("select status, direction, leverage, amount_usd, opened_at, source from trading.positions where etoro_position_id = 501")).rows[0];
-  assert.deepStrictEqual([row.status, row.direction, row.leverage, Number(row.amount_usd), row.opened_at.toISOString()], ["open", "buy", 1, 300, "2099-11-12T15:00:00.000Z"]); // eToro's time read as UTC
+  assert.deepStrictEqual([row.status, row.direction, row.leverage, Number(row.amount_usd), row.opened_at.toISOString()], ["open", "buy", 1, 300, "2099-11-16T09:00:00.000Z"]); // eToro's time read as UTC
   assert.match(row.source, /demo\/pnl/);
   await w.monitor.check(); await w.monitor.check();
   assert.strictEqual(w.sent.length, 1);                                            // still one alert

@@ -75,7 +75,7 @@ async function world(db) {
   w.approvals = createApprovals({ config: w.config, db, client: w.client, gateway: w.gateway, notifier: w.notifier, now, log: () => {} });
   w.draft = async (symbol, amountUsd = 50) => {
     const i = (await db.query("select instrument_id, asset_class from trading.instruments where symbol = $1", [symbol])).rows[0];
-    return (await db.withTransaction((tx) => analysesStore.saveDraftProposal(tx, { instrument: { instrumentId: Number(i.instrument_id), symbol, assetClass: i.asset_class }, amountUsd, expiresAt: new Date(now().getTime() + 24 * 3600000), analysisId: null, details: { holding_days: 3, exit_conditions: [{ type: "price_below", value: 90, description: "stop" }] }, actor: "test" }))).id;
+    return (await db.withTransaction((tx) => analysesStore.saveDraftProposal(tx, { instrument: { instrumentId: Number(i.instrument_id), symbol, assetClass: i.asset_class }, amountUsd, expiresAt: new Date(now().getTime() + 24 * 3600000), analysisId: null, details: { holding_hours: 6, exit_conditions: [{ type: "price_below", value: 90, description: "stop" }, { type: "price_above", value: 120, description: "target" }] }, actor: "test" }))).id;
   };
   w.approvalOf = async (proposalId) => (await db.query("select id from trading.approvals where proposal_id = $1", [proposalId])).rows[0]?.id;
   w.events = async (type) => (await db.query("select data, actor from trading.audit_log where event_type = $1 order by seq", [type])).rows;

@@ -41,7 +41,7 @@ const { saveCloseProposal } = require("./db/analyses");
 const { readHalted } = require("./risk/context");
 const notify = require("./notify");
 
-const DAY = 86400000;
+const { exitWindow, showExitTime, HOUR } = require("./horizon");
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 
 // What one stored condition means, and the key that makes its alert unique.
@@ -66,15 +66,19 @@ function evaluatePosition({ position, rate, now, policy = POLICY }) {
       if (!rate.fresh) { notChecked.push({ condition: c, why: "the price is not fresh (market closed or data delayed)" }); continue; }
       if (c.type === "price_below" ? rate.bid <= level : rate.bid >= level) hits.push({ key: conditionKey(c), kind: "exit_condition", condition: c });
     } else if (c.type === "date_after") {
-      const end = /^\d{4}-\d{2}-\d{2}$/.test(c.date || "") ? Date.parse(`${c.date}T23:59:59Z`) : NaN;
-      if (Number.isNaN(end)) notChecked.push({ condition: c, why: "no usable date" });
+      // A date covers its whole UTC day; an exact time (the planned holding
+      // period since 2026-11-26) is reached at that instant.
+      const w = exitWindow(c.date);
+      const end = w ? w.end : NaN;
+      if (Number.isNaN(end)) notChecked.push({ condition: c, why: "no usable date or time" });
       else if (now.getTime() > end) hits.push({ key: conditionKey(c), kind: "exit_condition", condition: c });
     } else notChecked.push({ condition: c, why: "described in words only; code cannot check it" });
   }
-  // The desk's own rule, whatever the proposal said: a swing position is not held beyond the maximum.
+  // The desk's own rule, whatever the proposal said: a short-term position is
+  // not held beyond the maximum (hours, two days since 2026-11-26).
   const opened = position.openedAt ? Date.parse(position.openedAt) : NaN;
-  if (!Number.isNaN(opened) && now.getTime() - opened > policy.holdingDays.max * DAY) {
-    hits.push({ key: `time_limit:${policy.holdingDays.max}d`, kind: "time_limit", condition: { type: "date_after", description: `held longer than the desk's maximum of ${policy.holdingDays.max} days` } });
+  if (!Number.isNaN(opened) && now.getTime() - opened > policy.holdingHours.max * HOUR) {
+    hits.push({ key: `time_limit:${policy.holdingHours.max}h`, kind: "time_limit", condition: { type: "date_after", description: `held longer than the desk's maximum of ${policy.holdingHours.max} hours` } });
   }
   if (!conditions.some((c) => c && c.type === "price_below" && Number(c.value) > 0)) {
     hits.push({ key: "no_stop_level", kind: "no_exit_conditions", condition: { type: "other", description: "this position has no stop level on record, so the desk cannot watch one for it" } });
@@ -193,7 +197,7 @@ function createPositionMonitor({ config, client, db, notifier, settings = POSITI
         out.positions.push({ symbol, etoroPositionId: p.positionId, priceFresh: rate ? rate.fresh : null, reached: verdict.hits.map((h) => h.key), notChecked: verdict.notChecked.length });
         for (const h of verdict.hits) {
           const title = h.kind === "exit_condition" ? "Exit condition reached" : h.kind === "time_limit" ? "Holding limit passed" : "Position has no stop level";
-          const what = h.condition.type === "price_below" ? `price at or below ${h.condition.value}` : h.condition.type === "price_above" ? `price at or above ${h.condition.value}` : h.condition.type === "date_after" && h.condition.date ? `after ${h.condition.date}` : null;
+          const what = h.condition.type === "price_below" ? `price at or below ${h.condition.value}` : h.condition.type === "price_above" ? `price at or above ${h.condition.value}` : h.condition.type === "date_after" && h.condition.date ? `after ${showExitTime(h.condition.date)}` : null;
           const lines = [what ? `Condition: ${what} — ${h.condition.description}` : `${h.condition.description}`];
           if (rate) lines.push(`Price now: bid ${rate.bid} at ${rate.asOf.slice(0, 16).replace("T", " ")} UTC (${rate.fresh ? "fresh" : "NOT fresh"})`);
           if ((h.kind === "exit_condition" || h.kind === "time_limit") && !(await alreadySent(p.positionId, h.key))) lines.push(await proposeClose(row.id, `${title.toLowerCase()}: ${what ? `${what} — ` : ""}${h.condition.description}`));

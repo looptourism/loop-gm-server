@@ -19,7 +19,7 @@ const { mount } = require("../index");
 const notify = require("../notify");
 
 const T = new Date("2099-11-16T15:10:00Z");
-const DETAILS = () => ({ holding_days: 7, rationale: "pulled back to support", disagreements: [{ issue: "size" }], exit_conditions: [{ type: "price_below", value: 95, description: "stop" }, { type: "price_above", value: 110, description: "target" }] });
+const DETAILS = () => ({ holding_hours: 6, rationale: "pulled back to support", disagreements: [{ issue: "size" }], exit_conditions: [{ type: "price_below", value: 95, description: "stop" }, { type: "price_above", value: 110, description: "target" }] });
 
 // ---- the risk engine: every check, one at a time --------------------------------
 const good = () => ({
@@ -38,7 +38,7 @@ test("risk engine: a sound proposal passes every check, and the verdict lists th
   const v = assess(good());
   assert.deepStrictEqual([v.passed, v.failed, v.warnings, v.engineVersion], [true, [], [], ENGINE_VERSION]);
   assert.deepStrictEqual(v.checks.map((c) => c.name), ["kill_switch", "demo_only", "not_expired", "opens_a_position", "asset_class", "allowlisted", "long_only", "no_leverage", "market_order", "per_trade_limit",
-    "account_readable", "available_cash", "total_exposure", "crypto_exposure", "open_positions", "no_duplicate_position", "no_duplicate_proposal", "daily_loss", "fresh_price", "holding_period", "stop_level", "loss_at_stop", "targets_above_price", "exit_dates_in_horizon"]);
+    "account_readable", "available_cash", "total_exposure", "crypto_exposure", "open_positions", "no_duplicate_position", "no_duplicate_proposal", "daily_loss", "fresh_price", "holding_period", "stop_level", "loss_at_stop", "targets_above_price", "target_clears_fees", "exit_dates_in_horizon"]);
   assert.ok(v.checks.every((c) => c.passed && c.message));
   assert.deepStrictEqual(assess(good()), assess(good()));                           // same facts, same verdict
 });
@@ -74,27 +74,46 @@ test("risk engine: each limit and rule rejects on its own", () => {
     ["fresh_price", (i) => { i.price.ageSec = 1201; }],
     ["fresh_price", (i) => { i.price.quoteType = "delayed"; }],
     ["fresh_price", (i) => { i.price.ageSec = -61; }],                               // a price dated in the future
-    ["holding_period", (i) => { i.proposal.details.holding_days = 15; }],
-    ["holding_period", (i) => { i.proposal.details.holding_days = 0; }],
-    ["holding_period", (i) => { delete i.proposal.details.holding_days; }],
+    // short-term trades (owner, 2026-11-26): 1 to 48 hours
+    ["holding_period", (i) => { i.proposal.details.holding_hours = 49; }],
+    ["holding_period", (i) => { i.proposal.details.holding_hours = 0; }],
+    ["holding_period", (i) => { i.proposal.details.holding_hours = 2.5; }],
+    ["holding_period", (i) => { delete i.proposal.details.holding_hours; }],
+    ["holding_period", (i) => { delete i.proposal.details.holding_hours; i.proposal.details.holding_days = 3; }],   // an old-style plan: 3 days = 72 h, too long
+    // the gain at the target must be at least 2 × eToro's round-trip fees
+    ["target_clears_fees", (i) => { i.proposal.details.exit_conditions.pop(); }],                                   // no target at all
+    ["target_clears_fees", (i) => { i.proposal.details.exit_conditions[1].value = 102; }],                         // stock: $400 × 1.9% ≈ $7.59 < 2 × $4
+    ["target_clears_fees", (i) => { i.proposal.details.exit_conditions.push({ type: "price_above", value: 100.5, description: "a nearer target" }); }], // the nearest target counts
+    ["target_clears_fees", (i) => { i.proposal.details.source = "agents"; i.proposal.details.exit_conditions.pop(); }],
+    ["target_clears_fees", (i) => { i.proposal.assetClass = "crypto"; i.allowlist.assetClass = "crypto"; i.proposal.amountUsd = 250; i.proposal.details.exit_conditions[1].value = 103.9; }], // crypto: $250 × 3.8% ≈ $9.49 < 2 × $5
     ["stop_level", (i) => { i.proposal.details.exit_conditions = [{ type: "price_above", value: 110, description: "t" }]; }],
     ["stop_level", (i) => { i.proposal.details.exit_conditions[0].value = 100; }],   // stop at the bid: out the moment it opens
     ["loss_at_stop", (i) => { i.proposal.details.exit_conditions[0].value = 70; }],   // 400 × 30% = $120 > $100
     ["targets_above_price", (i) => { i.proposal.details.exit_conditions[1].value = 100.1; }],
     ["exit_dates_in_horizon", (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-15", description: "past" }); }],
-    ["exit_dates_in_horizon", (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-12-01", description: "15 days out" }); }],
+    ["exit_dates_in_horizon", (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-19", description: "3 days out" }); }],
+    ["exit_dates_in_horizon", (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-18T15:11Z", description: "48 h and a minute" }); }],
+    ["exit_dates_in_horizon", (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-16T15:09Z", description: "a minute ago" }); }],
+    ["exit_dates_in_horizon", (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-16 20:00", description: "no time zone" }); }],
   ];
   for (const [name, change] of cases) assert.ok(failing(change).includes(name), `${name} should fail`);
   // boundaries that must pass
-  for (const ok of [(i) => { i.proposal.amountUsd = 500; }, (i) => { i.dailyLoss.lossUsd = 99.99; }, (i) => { i.price.ageSec = 1200; }, (i) => { i.proposal.details.holding_days = 14; }, (i) => { i.proposal.details.holding_days = 1; },
-    (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-30", description: "day 14" }); }, (i) => { i.dailyLoss.lossUsd = -50; }]) assert.deepStrictEqual(failing(ok), []);
+  for (const ok of [(i) => { i.proposal.amountUsd = 500; }, (i) => { i.dailyLoss.lossUsd = 99.99; }, (i) => { i.price.ageSec = 1200; }, (i) => { i.proposal.details.holding_hours = 48; }, (i) => { i.proposal.details.holding_hours = 1; },
+    (i) => { delete i.proposal.details.holding_hours; i.proposal.details.holding_days = 2; },                       // an old-style plan of 2 days = 48 h
+    (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-18", description: "the day the 48 h end" }); },
+    (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-18T15:10Z", description: "exactly 48 h" }); },
+    (i) => { i.proposal.details.exit_conditions.push({ type: "date_after", date: "2099-11-16T23:00+04:00", description: "with an offset" }); },
+    (i) => { i.proposal.details.exit_conditions[1].value = 102.11; },                                               // $400 × 2.0% ≈ $8.00: exactly 2 × the fees
+    (i) => { i.proposal.assetClass = "crypto"; i.allowlist.assetClass = "crypto"; i.proposal.amountUsd = 250; i.proposal.details.exit_conditions[1].value = 104.11; }, // crypto: ≈ $10.01 ≥ $10
+    (i) => { i.proposal.details.source = "owner test (/trade_test)"; i.proposal.details.exit_conditions.pop(); },  // the owner's own test trade has no target
+    (i) => { i.dailyLoss.lossUsd = -50; }]) assert.deepStrictEqual(failing(ok), []);
 });
 
 test("risk engine fails closed: with no account, or no price, every check that needs it fails", () => {
   const noAccount = failing((i) => { i.account = { ok: false, reason: "eToro 500" }; i.dailyLoss = { ok: false, reason: "the account could not be read" }; });
   assert.deepStrictEqual(noAccount, ["account_readable", "available_cash", "total_exposure", "open_positions", "no_duplicate_position", "daily_loss"]);
-  assert.deepStrictEqual(failing((i) => { i.price = { ok: false, reason: "eToro answered 206" }; }), ["fresh_price", "stop_level", "loss_at_stop", "targets_above_price"]);
-  assert.deepStrictEqual(failing((i) => { i.price = null; }), ["fresh_price", "stop_level", "loss_at_stop", "targets_above_price"]);
+  assert.deepStrictEqual(failing((i) => { i.price = { ok: false, reason: "eToro answered 206" }; }), ["fresh_price", "stop_level", "loss_at_stop", "targets_above_price", "target_clears_fees"]);
+  assert.deepStrictEqual(failing((i) => { i.price = null; }), ["fresh_price", "stop_level", "loss_at_stop", "targets_above_price", "target_clears_fees"]);
   assert.deepStrictEqual(failing((i) => { i.allowlist = null; }), ["allowlisted"]);
 });
 
@@ -124,9 +143,12 @@ test("risk engine before execution: a live price no older than 3 minutes, and no
 });
 
 test("risk engine: earnings inside the holding window is a warning for you, not a rejection", () => {
-  const v = assess({ ...good(), earnings: { nextDate: "2099-11-19" } });
-  assert.deepStrictEqual([v.passed, v.warnings], [true, ["earnings are due on 2099-11-19, inside the planned 7-day holding period"]]);
-  assert.deepStrictEqual(assess({ ...good(), earnings: { nextDate: "2099-12-10" } }).warnings, []);
+  const v = assess({ ...good(), earnings: { nextDate: "2099-11-16" } });                 // today: the hour is not known, so the day counts
+  assert.deepStrictEqual([v.passed, v.warnings], [true, ["earnings are due on 2099-11-16, inside the planned 6-hour holding period"]]);
+  assert.deepStrictEqual(assess({ ...good(), earnings: { nextDate: "2099-11-17" } }).warnings, []);   // 6 h from 15:10 ends before that day
+  const two = good(); two.proposal.details.holding_hours = 48; two.earnings = { nextDate: "2099-11-18" };
+  assert.deepStrictEqual(assess(two).warnings, ["earnings are due on 2099-11-18, inside the planned 48-hour holding period"]);
+  assert.deepStrictEqual(assess({ ...good(), earnings: { nextDate: "2099-11-15" } }).warnings, []);   // already past
 });
 
 // ---- the order client: the only code that can POST ------------------------------
@@ -203,7 +225,7 @@ test("quiet hours: a window that crosses midnight, in the owner's time zone; non
 test("Telegram texts for approvals and results are built by code and escape their content", () => {
   const proposal = { symbol: "NKE", amountUsd: 400, details: { ...DETAILS(), rationale: "a <b>bold</b> claim" } };
   const req = notify.approvalRequest({ proposal, verdict: assess(good()), price: good().price, account: good().account, expiresAt: new Date("2099-11-16T15:25:00Z") });
-  for (const piece of ["Approve a BUY? — NKE", "(DEMO)", "$400.00", "bid 100 / ask 100.1 (120 s old)", "hold about 7 day(s) · stop 95 · target 110", "If the stop is reached: about -$20.38", "a &lt;b&gt;bold&lt;/b&gt; claim", "disagreed on 1 point(s): size", "all 24 checks passed", "Answer by 15:25 UTC"]) assert.ok(req.includes(piece), piece);
+  for (const piece of ["Approve a BUY? — NKE", "(DEMO)", "$400.00", "bid 100 / ask 100.1 (120 s old)", "hold about 6 hour(s) · stop 95 · target 110", "At the target: about +$39.56 before eToro's fees (round trip about $4.00)", "If the stop is reached: about -$20.38", "a &lt;b&gt;bold&lt;/b&gt; claim", "disagreed on 1 point(s): size", "all 25 checks passed", "Answer by 15:25 UTC"]) assert.ok(req.includes(piece), piece);
   assert.match(notify.executionResult({ status: "filled", proposal, positions: [{ positionId: 9001, amountUsd: 400, openRate: 100.1, exitConditions: [{ type: "price_below", value: 95 }, { type: "date_after", date: "2099-11-23" }] }] }), /Order filled — BUY NKE \$400\.00 \(DEMO\)[\s\S]*Position 9001 opened at 100\.1[\s\S]*stop 95 · until 2099-11-23[\s\S]*nothing is closed without you/);
   assert.match(notify.executionResult({ status: "refused", reason: "risk engine: fresh_price", proposal }), /No order was sent[\s\S]*A new proposal and a new approval are needed/);
   assert.match(notify.executionResult({ status: "unknown", reason: "timeout. It will NOT be sent again.", proposal }), /result unknown[\s\S]*NOT be sent again/);
@@ -277,7 +299,7 @@ dbTest("the whole path: risk check → Telegram request → Approve → live re-
   const d = await w.approvals.dispatch();
   assert.deepStrictEqual([d.sent, d.rejected, d.waiting], [["NKE"], [], []]);
   assert.deepStrictEqual((await w.status(p.id)).status, "pending_approval");
-  assert.match(w.buttons[0].html, /Approve a BUY\? — NKE[\s\S]*\$400\.00[\s\S]*stop 95[\s\S]*all 24 checks passed[\s\S]*Answer by 15:25 UTC/);
+  assert.match(w.buttons[0].html, /Approve a BUY\? — NKE[\s\S]*\$400\.00[\s\S]*stop 95[\s\S]*all 25 checks passed[\s\S]*Answer by 15:25 UTC/);
   assert.deepStrictEqual(w.buttons[0].keyboard[0].map((b) => b.text), ["✅ Approve", "❌ Reject"]);
   assert.ok(w.buttons[0].keyboard[0].every((b) => Buffer.byteLength(b.callback_data) <= 64)); // Telegram's limit
   const a = (await w.db.query("select * from trading.approvals")).rows[0];
@@ -299,7 +321,7 @@ dbTest("the whole path: risk check → Telegram request → Approve → live re-
   // the position, with what you approved as its exit conditions, plus the planned holding period
   const pos = (await w.db.query("select * from trading.positions")).rows[0];
   assert.deepStrictEqual([Number(pos.etoro_position_id), Number(pos.amount_usd), Number(pos.open_rate), pos.opened_by_order_id, pos.status], [9001, 399.6, 100.12, o.id, "open"]);
-  assert.deepStrictEqual(pos.exit_conditions.map((c) => [c.type, c.value ?? c.date]), [["price_below", 95], ["price_above", 110], ["date_after", "2099-11-23"]]);
+  assert.deepStrictEqual(pos.exit_conditions.map((c) => [c.type, c.value ?? c.date]), [["price_below", 95], ["price_above", 110], ["date_after", "2099-11-16T21:10Z"]]); // opened 15:10 + the planned 6 h
   // both verdicts are on record, with the limits used
   const v = (await w.db.query("select phase, passed, policy, inputs from trading.risk_assessments order by created_at")).rows;
   assert.deepStrictEqual(v.map((x) => [x.phase, x.passed, x.policy.maxPerTradeUsd.stock]), [["pre_approval", true, 500], ["pre_execution", true, 500]]);
@@ -656,11 +678,11 @@ dbTest("/trade_test: a small trade you start by hand goes through the same engin
   await desk.handleTelegramCommand("trade_test", "/trade_test btc $40");
   const p = (await w.db.query("select p.*, i.symbol from trading.proposals p join trading.instruments i using (instrument_id)")).rows[0];
   assert.deepStrictEqual([p.symbol, Number(p.amount_usd), p.direction, p.leverage, p.order_type, p.analysis_id], ["BTC", 40, "buy", 1, "market", null]);
-  assert.deepStrictEqual([p.details.source, p.details.holding_days, p.details.exit_conditions], ["owner test (/trade_test)", 3, [{ type: "price_below", value: 190, description: "fixed rule for test trades: 5% below the bid of 200 when it was created" }]]);
+  assert.deepStrictEqual([p.details.source, p.details.holding_hours, p.details.exit_conditions], ["owner test (/trade_test)", 24, [{ type: "price_below", value: 190, description: "fixed rule for test trades: 5% below the bid of 200 when it was created" }]]);
   assert.ok(w.sent.some((m) => /Test proposal created — BUY BTC \$40\.00[\s\S]*Stop 190[\s\S]*risk engine like any other proposal/.test(m)));
   assert.strictEqual(w.orderCalls.length, 0);                                      // creating it sends nothing
   assert.strictEqual((await w.db.query("select actor from trading.audit_log where event_type = 'proposal.created'")).rows[0].actor, "owner:telegram");
-  assert.deepStrictEqual([POLICY.testTrade.maxUsd, POLICY.testTrade.stopPctBelowBid, POLICY.testTrade.holdingDays], [50, 5, 3]);
+  assert.deepStrictEqual([POLICY.testTrade.maxUsd, POLICY.testTrade.stopPctBelowBid, POLICY.testTrade.holdingHours], [50, 5, 24]);
 });
 
 test("recording a filled position reads the invested dollars from the fields eToro really fills (first real order, 2026-11-16)", async () => {
@@ -671,13 +693,13 @@ test("recording a filled position reads the invested dollars from the fields eTo
   const rows = [];
   const db = { redact: (t) => String(t ?? ""), query: async (sql, params) => { rows.push({ sql, params }); return { rows: [] }; },
     withTransaction: async (fn) => fn({ query: async (sql, params) => { rows.push({ sql, params }); return { rows: sql.includes("from trading.orders where id") ? [] : [] }; } }) };
-  const proposal = { id: "p", instrumentId: 100000, amountUsd: 50, details: { holding_days: 3, exit_conditions: [{ type: "price_below", value: 61740.3, description: "stop" }] } };
+  const proposal = { id: "p", instrumentId: 100000, amountUsd: 50, details: { holding_hours: 24, exit_conditions: [{ type: "price_below", value: 61740.3, description: "stop" }] } };
   const gw = createGateway({ config: { tradingEnabled: true }, db, client: { redact: (t) => t }, orders: { redact: (t) => t }, now: () => new Date("2026-11-16T20:11:26Z"), log: () => {} });
   const made = await gw._recordPositionsForTest({ query: db.query }, { id: "o1" }, proposal, { positionExecutions: [real] });
   assert.deepStrictEqual(made.map((m) => [m.positionId, m.amountUsd, m.openRate]), [[3643444338, 49.97, 65069.63]]);
   const insert = rows.find((r) => /insert into trading.positions/.test(r.sql));
   assert.deepStrictEqual([insert.params[0], insert.params[2], insert.params[3], insert.params[5]], [3643444338, 49.97, 0.000768, "2026-11-16T20:11:25.527Z"]);
-  assert.deepStrictEqual(JSON.parse(insert.params[6]).map((c) => c.value ?? c.date), [61740.3, "2026-11-19"]);
+  assert.deepStrictEqual(JSON.parse(insert.params[6]).map((c) => c.value ?? c.date), [61740.3, "2026-11-17T20:11Z"]);   // the planned 24 h, as an exact time
   // with neither dollar field, the approved amount is used rather than a guess
   const fallback = await gw._recordPositionsForTest({ query: db.query }, { id: "o1" }, proposal, { positionExecutions: [{ ...real, marginAccountCurrency: null, initialExposureAccountCurrency: 0 }] });
   assert.strictEqual(fallback[0].amountUsd, 50);

@@ -103,7 +103,7 @@ async function world(db) {
   const expiresAt = "2099-11-18T15:00:00.000Z";
   const hash = paramsHash({ action: "open", instrumentId: 2001, direction: "buy", leverage: 1, orderType: "market", limitRate: null, amountUsd: 300, positionId: null, expiresAt });
   w.proposalId = (await db.query(`insert into trading.proposals (action, instrument_id, asset_class, direction, leverage, order_type, amount_usd, expires_at, params_hash, status, details)
-    values ('open', 2001, 'stock', 'buy', 1, 'market', 300, $1, $2, 'pending_approval', $3) returning id`, [expiresAt, hash, JSON.stringify({ holding_days: 6, rationale: "<b>pulled back</b>", exit_conditions: [{ type: "price_below", value: 96, description: "stop" }], disagreements: [{ issue: "size", analyst_position: "$450", risk_position: "$300", my_view: "$300" }] })])).rows[0].id;
+    values ('open', 2001, 'stock', 'buy', 1, 'market', 300, $1, $2, 'pending_approval', $3) returning id`, [expiresAt, hash, JSON.stringify({ holding_hours: 6, rationale: "<b>pulled back</b>", exit_conditions: [{ type: "price_below", value: 96, description: "stop" }, { type: "price_above", value: 104, description: "target" }], disagreements: [{ issue: "size", analyst_position: "$450", risk_position: "$300", my_view: "$300" }] })])).rows[0].id;
   w.approvalId = (await db.query("insert into trading.approvals (proposal_id, params_hash, requested_at, expires_at, telegram_message_id) values ($1, $2, $3, $4, 777) returning id", [w.proposalId, hash, "2099-11-17T15:09:00Z", "2099-11-17T15:24:00Z"])).rows[0].id;
   await db.query("insert into trading.risk_assessments (proposal_id, phase, passed, checks, policy, inputs, engine_version) values ($1, 'pre_approval', true, $2, '{}', $3, 'risk-engine-2')",
     [w.proposalId, JSON.stringify(Array.from({ length: 24 }, (_, i) => ({ name: `c${i}`, passed: true, message: "ok" }))), JSON.stringify({ price: { bid: 100, ask: 100.1, asOf: "2099-11-17T15:08:00Z" }, warnings: ["earnings are due on 2099-11-19, inside the planned 6-day holding period"] })]);
@@ -135,14 +135,14 @@ dbTest("the page's data: account, limits, waiting requests, positions, history, 
   assert.deepStrictEqual([o.availableCashUsd, o.investedUsd, o.unrealizedPnlUsd, o.todayPnlUsd, o.at, o.split], [99550, 450, -3.1, -3.1, "2099-11-17T15:07:00.000Z", { stockUsd: 200, cryptoUsd: 250 }]);
   assert.strictEqual(o.limits[0].name, "crypto_exposure");
   const p = d.pending[0];
-  assert.deepStrictEqual([p.approvalId, p.symbol, p.amountUsd, p.holdingDays, p.answerBy, p.checksPassed, p.checksTotal, p.price.bid], [w.approvalId, "MSTR", 300, 6, "2099-11-17T15:24:00.000Z", 24, 24, 100]);
+  assert.deepStrictEqual([p.approvalId, p.symbol, p.amountUsd, p.holdingHours, p.answerBy, p.checksPassed, p.checksTotal, p.price.bid], [w.approvalId, "MSTR", 300, 6, "2099-11-17T15:24:00.000Z", 24, 24, 100]);
   assert.match(p.warnings[0], /earnings are due/);
   assert.strictEqual(p.rationale, "<b>pulled back</b>");                           // raw text: the page escapes it
   assert.deepStrictEqual(d.positions.map((x) => [x.symbol, x.amountUsd, x.estimatedPnlUsd, x.bid]), [["NKE", 200, 2, 100], ["BTC", 250, -2.5, 100]]);
   assert.deepStrictEqual(d.history.map((h) => [h.symbol, h.status]).sort(), [["MSTR", "pending_approval"], ["NKE", "risk_rejected"]]);
   assert.deepStrictEqual(d.alerts.map((a) => a.scope).sort(), ["account", "position", "risk"]);
   assert.strictEqual(d.alerts.find((a) => a.scope === "position").message, "🚨 Position has no stop level — NKE (DEMO)"); // Telegram markup removed
-  assert.deepStrictEqual([d.settings.tradingOn, d.settings.stopped, d.settings.policy.maxPerTradeUsd.stock, d.settings.policy.holdingDays], [true, false, 500, { min: 1, max: 14 }]);
+  assert.deepStrictEqual([d.settings.tradingOn, d.settings.stopped, d.settings.policy.maxPerTradeUsd.stock, d.settings.policy.holdingHours, d.settings.policy.fees.hurdleMultiple], [true, false, 500, { min: 1, max: 48 }, 2]);
   assert.deepStrictEqual(d.settings.allowlists.stocks.map((s) => [s.symbol, s.tradable, s.cryptoCorrelated]), [["MSTR", true, true], ["NKE", true, false], ["WYFI", false, false]]);
   assert.deepStrictEqual([d.agents.budget.budgetUsd, d.agents.runs[0].shortlist, d.agents.analyses[0].text], [75, ["MSTR"], "A rebound setup."]);
   // a stop shows as trading off

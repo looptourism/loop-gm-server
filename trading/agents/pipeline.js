@@ -166,7 +166,7 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
               const amountUsd = Math.round(d.amount_usd * 100) / 100;
               const p = await store.saveDraftProposal(tx, {
                 instrument: item.instrument, amountUsd, expiresAt, analysisId: row.id, actor: "agent:portfolio_manager",
-                details: { ...d, amount_usd: amountUsd, analysisIds: { analyst: item.analysis.id, risk: item.review.id, portfolioManager: row.id }, confidenceNote: CONFIDENCE_NOTE },
+                details: { ...d, source: "agents", amount_usd: amountUsd, analysisIds: { analyst: item.analysis.id, risk: item.review.id, portfolioManager: row.id }, confidenceNote: CONFIDENCE_NOTE },
               });
               made.push({ id: p.id, symbol: d.symbol, amountUsd, status: "draft", expiresAt: expiresAt.toISOString(), paramsHash: p.paramsHash, supersededDrafts: p.superseded });
             }
@@ -187,7 +187,7 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
       const m = await tb.execute("get_market_data", { symbol: i.symbol });
       const t = await tb.execute("get_technicals", { symbol: i.symbol });
       const lite = (a) => a.slice(0, 6).map((x) => ({ headline: x.headline, publisher: x.publisher, publishedAt: x.publishedAt }));
-      pack = { symbol: i.symbol, name: i.displayName, assetClass: i.assetClass, today: now().toISOString().slice(0, 10), price: m.rate, last30d: m.daily?.last30d ?? null, last90d: m.daily?.last90d ?? null, last365d: m.daily?.last365d ?? null, technicals: t };
+      pack = { symbol: i.symbol, name: i.displayName, assetClass: i.assetClass, today: now().toISOString().slice(0, 10), now: now().toISOString(), price: m.rate, last48h: m.hourly?.range ?? null, last30d: m.daily?.last30d ?? null, last90d: m.daily?.last90d ?? null, last365d: m.daily?.last365d ?? null, technicals: t };
       if (i.assetClass === "stock") {
         const f = await tb.execute("get_fundamentals", { symbol: i.symbol });
         const e = await tb.execute("get_earnings", { symbol: i.symbol });
@@ -195,7 +195,7 @@ function createAgents({ config, db, client, settings = AGENTS, policy = POLICY, 
         pack.industry = f.profile.available ? f.profile.data?.industry ?? null : null;
         pack.earnings = e.available ? { latestQuarter: e.data?.history?.[0] ?? null, nextDate: e.data?.upcoming?.[0]?.date ?? null } : null;
         pack.headlines = lite((await tb.execute("get_news", { symbol: i.symbol, limit: 6 })).articles);
-        if (readable(i, extra).length > 1) pack.bitcoin = { note: `${i.symbol} is flagged as crypto-correlated`, price: (await tb.execute("get_market_data", { symbol: extra.btc.symbol })).rate, changePct: (await tb.execute("get_technicals", { symbol: extra.btc.symbol })).changePct ?? null };
+        if (readable(i, extra).length > 1) pack.bitcoin = { note: `${i.symbol} is flagged as crypto-correlated`, price: (await tb.execute("get_market_data", { symbol: extra.btc.symbol })).rate, ...((bt) => ({ changePct: bt.changePct ?? null, intradayChangePct: bt.intraday?.changePct ?? null }))(await tb.execute("get_technicals", { symbol: extra.btc.symbol })) };
       } else {
         const f = await tb.execute("get_coin_fundamentals", { symbol: i.symbol });
         pack.fundamentals = f.available ? f.data : null;

@@ -8,8 +8,9 @@
 // errors, which are sent back to the agent so it can correct itself.
 // ---------------------------------------------------------------------------
 const { POLICY } = require("../policy");
-const HOLD = POLICY.holdingDays;
-const holdingDays = { type: ["integer", "null"], description: `Days you expect the position to be held: a whole number from ${HOLD.min} to ${HOLD.max}. null if not buying.` };
+const { isExitTime } = require("../horizon");
+const HOLD = POLICY.holdingHours;
+const holdingHours = { type: ["integer", "null"], description: `HOURS you expect the position to be held: a whole number from ${HOLD.min} to ${HOLD.max} (the desk holds for hours, two days at most). null if not buying.` };
 const str = (description) => ({ type: "string", description });
 const list = (description, items = { type: "string" }) => ({ type: "array", description, items });
 
@@ -23,7 +24,7 @@ const exitConditions = list("Conditions for closing the position that the desk c
   properties: {
     type: { type: "string", enum: ["price_below", "price_above", "date_after", "other"], description: "price_below = stop / invalidation level; price_above = target; date_after = time limit; other = described in words" },
     value: { type: ["number", "null"], description: "The price level for price_below / price_above; otherwise null" },
-    date: { type: ["string", "null"], description: "YYYY-MM-DD for date_after; otherwise null" },
+    date: { type: ["string", "null"], description: "For date_after: an exact time in UTC such as 2026-11-27T20:00Z (preferred: the desk holds for hours), or a date YYYY-MM-DD; otherwise null" },
     description: str("The condition in plain words, and why"),
   },
   required: ["type", "description"],
@@ -54,15 +55,15 @@ const SUBMIT = {
         entry_conditions: list("When to enter. Empty if you do not recommend buying."),
         exit_conditions: exitConditions,
         suggested_amount_usd: { type: ["number", "null"], description: "US dollars to invest if buying; null otherwise" },
-        holding_days: holdingDays,
-        holding_period: str("The holding plan in words, e.g. 'about a week, out before earnings on the 19th'. 'n/a' if not buying."),
+        holding_hours: holdingHours,
+        holding_period: str("The holding plan in words, e.g. 'about 6 hours, out before the US close' or 'overnight, out by tomorrow's open + 2 h'. 'n/a' if not buying."),
         risks: list("The main risks"),
         analytical_confidence: confidence,
         assumptions: list("Assumptions your conclusion depends on"),
         data_gaps: list("Data you needed and did not have, or that was stale. Empty if none."),
         revisit,
       },
-      required: ["recommendation", "thesis", "evidence", "entry_conditions", "exit_conditions", "suggested_amount_usd", "holding_days", "holding_period", "risks", "analytical_confidence", "assumptions", "data_gaps", "revisit"],
+      required: ["recommendation", "thesis", "evidence", "entry_conditions", "exit_conditions", "suggested_amount_usd", "holding_hours", "holding_period", "risks", "analytical_confidence", "assumptions", "data_gaps", "revisit"],
     },
   },
   risk: {
@@ -107,14 +108,14 @@ const SUBMIT = {
             }),
             entry_conditions: list("When to enter. Empty for no_trade."),
             exit_conditions: exitConditions,
-            holding_days: holdingDays,
+            holding_hours: holdingHours,
             holding_period: str("The holding plan in words; 'n/a' for no_trade"),
             risks: list("The main risks"),
             evidence,
             analytical_confidence: confidence,
             assumptions: list("Assumptions the decision depends on"),
           },
-          required: ["symbol", "decision", "amount_usd", "rationale", "disagreements", "entry_conditions", "exit_conditions", "holding_days", "holding_period", "risks", "evidence", "analytical_confidence", "assumptions"],
+          required: ["symbol", "decision", "amount_usd", "rationale", "disagreements", "entry_conditions", "exit_conditions", "holding_hours", "holding_period", "risks", "evidence", "analytical_confidence", "assumptions"],
         }),
         portfolio_note: str("Your view of the set as a whole: overlap, exposure, anything the owner should know"),
       },
@@ -155,15 +156,19 @@ function checkExit(v, errors, where, required) {
   v.forEach((c, i) => {
     if (!c || !["price_below", "price_above", "date_after", "other"].includes(c.type) || !isStr(c.description)) { errors.push(`${where}exit_conditions[${i}] needs a valid "type" and a "description"`); return; }
     if ((c.type === "price_below" || c.type === "price_above") && !(isNum(c.value) && c.value > 0)) errors.push(`${where}exit_conditions[${i}] (${c.type}) needs a positive "value"`);
-    if (c.type === "date_after" && !/^\d{4}-\d{2}-\d{2}$/.test(c.date || "")) errors.push(`${where}exit_conditions[${i}] (date_after) needs "date" as YYYY-MM-DD`);
+    if (c.type === "date_after" && !isExitTime(c.date)) errors.push(`${where}exit_conditions[${i}] (date_after) needs "date" as an exact UTC time like 2026-11-27T20:00Z, or YYYY-MM-DD`);
   });
   if (required && v.length === 0) errors.push(`${where}needs at least one exit condition`);
-  // Swing trades: every buy carries a stop the position monitor can check.
-  else if (required && !v.some((c) => c && c.type === "price_below" && isNum(c.value) && c.value > 0)) errors.push(`${where}needs a stop level: an exit condition of type "price_below" with a price`);
+  // Short-term trades: every buy carries a stop and a target the position
+  // monitor can check.
+  else if (required) {
+    if (!v.some((c) => c && c.type === "price_below" && isNum(c.value) && c.value > 0)) errors.push(`${where}needs a stop level: an exit condition of type "price_below" with a price`);
+    if (!v.some((c) => c && c.type === "price_above" && isNum(c.value) && c.value > 0)) errors.push(`${where}needs a price target: an exit condition of type "price_above" with a price (the gain at the target must clear eToro's fees)`);
+  }
 }
 const checkHolding = (v, buying, errors, where) => {
-  if (buying && !(Number.isInteger(v) && v >= HOLD.min && v <= HOLD.max)) errors.push(`${where}holding_days must be a whole number from ${HOLD.min} to ${HOLD.max} (the desk trades short-term swings)`);
-  if (!buying && v !== null && v !== undefined && !Number.isInteger(v)) errors.push(`${where}holding_days must be a whole number or null`);
+  if (buying && !(Number.isInteger(v) && v >= HOLD.min && v <= HOLD.max)) errors.push(`${where}holding_hours must be a whole number of hours from ${HOLD.min} to ${HOLD.max} (the desk holds for hours, two days at most)`);
+  if (!buying && v !== null && v !== undefined && !Number.isInteger(v)) errors.push(`${where}holding_hours must be a whole number or null`);
 };
 // Optional. Missing or null = nothing to watch.
 function checkRevisit(v, buying, errors) {
@@ -199,7 +204,7 @@ const VALIDATE = {
     else if (buying && x.entry_conditions.length === 0) errors.push("a buy recommendation needs at least one entry condition");
     checkExit(x.exit_conditions, errors, "", buying);
     checkAmount(x.suggested_amount_usd, buying, errors, "", "suggested_amount_usd");
-    checkHolding(x.holding_days, buying, errors, "");
+    checkHolding(x.holding_hours, buying, errors, "");
     if (!isStr(x.holding_period)) errors.push("holding_period is required");
     if (!isList(x.risks) || x.risks.length === 0) errors.push("risks must list at least one risk");
     checkConfidence(x.analytical_confidence, errors, "");
@@ -245,7 +250,7 @@ const VALIDATE = {
       if (!isList(d.entry_conditions)) errors.push(`${where}entry_conditions must be a list of strings`);
       else if (buying && d.entry_conditions.length === 0) errors.push(`${where}a proposal needs at least one entry condition`);
       checkExit(d.exit_conditions, errors, where, buying);
-      checkHolding(d.holding_days, buying, errors, where);
+      checkHolding(d.holding_hours, buying, errors, where);
       if (!isStr(d.holding_period)) errors.push(`${where}holding_period is required`);
       if (!isList(d.risks) || (buying && d.risks.length === 0)) errors.push(`${where}risks must be a list${buying ? " with at least one risk" : ""}`);
       checkEvidence(d.evidence, toolbox, errors, where, buying ? 2 : 1);

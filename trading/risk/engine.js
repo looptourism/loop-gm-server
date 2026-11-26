@@ -15,7 +15,8 @@
 //   pre_execution  — after approval, immediately before the order is sent
 //                    (live price, plus how far it moved since the request)
 // ---------------------------------------------------------------------------
-const ENGINE_VERSION = "risk-engine-2";
+const ENGINE_VERSION = "risk-engine-3";
+const { holdingHoursOf, exitWindow, roundTripFeesUsd, HOUR } = require("../horizon");
 const DAY = 86400000;
 const r2 = (n) => Math.round(n * 100) / 100;
 const num = (v) => typeof v === "number" && Number.isFinite(v);
@@ -123,11 +124,11 @@ function assess(input) {
     check("price_drift", drift !== null && drift <= policy.execution.maxPriceDriftPct, drift === null ? "unknown: no price from the approval request to compare with" : `the price moved ${r2(drift)}% since the approval request (limit ${policy.execution.maxPriceDriftPct}%)`, { limit: policy.execution.maxPriceDriftPct, actual: drift === null ? null : r2(drift) });
   }
 
-  // ---- the swing-trade plan: 1 to 14 days, with exits that make sense ----------
+  // ---- the short-term plan: hours, two days at most, with exits that make sense ----
   const d = proposal.details || {};
-  const days = d.holding_days;
-  const { min, max } = policy.holdingDays;
-  check("holding_period", Number.isInteger(days) && days >= min && days <= max, `planned holding period is ${Number.isInteger(days) ? `${days} day(s)` : "not stated"}; the desk holds ${min} to ${max} days`, { limit: max, actual: Number.isInteger(days) ? days : null });
+  const hours = holdingHoursOf(d);
+  const { min, max } = policy.holdingHours;
+  check("holding_period", Number.isInteger(hours) && hours >= min && hours <= max, `planned holding period is ${Number.isInteger(hours) ? `${hours} hour(s)` : "not stated"}; the desk holds ${min} to ${max} hours`, { limit: max, actual: Number.isInteger(hours) ? hours : null });
   const exits = Array.isArray(d.exit_conditions) ? d.exit_conditions : [];
   const stops = exits.filter((c) => c && c.type === "price_below" && num(c.value) && c.value > 0).map((c) => c.value);
   const stop = stops.length ? Math.max(...stops) : null; // the highest stop is the one reached first
@@ -136,15 +137,28 @@ function assess(input) {
   check("loss_at_stop", plannedLoss !== null && plannedLoss <= policy.maxDailyLossUsd, plannedLoss === null ? "unknown: needs a stop level below the price" : `if the stop is reached the loss is about $${plannedLoss}; one trade may not plan to lose more than the daily loss limit of $${policy.maxDailyLossUsd}`, { limit: policy.maxDailyLossUsd, actual: plannedLoss });
   const targets = exits.filter((c) => c && c.type === "price_above").map((c) => c.value);
   check("targets_above_price", targets.every((t) => num(t) && !!px && t > px.ask), targets.length === 0 ? "no price target given" : !px ? "unknown: no price to compare the target with" : targets.every((t) => t > px.ask) ? `target(s) ${targets.join(", ")} above the current ask of ${px.ask}` : `a target (${targets.join(", ")}) is not above the current ask of ${px.ask}`);
-  const horizonEnd = now.getTime() + max * DAY;
+  // The fees: the gain at the target must be at least hurdleMultiple × eToro's
+  // round-trip fees. The owner's own /trade_test has no target and is exempt;
+  // the agents' pipeline always writes source "agents", so it cannot claim that.
+  const isOwnerTest = d.source === "owner test (/trade_test)";
+  const fees = roundTripFeesUsd(proposal.assetClass, amount, policy.fees);
+  const target = targets.filter((t) => num(t)).length ? Math.min(...targets.filter((t) => num(t))) : null; // the lowest target is reached first
+  const gainAtTarget = target !== null && px && target > px.ask ? r2(amount * (target - px.ask) / px.ask) : null;
+  const hurdle = fees === null ? null : r2(fees * policy.fees.hurdleMultiple);
+  if (isOwnerTest) check("target_clears_fees", true, "owner test trade (/trade_test): no target, so the fee check does not apply");
+  else check("target_clears_fees", target !== null && gainAtTarget !== null && hurdle !== null && gainAtTarget >= hurdle,
+    target === null ? "the proposal has no price target, so it cannot be checked against eToro's fees" : fees === null ? "unknown: the fees for this asset class are not known" : gainAtTarget === null ? "unknown: needs a price and a target above it" : `at the target of ${target} the gain is about $${gainAtTarget}; eToro's round-trip fees are about $${fees} and the desk needs at least ${policy.fees.hurdleMultiple}× that ($${hurdle})`,
+    { limit: hurdle, actual: gainAtTarget, feesUsd: fees });
+  const horizonEnd = now.getTime() + max * HOUR;
   const dates = exits.filter((c) => c && c.type === "date_after").map((c) => c.date);
-  const dateOk = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || "") && Date.parse(`${s}T23:59:59Z`) >= now.getTime() && Date.parse(`${s}T00:00:00Z`) <= horizonEnd;
-  check("exit_dates_in_horizon", dates.every(dateOk), dates.length === 0 ? "no exit date given (the desk's own limit applies)" : dates.every(dateOk) ? `exit date(s) ${dates.join(", ")} fall within the next ${max} days` : `an exit date (${dates.join(", ")}) is in the past or more than ${max} days ahead`);
+  const dateOk = (s) => { const w = exitWindow(s); return !!w && w.end >= now.getTime() && w.start <= horizonEnd; };
+  check("exit_dates_in_horizon", dates.every(dateOk), dates.length === 0 ? "no exit time given (the desk's own limit applies)" : dates.every(dateOk) ? `exit time(s) ${dates.join(", ")} fall within the next ${max} hours` : `an exit time (${dates.join(", ")}) is in the past or more than ${max} hours ahead`);
 
   // ---- notes for the owner: not limits, so they do not fail the proposal -------
-  if (earnings?.nextDate && Number.isInteger(days)) {
+  if (earnings?.nextDate && Number.isInteger(hours)) {
     const e = Date.parse(`${earnings.nextDate}T00:00:00Z`);
-    if (e >= now.getTime() - DAY && e <= now.getTime() + days * DAY) warnings.push(`earnings are due on ${earnings.nextDate}, inside the planned ${days}-day holding period`);
+    // the earnings DAY (its hour is not known) overlaps the holding window
+    if (e + DAY > now.getTime() && e <= now.getTime() + hours * HOUR) warnings.push(`earnings are due on ${earnings.nextDate}, inside the planned ${hours}-hour holding period`);
   }
   if (acct && acct.copyPortfolios > 0) warnings.push("the account has copy-trading portfolios; they are not counted in the exposure figures");
   if (acct && held.some((x) => x.assetClass === "unknown")) warnings.push("the account holds a position in an instrument that is not on your allowlists; it is counted toward both exposure limits");

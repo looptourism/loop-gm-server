@@ -112,7 +112,7 @@ const STATUS = { draft: ["مسودة", "wait"], risk_rejected: ["رفضه محر
 const status = (s) => { const [t, c] = STATUS[s] || [s, ""]; return `<span class="pill ${c}">${esc(t)}</span>`; };
 const AGENT = { stock: "محلل الأسهم", crypto: "محلل العملات", risk: "مراجع المخاطر", portfolio_manager: "مدير المحفظة" };
 const REC = { buy: "شراء", hold: "انتظار", avoid: "تجنّب", no_objection: "لا اعتراض", caution: "حذر", object: "اعتراض", propose_buy: "اقتراح شراء", no_trade: "لا صفقة" };
-const exits = (list) => (list || []).map((c) => c.type === "price_below" ? `وقف عند ${num(c.value)}` : c.type === "price_above" ? `هدف ${num(c.value)}` : c.type === "date_after" && c.date ? `حتى ${num(c.date)}` : esc(c.description || "")).join(" · ") || "—";
+const exits = (list) => (list || []).map((c) => c.type === "price_below" ? `وقف عند ${num(c.value)}` : c.type === "price_above" ? `هدف ${num(c.value)}` : c.type === "date_after" && c.date ? `حتى ${esc(/T/.test(String(c.date)) ? new Date(c.date).toLocaleString("ar", { timeZone: "Asia/Dubai", weekday: "short", hour: "numeric", minute: "2-digit" }) + " (دبي)" : c.date)}` : esc(c.description || "")).join(" · ") || "—";
 function toast(t) { const h = document.getElementById("toastHost"); h.innerHTML = `<div class="toast">${esc(t)}</div>`; clearTimeout(toast.t); toast.t = setTimeout(() => (h.innerHTML = ""), 4200); }
 
 // ---- state --------------------------------------------------------------------
@@ -179,7 +179,7 @@ function pending() {
     <div class="grid" style="margin-top:10px">
       <div class="stat"><div class="k">${p.action === "close" ? "المستثمر في المركز" : "المبلغ"}</div><div class="v">${usd(p.amountUsd)}</div></div>
       ${p.price ? `<div class="stat"><div class="k">السعر <span class="ltr">bid / ask</span></div><div class="v" style="font-size:15px"><span class="ltr mono">${esc(p.price.bid)} / ${esc(p.price.ask)}</span></div></div>` : ""}
-      ${p.action !== "close" ? `<div class="stat"><div class="k">مدة الاحتفاظ</div><div class="v">${num(p.holdingDays)} <span class="sub">يوم</span></div></div>` : `<div class="stat"><div class="k">المركز</div><div class="v" style="font-size:14px">${num(p.etoroPositionId)}</div></div>`}
+      ${p.action !== "close" ? `<div class="stat"><div class="k">مدة الاحتفاظ</div><div class="v">${num(p.holdingHours)} <span class="sub">ساعة</span></div></div>` : `<div class="stat"><div class="k">المركز</div><div class="v" style="font-size:14px">${num(p.etoroPositionId)}</div></div>`}
     </div>
     ${p.action !== "close" ? `<div class="sub" style="margin-top:8px">الخطة: ${exits(p.exitConditions)}</div>` : ""}
     ${p.rationale ? `<div class="txt" dir="auto" style="margin-top:8px">${esc(p.rationale)}</div>` : ""}
@@ -269,7 +269,8 @@ function settings() {
     <div>${line("خسارة يومية قصوى", usd(p.maxDailyLossUsd))}</div>
     <div>${line("أقصى عدد للمراكز", num(p.maxOpenPositions))}</div>
     <div>${line("الرافعة · الاتجاه", `${num(p.leverage)} · شراء فقط`)}</div>
-    <div>${line("مدة الاحتفاظ", `من ${num(p.holdingDays.min)} إلى ${num(p.holdingDays.max)} يومًا`)}</div>
+    <div>${line("مدة الاحتفاظ", `من ${num(p.holdingHours.min)} إلى ${num(p.holdingHours.max)} ساعة`)}</div>
+    <div>${line("رسوم eToro", `سهم ~$${num(p.fees.stockPerSideUsd)} للفتح ومثلها للإغلاق · كريبتو ${num(p.fees.cryptoPerSidePct)}% لكل جهة · الربح عند الهدف ≥ ${num(p.fees.hurdleMultiple)}× الرسوم`)}</div>
     <div>${line("صلاحية طلب الموافقة", `${num(p.approvalValidMinutes)} دقيقة`)}</div>
     <div>${line("ساعات الهدوء", p.quietHours ? `<span class="ltr mono">${esc(p.quietHours.start)}–${esc(p.quietHours.end)} ${esc(p.quietHours.timeZone || "UTC")}</span>` : "لا يوجد")}</div>
     <div class="sub">الحدود في الملف trading/policy.js، وتُطبَّق بالكود ولا يستطيع أي وكيل تجاوزها.</div>

@@ -723,13 +723,13 @@ function mount(app, { authOn, config = readConfig(), client = createClient({ con
       const bid = Number(r.bid);
       const stop = Number((bid * (1 - rule.stopPctBelowBid / 100)).toPrecision(6));
       const details = {
-        source: "owner test (/trade_test)", symbol, decision: "propose_buy", amount_usd: amountUsd, holding_days: rule.holdingDays, holding_period: `${rule.holdingDays} days (fixed rule for test trades)`,
+        source: "owner test (/trade_test)", symbol, decision: "propose_buy", amount_usd: amountUsd, holding_hours: rule.holdingHours, holding_period: `${rule.holdingHours} hours (fixed rule for test trades)`,
         rationale: "Test trade started by you with /trade_test. No agent analysed it; it exists to prove the path from proposal to position.",
         disagreements: [], entry_conditions: ["at the market price when approved"], risks: ["not analysed by any agent"], evidence: [], assumptions: [],
         exit_conditions: [{ type: "price_below", value: stop, description: `fixed rule for test trades: ${rule.stopPctBelowBid}% below the bid of ${bid} when it was created` }],
       };
       await db.withTransaction((tx) => analysesStore.saveDraftProposal(tx, { instrument, amountUsd, expiresAt: new Date(at.getTime() + POLICY.proposalValidHours * 3600000), analysisId: null, details, actor: "owner:telegram" }));
-      await notifier.send(`🧪 <b>Test proposal created — BUY ${notify.esc(symbol)} $${amountUsd.toFixed(2)}</b> (DEMO)\nStop ${stop} (${rule.stopPctBelowBid}% below the bid), planned holding ${rule.holdingDays} days.\nIt now goes to the risk engine like any other proposal. If it passes you will get the Approve / Reject request.`);
+      await notifier.send(`🧪 <b>Test proposal created — BUY ${notify.esc(symbol)} $${amountUsd.toFixed(2)}</b> (DEMO)\nStop ${stop} (${rule.stopPctBelowBid}% below the bid), planned holding ${rule.holdingHours} hours.\nIt now goes to the risk engine like any other proposal. If it passes you will get the Approve / Reject request.`);
       if (typeof approvals.tick === "function") await approvals.tick();
       return true;
     }

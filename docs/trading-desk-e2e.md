@@ -21,7 +21,7 @@ Trading must be on (`/trade_status`). Stocks need US market hours (about 17:30�
 4. `/trade_drill_exit NKE` and `/trade_drill_exit BTC`. Each adds a "price at or above"
    condition 1% below the current price and checks at once. The monitor's real alert arrives,
    and the close request with it. (Or wait for a real exit condition: the planned holding
-   period ends within 1–14 days.)
+   period ends within 1–48 hours; a `/trade_test` plans 24 hours.)
 5. **Tap Approve** on each close request. A message confirms the close and the result.
 
 ## Part 2: the safety checks

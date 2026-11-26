@@ -34,7 +34,7 @@ const closeFails = (change) => { const i = closeInput(); change(i); return asses
 
 test("closing: a sound close passes, and the opening limits do not apply to it", () => {
   const v = assess(closeInput());
-  assert.deepStrictEqual([v.passed, v.failed, v.engineVersion], [true, [], "risk-engine-2"]);
+  assert.deepStrictEqual([v.passed, v.failed, v.engineVersion], [true, [], "risk-engine-3"]);
   assert.deepStrictEqual(v.checks.map((c) => c.name), ["kill_switch", "demo_only", "not_expired", "closes_a_position", "position_on_record", "account_readable", "position_open_at_etoro", "position_matches", "no_close_in_flight", "fresh_price"]);
   assert.deepStrictEqual(v.warnings, ["eToro shows a loss of $0.26 on this position now"]);
   // no cash, a day already over its loss limit, a price far from anything approved: a close is still allowed
@@ -196,7 +196,7 @@ dbTest("the whole close: proposal → risk check → Telegram → Approve → li
   assert.match(notify.executionResult(w.outcomes[0]), /Result: -\$2\.87 — eToro's proceeds \$47\.10 minus \$49\.97 invested \(after eToro's closing costs/);
   assert.match(notify.executionResult(w.outcomes[0]), /Position closed — BTC/);
   const v = (await w.db.query("select phase, passed, engine_version from trading.risk_assessments order by created_at")).rows;
-  assert.deepStrictEqual(v.map((x) => [x.phase, x.passed, x.engine_version]), [["pre_approval", true, "risk-engine-2"], ["pre_execution", true, "risk-engine-2"]]);
+  assert.deepStrictEqual(v.map((x) => [x.phase, x.passed, x.engine_version]), [["pre_approval", true, "risk-engine-3"], ["pre_execution", true, "risk-engine-3"]]);
   // the monitor then sees it gone from eToro and does NOT call it "closed elsewhere"
   w.held = [];
   await w.monitor.check();

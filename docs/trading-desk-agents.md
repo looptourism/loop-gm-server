@@ -76,10 +76,17 @@ All of this is set in `AGENTS` in `trading/config.js`.
   headlines). It has no tools. Code then picks the shortlist: score 6 or more, highest first,
   at most 5. Only the shortlist gets the full analysis. A screen can only cause an instrument
   to be skipped; it cannot cause a trade.
-- **Style: short-term swing trades (owner, 2026-11-16).** Positions are meant to be held 1 to 14
-  days. The agents judge setups on that horizon. Code refuses a buy analysis or proposal that
-  does not state a whole number of holding days from 1 to 14 and a stop level (an exit
-  condition of type `price_below`). The limits live in `trading/policy.js`.
+- **Style: short-term trades held for hours (owner, 2026-11-26; replaces the 1–14-day swing
+  style of 2026-11-16).** The desk looks for instruments that may rise within hours, held from
+  1 to 48 hours. The agents weigh the hourly picture first: `get_technicals` returns an
+  `intraday` block computed by code from the stored hourly candles (changes over 1/4/24/48 h,
+  hourly RSI(14), 10- and 20-hour averages, the average hourly range, where the price sits in its
+  24- and 48-hour range, the last 12 hourly candles); the daily figures are the backdrop. The
+  Screener's data pack carries the same block and the current time. The prompts state eToro's
+  fees ($2 per stock trade each way, 1% each way on crypto). Code refuses a buy analysis or
+  proposal that does not state a whole number of holding HOURS from 1 to 48, a stop level
+  (`price_below`) and a price target (`price_above`); an exit time (`date_after`) may be an
+  exact UTC time such as `2026-11-27T20:00Z`. The limits live in `trading/policy.js`.
 - **Schedule (owner, 2026-11-16; five weekday runs from 2026-11-26).** Every weekday at 14:00, 15:00, 17:00, 19:00 and
   20:00 UTC (6, 7, 9, 11 PM and midnight Dubai), around and through the US session: all instruments, screened. Saturday at
   12:00 UTC: coins only, screened. It runs only when `TRADING_AGENTS_SCHEDULE_ENABLED` is `true`

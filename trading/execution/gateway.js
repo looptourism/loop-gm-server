@@ -39,7 +39,7 @@ const CLOSE_IN_FLIGHT = new Set([1, 2, 5, 6, 11]);
 const FILLED = new Set([3, 5]);       // Filled, PartiallyFilled
 const REJECTED = new Set([4, 10]);    // Rejected, RejectedPartiallyFilled
 const IN_FLIGHT = new Set([1, 2, 11, 12]); // Received, Placed, WaitingForMarket, PendingTriggeredRate
-const DAY = 86400000;
+const { holdingHoursOf, HOUR } = require("../horizon");
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 
 function createGateway({ config, db, client, orders, policy = POLICY, now = () => new Date(), onOutcome = null, log = (...a) => console.log("[trading/gateway]", ...a) } = {}) {
@@ -180,7 +180,10 @@ function createGateway({ config, db, client, orders, policy = POLICY, now = () =
       if (!Number.isInteger(x?.positionId)) continue;
       const opened = parseUtc(x.openingData?.openTime || "") || now();
       const conditions = [...exits];
-      if (Number.isInteger(proposal.details.holding_days)) conditions.push({ type: "date_after", date: new Date(opened.getTime() + proposal.details.holding_days * DAY).toISOString().slice(0, 10), description: `planned holding period of ${proposal.details.holding_days} day(s)` });
+      // The planned holding period as an exact time (hours since 2026-11-26;
+      // an older proposal's whole days are read as days × 24).
+      const plannedHours = holdingHoursOf(proposal.details);
+      if (Number.isInteger(plannedHours)) conditions.push({ type: "date_after", date: new Date(opened.getTime() + plannedHours * HOUR).toISOString().slice(0, 16) + "Z", description: `planned holding period of ${plannedHours} hour(s)` });
       // The dollars invested in the position. eToro's real answer (first demo
       // order, 2026-11-16) carried them in marginAccountCurrency and
       // initialExposureAccountCurrency (49.97 for a $50 order, after $0.47
