@@ -12,6 +12,7 @@ const { readAllowlists } = require("../db/store");
 const { readHalted } = require("../risk/context");
 const { readQuietHours } = require("../approvals");
 const { trackRecord } = require("../report");
+const { holdingHoursOf } = require("../horizon");
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 const n = (v) => (v === null || v === undefined ? null : Number(v));
@@ -101,7 +102,7 @@ async function buildDesk({ db, config, agents, positions, approvals, watches = n
     policy: {
       maxPerTradeUsd: POLICY.maxPerTradeUsd, maxTotalExposureUsd: POLICY.maxTotalExposureUsd, maxCryptoExposureUsd: POLICY.maxCryptoExposureUsd,
       maxDailyLossUsd: POLICY.maxDailyLossUsd, maxOpenPositions: POLICY.maxOpenPositions, leverage: POLICY.leverage, direction: POLICY.direction,
-      holdingDays: POLICY.holdingDays, approvalValidMinutes: POLICY.approvalValidMinutes, quietHours: quiet.hours, quietHoursFrom: quiet.from,
+      holdingHours: POLICY.holdingHours, fees: POLICY.fees, approvalValidMinutes: POLICY.approvalValidMinutes, quietHours: quiet.hours, quietHoursFrom: quiet.from,
       cryptoCorrelatedCountsTowardCryptoCap: POLICY.cryptoCorrelatedCountsTowardCryptoCap,
     },
     agents: { models: AGENTS.models, shortlistMax: AGENTS.shortlistMax, shortlistMinScore: AGENTS.shortlistMinScore, monthlyBudgetUsd: AGENTS.monthlyBudgetUsd, schedule: AGENTS.schedule.map((s) => s.label) },
@@ -127,7 +128,7 @@ async function buildDesk({ db, config, agents, positions, approvals, watches = n
       const d = p.details || {};
       return {
         proposalId: p.id, approvalId: p.approval_id, action: p.action, symbol: p.symbol, assetClass: p.asset_class, amountUsd: r2(p.amount_usd), answerBy: iso(p.approval_expires_at),
-        holdingDays: d.holding_days ?? null, exitConditions: d.exit_conditions || [], rationale: d.rationale || d.reason || null, disagreements: d.disagreements || [], source: d.source || "agents",
+        holdingHours: holdingHoursOf(d), exitConditions: d.exit_conditions || [], rationale: d.rationale || d.reason || null, disagreements: d.disagreements || [], source: d.source || "agents",
         etoroPositionId: d.etoroPositionId ?? null,
         price: p.inputs?.price ? { bid: p.inputs.price.bid, ask: p.inputs.price.ask, asOf: p.inputs.price.asOf } : null,
         warnings: p.inputs?.warnings || [], checksPassed: Array.isArray(p.checks) ? p.checks.filter((c) => c.passed).length : null, checksTotal: Array.isArray(p.checks) ? p.checks.length : null,

@@ -70,4 +70,42 @@ function computeTechnicals(candles, { periodsPerYear }) {
   };
 }
 
-module.exports = { computeTechnicals, sma, rsi };
+// `candles`: finished HOURLY candles, oldest first. The desk holds for hours
+// (two days at most), so this is the picture the agents should weigh first.
+// Changes are measured back by clock time, so a market's closed hours and
+// weekends are skipped rather than counted as hours of no movement.
+function computeIntraday(candles) {
+  if (!Array.isArray(candles) || candles.length < 2) return null;
+  const closes = candles.map((c) => c.close);
+  const last = candles[candles.length - 1];
+  const lastT = Date.parse(last.asOf);
+  const HOUR = 3600000;
+  const closeHoursAgo = (h) => { for (let i = candles.length - 1; i >= 0; i--) if (lastT - Date.parse(candles[i].asOf) >= h * HOUR) return candles[i].close; return null; };
+  const change = (h) => { const c = closeHoursAgo(h); return c === null ? null : round(((last.close - c) / c) * 100, 2); };
+  const rangeOf = (h) => {
+    const xs = candles.filter((c) => lastT - Date.parse(c.asOf) < h * HOUR);
+    if (!xs.length) return null;
+    const high = Math.max(...xs.map((c) => c.high)), low = Math.min(...xs.map((c) => c.low));
+    return { high, low, candles: xs.length, positionPct: high > low ? round(((last.close - low) / (high - low)) * 100, 1) : null };
+  };
+  const trs = [];
+  for (let i = Math.max(1, candles.length - 14); i < candles.length; i++) trs.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i - 1].close), Math.abs(candles[i].low - candles[i - 1].close)));
+  const s10 = sma(closes, 10), s20 = sma(closes, 20);
+  const vs = (avg) => (avg === null ? null : round(((last.close - avg) / avg) * 100, 2));
+  return {
+    basis: { interval: "OneHour", finishedCandles: candles.length, from: candles[0].asOf, to: last.asOf, note: "computed by Trading Desk code from stored eToro hourly candles; volume is not used" },
+    lastClose: last.close,
+    changePct: { h1: change(1), h4: change(4), h24: change(24), h48: change(48) },
+    smaHourly: { h10: round(s10), h20: round(s20) },
+    closeVsSmaHourlyPct: { h10: vs(s10), h20: vs(s20) },
+    rsi14Hourly: round(rsi(closes, 14), 1),
+    atr14HourlyPct: trs.length === 14 ? round((mean(trs) / last.close) * 100, 2) : null,
+    atr14HourlyNote: "average HOURLY trading range over the last 14 hourly candles, as % of the last close: how much the price typically moves within an hour. A stop closer than about this is likely to be hit by noise.",
+    range24h: rangeOf(24),
+    range48h: rangeOf(48),
+    rangeNote: "positionPct: where the last close sits in the range, 0 = at the low, 100 = at the high. Ranges count clock hours back from the last candle.",
+    last12: candles.slice(-12).map((c) => ({ at: c.asOf, open: c.open, high: c.high, low: c.low, close: c.close })),
+  };
+}
+
+module.exports = { computeTechnicals, computeIntraday, sma, rsi };

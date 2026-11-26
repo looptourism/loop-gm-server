@@ -80,8 +80,8 @@ under the same switch as price monitoring (`TRADING_MONITOR_ENABLED`).
 | What is checked | How |
 |---|---|
 | Stop level / price target (`price_below`, `price_above`) | Against the newest stored **bid** — and only if that price is fresh (eToro's own timestamp no older than 20 minutes) |
-| Date limit (`date_after`) | Against the calendar, in UTC |
-| The desk's holding limit | A position open for more than 14 days is flagged, whatever its proposal said |
+| Date or time limit (`date_after`) | A date: after that UTC day ends. An exact time (the planned holding period, written when the order fills): after that minute |
+| The desk's holding limit | A position open for more than 48 hours is flagged, whatever its proposal said (14 days before 2026-11-26) |
 | A position with no stop level on record | Reported once (for example one opened by hand on eToro) |
 | A position outside the desk's rules (short, leveraged, or not on an allowlist) | Reported once; never added to the desk's record |
 | A position eToro no longer lists | Marked closed and reported once |

@@ -9,6 +9,7 @@
 // The desk's Telegram COMMANDS are handled by code in trading/index.js.
 // They never reach the GM agent, and the GM agent has no trading tool.
 // ---------------------------------------------------------------------------
+const { holdingHoursOf, showExitTime } = require("./horizon");
 const esc = (t) => String(t ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 const clip = (t, max) => { const s = String(t ?? ""); return s.length > max ? `${s.slice(0, max - 1)}…` : s; };
@@ -94,10 +95,12 @@ function approvalRequest({ proposal, verdict, price, account, expiresAt }) {
     `🟢 <b>Approve a BUY? — ${esc(proposal.symbol)}</b> (DEMO)`,
     `Amount: <b>${usd(proposal.amountUsd)}</b> · market order · no leverage`,
     `Price now: bid ${price.bid} / ask ${price.ask} (${price.ageSec} s old)`,
-    `Plan: hold about ${esc(d.holding_days)} day(s)${stop.length ? ` · stop ${stop.join(", ")}` : ""}${target.length ? ` · target ${target.join(", ")}` : ""}`,
+    `Plan: hold about ${esc(holdingHoursOf(d) ?? "?")} hour(s)${stop.length ? ` · stop ${stop.join(", ")}` : ""}${target.length ? ` · target ${target.join(", ")}` : ""}`,
   ];
   const lossCheck = verdict.checks.find((c) => c.name === "loss_at_stop");
   if (lossCheck?.actual !== undefined && lossCheck.actual !== null) lines.push(`If the stop is reached: about -${usd(lossCheck.actual)}`);
+  const feeCheck = verdict.checks.find((c) => c.name === "target_clears_fees");
+  if (typeof feeCheck?.actual === "number") lines.push(`At the target: about +${usd(feeCheck.actual)} before eToro's fees (round trip about ${usd(feeCheck.feesUsd)})`);
   if (d.rationale) lines.push(`Why: ${esc(clip(d.rationale, 420))}`);
   if (Array.isArray(d.disagreements) && d.disagreements.length) lines.push(`Analyst and reviewer disagreed on ${d.disagreements.length} point(s): ${esc(clip(d.disagreements.map((x) => x.issue).join("; "), 200))}`);
   lines.push(`Risk engine: all ${verdict.checks.length} checks passed`);
@@ -151,7 +154,7 @@ function executionResult(o) {
     const lines = [`✅ <b>Order filled — ${what}</b>`];
     if (pos) lines.push(`Position ${pos.positionId}${pos.openRate ? ` opened at ${pos.openRate}` : ""}, ${usd(pos.amountUsd)} invested`);
     if (o.partial) lines.push("⚠️ eToro reports the order as partially filled.");
-    if (pos?.exitConditions?.length) lines.push(`Watching: ${esc(pos.exitConditions.map((c) => (c.type === "price_below" ? `stop ${c.value}` : c.type === "price_above" ? `target ${c.value}` : c.type === "date_after" ? `until ${c.date}` : "a condition in words")).join(" · "))}`);
+    if (pos?.exitConditions?.length) lines.push(`Watching: ${esc(pos.exitConditions.map((c) => (c.type === "price_below" ? `stop ${c.value}` : c.type === "price_above" ? `target ${c.value}` : c.type === "date_after" ? `until ${showExitTime(c.date)}` : "a condition in words")).join(" · "))}`);
     lines.push("Open positions are checked every 15 minutes; nothing is closed without you.");
     return lines.join("\n");
   }

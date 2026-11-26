@@ -32,7 +32,8 @@ The owner works only from a phone. Keep their manual steps to a minimum.
 - **Revisit watches (2026-11-17):** an analyst's `revisit` trigger becomes a row in `trading.watches`;
   `trading/watches.js` (plain code, no trading imports) checks it and starts a re-analysis within the
   schedule switch, budget and 3/day cap. See docs/trading-desk-agents.md.
-- **Trading style (2026-11-16):** short-term swing trades, held 1 to 14 days (`trading/policy.js`).
+- **Trading style (2026-11-26, replaces 1–14-day swings):** short-term trades held 1 to 48 hours, with a stop, a target
+  that clears 2× eToro's round-trip fees, and hourly technicals first (`trading/policy.js`, `trading/horizon.js`).
 - **Allowlist editing (2026-11-25):** the desk's Settings can add/remove allowlist symbols in an admin session
   (`TRADING_ADMIN_PASSWORD`, `trading/admin.js`); each add is verified on eToro first; every change is audited.
   The database is the allowlists' source of truth — `trading/allowlist.js` only seeds an empty database. The

@@ -16,7 +16,7 @@
 const { readMarketView } = require("../db/snapshots");
 const { readResearchView } = require("../db/research");
 const { candleRange } = require("../market-data");
-const { computeTechnicals } = require("./technicals");
+const { computeTechnicals, computeIntraday } = require("./technicals");
 const { POLICY } = require("../policy");
 const { MONITORING } = require("../config");
 
@@ -29,8 +29,8 @@ const symbolParam = { type: "object", properties: { symbol: { type: "string", de
 const none = { type: "object", properties: {} };
 
 const DEFS = {
-  get_market_data: { description: "Latest stored eToro price (bid/ask, with its age and whether it is fresh) and price ranges computed from stored finished candles: last 30, 90 and 365 days, the last 10 daily candles and the last 48 hours. Use this for any statement about price.", input_schema: symbolParam },
-  get_technicals: { description: "Technical figures computed by the desk's code from stored daily candles: moving averages (5/10/20/50/200 days), RSI(14), 30-day annualized volatility, ATR(14), percentage changes over 1/3/7/14/30/90/365 days, 365-day high and low, and the worst 90-day drawdown. Figures that need more history than is stored come back null.", input_schema: symbolParam },
+  get_market_data: { description: "Latest stored eToro price (bid/ask, with its age and whether it is fresh) and price ranges computed from stored finished candles: last 30, 90 and 365 days, the last 10 daily candles, and the range and last 12 candles of the last 48 hours. Use this for any statement about price.", input_schema: symbolParam },
+  get_technicals: { description: "Technical figures computed by the desk's code. \"intraday\" (from stored hourly candles — weigh these first, the desk holds for hours): changes over 1/4/24/48 hours, hourly RSI(14), 10- and 20-hour averages, the average hourly range (ATR), where the price sits in its 24- and 48-hour range, and the last 12 hourly candles. Daily (the backdrop): moving averages (5/10/20/50/200 days), RSI(14), 30-day annualized volatility, ATR(14), percentage changes over 1/3/7/14/30/90/365 days, 365-day high and low, and the worst 90-day drawdown. Figures that need more history than is stored come back null.", input_schema: symbolParam },
   get_fundamentals: { description: "Company profile and the latest stored fundamentals from the data provider: market cap, P/E, EPS, margins, growth, debt-to-equity, 52-week range, beta. Provider-computed and approximate.", input_schema: symbolParam },
   get_earnings: { description: "Past quarters (actual vs estimated EPS, surprise %) and the next announced earnings date, if the provider has one.", input_schema: symbolParam },
   get_filings: { description: "The company's recent official SEC filings: annual, quarterly and current reports with filing dates and links. Foreign companies have no quarterly reports at the SEC.", input_schema: symbolParam },
@@ -113,7 +113,7 @@ function createToolbox({ db, instruments, account, now = () => new Date(), seedR
       const hourly = v.hourly.candles;
       if (hourly.length) {
         const last = hourly[hourly.length - 1];
-        out.hourly = { ref: add("R", { kind: "candles", ids: [last.snapshotId], source: seriesSource(last.source, "OneHour", hourly.length), timestamp: last.asOf, label: `${i.symbol} hourly candles to ${last.asOf}` }), finishedCandles: hourly.length, range: candleRange(hourly) };
+        out.hourly = { ref: add("R", { kind: "candles", ids: [last.snapshotId], source: seriesSource(last.source, "OneHour", hourly.length), timestamp: last.asOf, label: `${i.symbol} hourly candles to ${last.asOf}` }), finishedCandles: hourly.length, range: candleRange(hourly), last12: hourly.slice(-12).map((c) => ({ at: c.asOf, open: c.open, high: c.high, low: c.low, close: c.close })) };
       } else out.hourly = { available: false, reason: "no hourly candles are stored" };
       out.notes = ["Ranges are computed from finished candles only; the candle still forming is excluded.", "Volume is not provided."];
       return out;
@@ -121,12 +121,19 @@ function createToolbox({ db, instruments, account, now = () => new Date(), seedR
 
     async get_technicals(input) {
       const i = pick(input);
-      const v = await readMarketView(db, i.symbol, { now: now(), rateFreshSec: MONITORING.rateFreshSec, dailyCount: 400, hourlyCount: 1 });
+      const v = await readMarketView(db, i.symbol, { now: now(), rateFreshSec: MONITORING.rateFreshSec, dailyCount: 400, hourlyCount: 240 });
       if (!v.ok) throw new Error(v.error);
       const t = computeTechnicals(v.daily.candles, { periodsPerYear: i.assetClass === "crypto" ? 365 : 252 });
-      if (!t) return { symbol: i.symbol, available: false, reason: "fewer than two daily candles are stored" };
+      const h = computeIntraday(v.hourly.candles);
+      if (!t && !h) return { symbol: i.symbol, available: false, reason: "fewer than two daily and two hourly candles are stored" };
+      const out = { symbol: i.symbol, available: true };
+      if (h) {
+        const lastH = v.hourly.candles[v.hourly.candles.length - 1];
+        out.intraday = { ref: add("R", { kind: "technicals", ids: [lastH.snapshotId], source: `computed by Trading Desk code from ${seriesSource(lastH.source, "OneHour", h.basis.finishedCandles)}`, timestamp: lastH.asOf, label: `${i.symbol} intraday technicals from ${h.basis.finishedCandles} hourly candles` }), ...h };
+      } else out.intraday = { available: false, reason: "fewer than two hourly candles are stored" };
+      if (!t) return { ...out, daily: { available: false, reason: "fewer than two daily candles are stored" } };
       const last = v.daily.candles[v.daily.candles.length - 1];
-      return { symbol: i.symbol, available: true, ref: add("R", { kind: "technicals", ids: [last.snapshotId], source: `computed by Trading Desk code from ${seriesSource(last.source, "OneDay", t.basis.finishedCandles)}`, timestamp: last.asOf, label: `${i.symbol} technicals from ${t.basis.finishedCandles} daily candles` }), ...t };
+      return { ...out, ref: add("R", { kind: "technicals", ids: [last.snapshotId], source: `computed by Trading Desk code from ${seriesSource(last.source, "OneDay", t.basis.finishedCandles)}`, timestamp: last.asOf, label: `${i.symbol} technicals from ${t.basis.finishedCandles} daily candles` }), ...t };
     },
 
     async get_fundamentals(input) {
