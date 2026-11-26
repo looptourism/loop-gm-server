@@ -80,7 +80,8 @@ All of this is set in `AGENTS` in `trading/config.js`.
   days. The agents judge setups on that horizon. Code refuses a buy analysis or proposal that
   does not state a whole number of holding days from 1 to 14 and a stop level (an exit
   condition of type `price_below`). The limits live in `trading/policy.js`.
-- **Schedule (owner, 2026-11-16; second weekday run 2026-11-17).** Every weekday at 12:00 and 18:00 UTC (16:00 and 22:00 Dubai): all instruments, screened. Saturday at
+- **Schedule (owner, 2026-11-16; five weekday runs from 2026-11-26).** Every weekday at 14:00, 15:00, 17:00, 19:00 and
+  20:00 UTC (6, 7, 9, 11 PM and midnight Dubai), around and through the US session: all instruments, screened. Saturday at
   12:00 UTC: coins only, screened. It runs only when `TRADING_AGENTS_SCHEDULE_ENABLED` is `true`
   in Render (off by default, separate from the monitoring switch because it spends money).
 - **Monthly budget: $75, enforced in code** (raised from $50 on 2026-11-16 for weekday runs). Every Claude request is written to a ledger

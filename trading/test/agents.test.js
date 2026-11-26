@@ -95,7 +95,7 @@ test("the model is set in one place and the policy matches the owner's limits", 
   for (const m of Object.values(AGENTS.models)) assert.ok(AGENTS.pricesPerMTok[m], `no price for ${m}`);
   // the owner's cost decisions of 2026-11-15
   assert.deepStrictEqual([AGENTS.monthlyBudgetUsd, AGENTS.shortlistMax], [75, 5]);
-  assert.deepStrictEqual(AGENTS.schedule.map((x) => [x.cron, x.scope]), [["0 12 * * 1-5", "all"], ["0 18 * * 1-5", "all"], ["0 12 * * 6", "crypto"]]); // twice every weekday, and coins on Saturday
+  assert.deepStrictEqual(AGENTS.schedule.map((x) => [x.cron, x.scope]), [["0 14 * * 1-5", "all"], ["0 15 * * 1-5", "all"], ["0 17 * * 1-5", "all"], ["0 19 * * 1-5", "all"], ["0 20 * * 1-5", "all"], ["0 12 * * 6", "crypto"]]); // twice every weekday, and coins on Saturday
   assert.deepStrictEqual([POLICY.style, POLICY.holdingDays], ["swing", { min: 1, max: 14 }]);
   assert.strictEqual(readConfig({}).agentsScheduleEnabled, false);
   assert.strictEqual(readConfig({ TRADING_AGENTS_SCHEDULE_ENABLED: "yes" }).agentsScheduleEnabled, false);
@@ -572,7 +572,7 @@ test("the agents' schedule: off by default; with its own switch on, every weekda
   on.run = null; // the scheduled function calls the pipeline's own run; observe through state instead
   assert.strictEqual(on.start(), true);
   assert.strictEqual(on.start(), false);                                           // not registered twice
-  assert.deepStrictEqual(jobs.map((j) => [j.expr, j.o.timezone]), [["0 12 * * 1-5", "UTC"], ["0 18 * * 1-5", "UTC"], ["0 12 * * 6", "UTC"]]);
+  assert.deepStrictEqual(jobs.map((j) => [j.expr, j.o.timezone]), [["0 14 * * 1-5", "UTC"], ["0 15 * * 1-5", "UTC"], ["0 17 * * 1-5", "UTC"], ["0 19 * * 1-5", "UTC"], ["0 20 * * 1-5", "UTC"], ["0 12 * * 6", "UTC"]]);
   assert.deepStrictEqual([on.state().schedule.enabled, on.state().schedule.running], [true, true]);
   assert.strictEqual(started.length, 0);
 });

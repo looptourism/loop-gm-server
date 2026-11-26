@@ -156,15 +156,17 @@ const AGENTS = {
   // month's spend plus this would exceed the budget.
   stepReserveUsd: { screen: 0.02, stock: 0.4, crypto: 0.4, risk: 0.4, portfolio_manager: 1.5 },
 
-  // owner (2026-11-16): screened runs every weekday at 12:00 UTC (all
-  // instruments), and on Saturday at 12:00 UTC (coins only). They run only
-  // when TRADING_AGENTS_SCHEDULE_ENABLED is exactly "true".
+  // owner (2026-11-26): five screened runs every weekday at 6, 7, 9, 11 PM and
+  // midnight Dubai (14:00–20:00 UTC), around and through the US session
+  // (14:30–21:00 UTC), replacing the 12:00 and 18:00 UTC runs. Saturday at
+  // 12:00 UTC stays (coins only). They run only when
+  // TRADING_AGENTS_SCHEDULE_ENABLED is exactly "true".
   schedule: [
-    { cron: "0 12 * * 1-5", scope: "all", label: "Mon–Fri 12:00 UTC — all instruments, screened" },
-    // owner (2026-11-17): a second weekday screen during the US session
-    // (22:00 Dubai), so the day's moves are seen while prices are live and
-    // the owner is still awake to approve.
-    { cron: "0 18 * * 1-5", scope: "all", label: "Mon–Fri 18:00 UTC — all instruments, screened (US session)" },
+    { cron: "0 14 * * 1-5", scope: "all", label: "Mon–Fri 14:00 UTC (6 PM Dubai) — all instruments, screened (before the US open)" },
+    { cron: "0 15 * * 1-5", scope: "all", label: "Mon–Fri 15:00 UTC (7 PM Dubai) — all instruments, screened (US session)" },
+    { cron: "0 17 * * 1-5", scope: "all", label: "Mon–Fri 17:00 UTC (9 PM Dubai) — all instruments, screened (US session)" },
+    { cron: "0 19 * * 1-5", scope: "all", label: "Mon–Fri 19:00 UTC (11 PM Dubai) — all instruments, screened (US session)" },
+    { cron: "0 20 * * 1-5", scope: "all", label: "Mon–Fri 20:00 UTC (midnight Dubai) — all instruments, screened (last hour of the US session)" },
     { cron: "0 12 * * 6", scope: "crypto", label: "Sat 12:00 UTC — coins only, screened" },
   ],
 
