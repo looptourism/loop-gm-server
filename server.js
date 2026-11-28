@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const Anthropic = require("@anthropic-ai/sdk");
 const telegram = require("./telegram");
+const { isCreditExhausted, friendlyApiError, createCreditAlertGate, CREDIT_MESSAGE } = require("./api-errors");
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -595,10 +596,15 @@ async function runWorkspaceTool(name, input = {}, who = "gm") {
 const MAX_OUTPUT_TOKENS = 4000;
 
 async function callClaude({ system, messages, tools }) {
-  const res = await anthropic.messages.create(
-    wellFormed({ model: MODEL, max_tokens: MAX_OUTPUT_TOKENS, system, messages, ...(tools ? { tools } : {}) }),
-    { timeout: 60000 }
-  );
+  let res;
+  try {
+    res = await anthropic.messages.create(
+      wellFormed({ model: MODEL, max_tokens: MAX_OUTPUT_TOKENS, system, messages, ...(tools ? { tools } : {}) }),
+      { timeout: 60000 }
+    );
+  } catch (e) {
+    throw friendlyApiError(e); // out of credit → one Arabic sentence instead of the raw 400
+  }
   const u = res.usage || {};
   officeAddUsage(agentCtx.getStore()?.id,
     (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0), u.output_tokens || 0);
@@ -2068,7 +2074,16 @@ function decideApproval(id, ok, { viaTelegram = false } = {}) {
 // Short Telegram alert when an agent fails. The same agent failing with the
 // same error repeatedly (e.g. an API key that's down) alerts once per 10 min.
 const recentAgentAlerts = new Map();
+const creditAlertDue = createCreditAlertGate();
 function notifyAgentError(agent, err) {
+  // Out of credit: every agent fails the same way — one alert for all of them.
+  if (isCreditExhausted(err)) {
+    console.error(`[agent-error] ${agent}: Anthropic credit balance too low`);
+    if (!telegram.enabled || store.settings?.alerts?.fail === false || !creditAlertDue()) return;
+    telegram.sendMessage(`💳 <b>رصيد Anthropic خلص</b>\n${telegram.escapeHtml(CREDIT_MESSAGE)}\n🕒 ${telegram.uaeTime()}`)
+      .catch((e) => tgLogError("credit alert", e));
+    return;
+  }
   const message = telegram.redact(err?.message || err || "خطأ غير معروف").slice(0, 300);
   console.error(`[agent-error] ${agent}: ${message}`);
   if (!telegram.enabled || store.settings?.alerts?.fail === false) return;
